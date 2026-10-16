@@ -1,0 +1,38 @@
+# Local-only: inventory, deny-list, progress, local tests, screenshots
+notes/
+# Development copy of a data home
+.dev-home/
+.dev-throwaway/
+# Never commit data, wherever it shows up
+.worklog/
+raw/
+daily/
+tickets/
+knowledge/
+data/
+bruno/
+_drop/
+inbox.md
+*.jsonl
+.env
+.env.*
+!.env.example
+# Python / tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+# Claude Code local settings
+.claude/settings.local.json
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

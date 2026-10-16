@@ -1,0 +1,18 @@
+{
+  "name": "chitragupta",
+  "owner": {
+    "name": "Omkar Jadhav",
+    "url": "https://github.com/omkarjadhav-10"
+  },
+  "description": "Chitragupta: a worklog for Claude Code sessions.",
+  "plugins": [
+    {
+      "name": "cg",
+      "displayName": "Chitragupta",
+      "source": "./",
+      "description": "Keeps a worklog of your Claude Code sessions, with an evening Jira-worklog summary and a local dashboard.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}
