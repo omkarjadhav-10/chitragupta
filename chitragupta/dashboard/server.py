@@ -133,6 +133,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "Chitragupta"
     sys_version = ""
     protocol_version = "HTTP/1.1"
+    # Python < 3.13 treats a one-word request line as HTTP/0.9 and would answer a malformed
+    # request without a status line; we never speak HTTP/0.9.
+    default_request_version = "HTTP/1.0"
     timeout = 15  # a client that stalls mid-request is dropped
     error_content_type = "application/json; charset=utf-8"
 

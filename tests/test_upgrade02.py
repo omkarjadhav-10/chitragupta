@@ -420,12 +420,12 @@ class JiraFactsTests(AgentCase):
         cfg = {"git_author_emails": ["me@acme.test"], "day_starts_at": "07:00"}
         me = {"email": "me@acme.test"}
         search = {"issues": [{"id": "1", "key": "ABC-1", "comments": [
-            {"body": "RCA Summary: the lock was set because ...", "author": me, "created": "2026-10-16T12:16:55.000+0530"},
+            {"body": "RCA Summary: the lock was set because ...", "author": me, "created": "2026-10-16T16:16:55.000+0000"},
             {"body": "old", "author": me, "created": "2026-10-10T12:00:00.000+0530"},
-            {"body": "theirs", "author": {"email": "x@acme.test"}, "created": "2026-10-16T13:00:00.000+0530"}],
-            "worklog": {"worklogs": [{"author": {"emailAddress": "me@acme.test"}, "started": "2026-10-16T11:00:00.000+0530",
+            {"body": "theirs", "author": {"email": "x@acme.test"}, "created": "2026-10-16T17:00:00.000+0000"}],
+            "worklog": {"worklogs": [{"author": {"emailAddress": "me@acme.test"}, "started": "2026-10-16T15:00:00.000+0000",
                                       "timeSpentSeconds": 3600}]}}]}
-        changes = [{"issue_id": "1", "changelogs": [{"author": me, "created": "2026-10-16T18:49:03+05:30",
+        changes = [{"issue_id": "1", "changelogs": [{"author": me, "created": "2026-10-16T18:49:03+00:00",
                                                      "items": [{"field": "status", "from_string": "Dev", "to_string": "READY"}]}]}]
         f = mcpjobs.evening_facts(d, search, changes, cfg)
         self.assertEqual([c["ticket"] for c in f["comments"]], ["ABC-1"])

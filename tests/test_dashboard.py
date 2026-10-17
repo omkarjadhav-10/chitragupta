@@ -591,6 +591,12 @@ class TestDaemon(Isolated, unittest.TestCase):
         self.assertEqual(st["state"], "ours")
         self.assertEqual(st["health"]["version"], "0.0.1")
         r = dashboard.ensure(timeout=1.5, wait=15)
+        if r["status"] != "replaced":  # show the spawned server's own log in the failure
+            try:
+                with open(dashboard.log_path(), encoding="utf-8", errors="replace") as f:
+                    r["log"] = f.read()[-3000:]
+            except OSError as e:
+                r["log"] = repr(e)
         self.assertEqual(r["status"], "replaced", r)
         old.wait(10)
         st = dashboard.probe(self.port, 1.5)

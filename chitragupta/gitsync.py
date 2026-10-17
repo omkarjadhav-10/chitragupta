@@ -86,6 +86,10 @@ def install_pre_commit(cfg):
     command = " ".join(_sh_word(a) for a in common.self_command("redact", "--check-staged", cfg=cfg))
     path = os.path.join(common.home(), ".git", "hooks", "pre-commit")
     common.write_text(path, PRE_COMMIT.format(command=command))
+    try:  # git skips hooks that aren't executable (no-op on Windows)
+        os.chmod(path, 0o755)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- privacy guard
