@@ -327,6 +327,8 @@ dialog.dlg[open] { animation: pop var(--dur-2) var(--ease); }
 @media (min-width: 1500px) { .tkbar-id { flex: 0 1 auto; } .tkbar-id span { display: inline; } }
 @media (min-width: 1400px) { .tkbar.stuck .tkbar-id { display: flex; } }
 .exported .tkbar { top: 0; }
+@media (max-width: 1499px) { .tkbar .tabs [role="tab"] { padding: 8px 7px; font-size: 13.5px; gap: 4px; } }
+@media (max-width: 1180px) { .tkbar .tabs [role="tab"] { padding: 8px 5px; font-size: 13px; } .tkbar .tabcount { padding: 0 5px; } }
 .tkhead-row { display: flex; gap: var(--s3); align-items: flex-start; }
 .tkhead-row > div:first-child { flex: 1; min-width: 0; }
 .findings { list-style: none; padding: 0; margin: 0; }
@@ -423,7 +425,6 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .pane { grid-column: 2; }
   .pane { padding: var(--s4) var(--s4) var(--s6); }
   .tkbar { margin: 0 calc(-1 * var(--s4)) var(--s4); padding: 0 var(--s4); }
-  .tkbar .tabs [role="tab"] { padding: 8px 7px; font-size: 13.5px; gap: 4px; }
   .two { grid-template-columns: 1fr; }
   .entry { grid-template-columns: 1fr 1fr; } .entry .fld.desc { grid-column: 1 / -1; }
   .top { grid-template-columns: auto minmax(160px, 1fr) auto; }
