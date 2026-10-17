@@ -3,7 +3,8 @@
     python -m chitragupta uninstall [--json]
 
 Removes: the `Chitragupta` scheduled task (or its Startup-folder launcher), the stable runtime
-(<user dir>/runtime), the recall skill (only if its frontmatter name is ours), the CLAUDE.md block between
+(<user dir>/runtime), the data home's git pre-commit hook if it calls that runtime, the recall skill (only if its
+frontmatter name is ours), the CLAUDE.md block between
 <!-- chitragupta:start --> and <!-- chitragupta:end --> (backup first), and the home pointer.
 Keeps: everything in the data home (daily/, tickets/, data/, the git repo, config). The plugin itself is removed
 with `/plugin uninstall cg`.
@@ -51,6 +52,14 @@ def run():
             else:
                 os.remove(md)
             out.append("CLAUDE.md block removed (backup %s)" % bak)
+
+    # The data home's git pre-commit hook calls the runtime removed above; drop it if it's ours so manual
+    # commits keep working (another worklog tool rewrites its own hook on its next run).
+    hook = os.path.join(home, ".git", "hooks", "pre-commit")
+    launcher = common.launcher().replace("\\", "/")
+    if os.path.isfile(hook) and launcher.lower() in common.read_text(hook).replace("\\", "/").lower():
+        os.remove(hook)
+        out.append("data home pre-commit hook removed: %s" % hook)
 
     for p in (common.home_pointer(), os.path.join(common.user_dir(), "maintenance.lock")):
         if os.path.exists(p):

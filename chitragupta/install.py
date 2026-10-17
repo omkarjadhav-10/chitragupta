@@ -44,8 +44,9 @@ def _quote(a):
 
 
 def task_action(cfg=None):
-    """(command, arguments) the task runs: windowless python + the stable launcher + `agent tick`."""
-    argv = common.self_command("agent", "tick", cfg=cfg or common.load_config(), windowless=True)
+    """(command, arguments) the task runs: windowless python + the stable launcher + `agent tick --from-task`
+    (--from-task also starts the dashboard, so it is up after logon)."""
+    argv = common.self_command("agent", "tick", "--from-task", cfg=cfg or common.load_config(), windowless=True)
     return argv[0], " ".join(_quote(a) for a in argv[1:])
 
 

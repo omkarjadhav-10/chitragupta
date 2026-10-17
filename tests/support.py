@@ -117,6 +117,10 @@ class Isolated:
         os.environ["CHITRAGUPTA_HOME"] = self.home
         os.environ["CHITRAGUPTA_USER_DIR"] = self.user_dir
         os.environ["CHITRAGUPTA_CLAUDE_DIR"] = self.claude_dir
+        # Never touch the real Task Scheduler or Startup folder (tests that exercise them inject install.RUNNER,
+        # which wins over NO_TASK).
+        os.environ["CHITRAGUPTA_NO_TASK"] = "1"
+        os.environ["CHITRAGUPTA_STARTUP_DIR"] = os.path.join(self.user_dir, "startup")
         clear_caches()
         self.forbidden = []
         self._patch_tripwires()

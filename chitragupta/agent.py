@@ -1073,6 +1073,16 @@ def cmd_worklog(cmd, args):
         lock.release()
 
 
+def ensure_dashboard():
+    """Start the read-only dashboard if it isn't running (respects dashboard.autostart / CHITRAGUPTA_DASHBOARD=0).
+    A cheap port probe when it is already up; never raises."""
+    try:
+        from . import dashboard
+        dashboard.ensure()
+    except Exception as e:  # noqa: BLE001
+        common.log("agent", "dashboard ensure failed: %s" % e)
+
+
 def cmd_loop(max_ticks=None, interval=None, sleep=time.sleep):
     """Fallback launcher (Startup folder): tick every 5 minutes. Only one loop runs: a second one exits at once."""
     loop = Lock("loop.lock")
@@ -1085,6 +1095,8 @@ def cmd_loop(max_ticks=None, interval=None, sleep=time.sleep):
         while max_ticks is None or n < max_ticks:
             loop.refresh()
             cmd_tick()  # takes the agent lock itself
+            if max_ticks is None:  # the real Startup-folder loop, not a test
+                ensure_dashboard()
             n += 1
             if max_ticks is None or n < max_ticks:
                 sleep(interval)
@@ -1099,7 +1111,10 @@ def main(argv):
                "mcp-ensure"):
         return cmd_worklog(cmd, argv[1:])
     if cmd == "tick":
-        return cmd_tick(force="--force" in argv)
+        rc = cmd_tick(force="--force" in argv)
+        if "--from-task" in argv:  # the scheduled task (logon + every 5 min) also keeps the dashboard up
+            ensure_dashboard()
+        return rc
     if cmd == "loop":
         return cmd_loop()
     if cmd == "render":

@@ -2,9 +2,90 @@
 
 Named for Chitragupta, who keeps the record of every deed. `cg` is short for Chitragupta.
 
-A Claude Code plugin that keeps your worklog for you: what you worked on, per ticket, per day — findings, queries, APIs, saved requests, DB flows and artifacts — plus an evening Jira-worklog summary and a local, read-only dashboard.
+Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks record what happens in your Claude Code sessions. A background task turns those records into:
 
-> Status: under construction (v0.1.0). Install, commands and docs land in later commits.
+- a **daily note** with a summary, a standup draft and a section for each ticket
+- **ticket notes** with findings, root causes, queries, the APIs you called, saved requests you can replay, a DB-flow map and the files you produced
+- a local **knowledge base** of tables, APIs, integrations and branches
+- an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
+- a **read-only dashboard** on `127.0.0.1`
+
+It runs on Windows and uses only the Python standard library. Slack, Jira and a database MCP are optional. Everything stays on your machine unless you configure a private GitHub remote for the daily notes.
+
+## Install
+
+You need Claude Code, Python 3.10+ (the `py` launcher), Git and Windows.
+
+```
+claude plugin install cg --marketplace omkarjadhav-10/chitragupta
+```
+
+This one-command form needs Claude Code 2.1.292 or later. On an older version, run:
+
+```
+claude plugin marketplace add omkarjadhav-10/chitragupta
+claude plugin install cg@chitragupta
+```
+
+Inside a session (Claude Code 2.1.275 or later) you can use `/plugin install cg --marketplace omkarjadhav-10/chitragupta`. If the repository is private, the install uses the git credentials you already have.
+
+Then open a new session and run **`/cg:setup`**. Until setup has run, Chitragupta records nothing; each session shows one line: *Chitragupta isn't set up yet — run /cg:setup to finish.*
+
+Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It detects your ticket prefixes, repos and Bruno collections, then installs the background task. Finally it offers to connect Slack, Jira and a database MCP. See [docs/install.md](docs/install.md).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/cg:today [YYYY-MM-DD]` | Time per ticket so far today, plus a preview of tonight's Jira-worklog message (nothing is sent) |
+| `/cg:ticket <KEY>` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, file paths |
+| `/cg:timesheet [week\|month] [date] [csv]` | Hours per ticket by day (week) or by ISO week (month), with leave and holidays; optional CSV |
+| `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
+| `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |
+| `/cg:pause [resume\|status]` | Pause or resume capture |
+| `/cg:dashboard` | Start the local dashboard if needed and print its address |
+| `/cg:setup` | Set up, repair or upgrade (safe to re-run; never changes recorded data) |
+| `/cg:doctor` | Check hooks, the background tick, runtime, scheduled task, recall skill, CLAUDE.md block, Slack/Jira/database MCP and recent errors. It only diagnoses and never changes anything. |
+
+You type the `/cg:` commands yourself; Claude never runs them on its own. Setup also installs a **recall skill** (`chitragupta`) that Claude does use on its own. Ask it things like "what did I find on ABC-1001?", "standup for yesterday" or "I was on leave Friday", and it answers from the worklog or adds the right line to `inbox.md`.
+
+## Dashboard
+
+Run `/cg:dashboard`, or open `http://127.0.0.1:7419/` once a session has started it. It has these pages:
+
+- **Today**: time per ticket, and tonight's Jira entries with copy buttons
+- **Tickets**: searchable; each ticket shows its findings, saved requests (copy as curl), the DB flow drawn with Mermaid, queries and artifacts
+- **Timesheet**: weekly and monthly totals with a CSV export
+- **Health**: hooks, last tick, last push, Slack status, MCP calls, errors
+
+The dashboard is read-only, works offline and listens only on `127.0.0.1`. See [docs/dashboard.md](docs/dashboard.md).
+
+## Privacy
+
+- **Local by default.** Raw events, ticket notes, the knowledge base and the config never leave the machine.
+- **What can be pushed.** If you set a GitHub remote, only `daily/**`, `README.md`, `.gitignore` and `.gitattributes` are pushed. They go only after a check confirms the repository is private, and only after a public redaction pass.
+- **Masking.** Secrets and personal data are masked when captured, before any model call and before any commit.
+- **Model calls.** These run as `claude -p` with hooks disabled. MCP jobs are read-only and go through a guard that allows only `SELECT`-style reads on QA connections.
+- **Known limit.** Names written in free text are not reliably masked. Review the daily notes before you push them anywhere shared.
+
+Details are in [docs/privacy.md](docs/privacy.md).
+
+## Uninstall
+
+Stop the dashboard, then remove Chitragupta's pieces outside the data home. Run these in PowerShell:
+
+```
+py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" dashboard stop
+py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" uninstall
+claude plugin uninstall cg@chitragupta
+```
+
+`uninstall` removes the `Chitragupta` scheduled task, the stable runtime, the data home's git pre-commit hook (it calls that runtime), the recall skill and the CLAUDE.md block (backed up first), plus the home pointer. **It keeps all your data**: daily notes, tickets, the knowledge base, config and the data home's git repo.
+
+## Docs
+
+[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
-MIT — see [LICENSE](LICENSE).
+
+MIT — see [LICENSE](LICENSE). Third-party components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

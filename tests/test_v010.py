@@ -520,3 +520,32 @@ class SlackServerDefaultTests(Isolated, unittest.TestCase):
         from chitragupta import slack
         srv = slack.server_def({"jira_worklog": {"slack": {"server": {"client_id": "1.2", "callback_port": 4000}}}})
         self.assertEqual(srv["oauth"], {"clientId": "1.2", "callbackPort": 4000})
+
+
+class TaskAndUninstallTests(Isolated, unittest.TestCase):
+    def setUp(self):
+        self.isolate()
+
+    def tearDown(self):
+        self.restore()
+
+    def test_task_tick_also_keeps_the_dashboard_up(self):
+        from chitragupta import install
+        exe, args = install.task_action({"paths": {}})
+        self.assertTrue(args.endswith("agent tick --from-task"), args)
+
+    def test_uninstall_drops_our_pre_commit_hook_only(self):
+        from chitragupta import common, uninstall
+        hooks = os.path.join(self.home, ".git", "hooks")
+        os.makedirs(hooks)
+        ours = os.path.join(hooks, "pre-commit")
+        with open(ours, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\nexec "py" "%s" redact --check-staged\n' % common.launcher().replace("\\", "/"))
+        with redirect_stdout(io.StringIO()):
+            uninstall.main([])
+        self.assertFalse(os.path.exists(ours))
+        with open(ours, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nexec other-tool check\n")
+        with redirect_stdout(io.StringIO()):
+            uninstall.main([])
+        self.assertTrue(os.path.exists(ours))

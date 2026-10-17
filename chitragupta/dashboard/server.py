@@ -148,6 +148,18 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quiet: only errors are logged
         pass
 
+    def _drain_body(self, limit=65536):
+        """Read (and drop) a small request body we are about to reject; larger ones are left unread."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if 0 < n <= limit:
+            try:
+                self.rfile.read(n)
+            except OSError:
+                pass
+
     def handle_one_request(self):
         try:
             self.raw_requestline = self.rfile.readline(65537)
@@ -164,6 +176,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400, "malformed headers")
                 return
             if self.command not in ("GET", "HEAD"):
+                self._drain_body()  # closing with unread bytes makes Windows send RST instead of our 405
                 self._send(405, _json_bytes({"error": "method not allowed"}), "application/json; charset=utf-8",
                            [("Allow", "GET, HEAD")])
                 self.close_connection = True
