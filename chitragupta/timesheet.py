@@ -80,7 +80,7 @@ def header(day, send_day, tag="", correction=False):
 def table(rows):
     """rows: [(start, ticket, time)] -> box-drawing table; headers centred, values left-aligned."""
     heads = ("Start", "Ticket", "Time")
-    w = [max(len(heads[i]), *(len(r[i]) for r in rows)) + 2 for i in range(3)]
+    w = [max([len(heads[i])] + [len(r[i]) for r in rows]) + 2 for i in range(3)]
 
     def line(l, mid, r):
         return l + mid.join("─" * x for x in w) + r
@@ -437,6 +437,8 @@ def compose(day, send_day, blocks, manual, cal, ts, already=None, correction=Fal
             jira_dur(full_target))
         return {"kind": "message", "text": header(day, send_day, tag, correction) + "\n\n" + note, "entries": [], "note": note}
     entries = allocate(blocks, manual, target, step, int(ts["max_entries"]), unassigned_ticket)
+    if not entries:  # e.g. a weekend with only slivers of ticket time: every block rounds below one step
+        return {"kind": "none", "reason": "%s (no ticket block reaches %d min)" % (kind, step)}
     layout(entries, ts["day_start"], ts["lunch"], with_lunch=target > 240)
     if describe:
         describe(entries)

@@ -220,6 +220,11 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(sum(e["minutes"] for e in r["entries"]), 90)  # actual time rounded, no padding
         self.assertIn("(17 Oct, weekend)", r["text"])
         self.assertEqual(T.compose(sat, sat, [], [], {}, self.ts)["kind"], "none")
+        # slivers on a weekend: 26 min of ticket time rounds to one 30-min step, but no single block reaches it
+        r = T.compose(sat, sat, [blk("ABC-1", at(sat, 8, 24), 24.55), blk(None, at(sat, 8, 29), 27.35), blk("ABC-2", at(sat, 9, 20), 7 / 6)],
+                      [], {}, self.ts)
+        self.assertEqual((r["kind"], r.get("entries", [])), ("none", []))
+        self.assertTrue(T.table([])[0].startswith("┌"))
         self.assertEqual(T.compose(d, d, [], [], {}, self.ts)["kind"], "nudge")
         self.assertEqual(T.compose(d, d, [], [], {"leave": {d: True}}, self.ts)["kind"], "none")
         lt = T.settings({"jira_worklog": {"leave_ticket": "HR-1"}})

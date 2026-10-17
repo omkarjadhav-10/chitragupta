@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-18
+
+### Fixed
+- The evening Jira worklog crashed while composing a weekend or holiday with only short stretches of ticket time: every block rounded below one 30-minute step, and the empty entry table failed. It now reports that there is nothing to log for that day.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added
