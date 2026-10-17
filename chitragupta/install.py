@@ -130,6 +130,58 @@ def startup_vbs(cfg=None):
     return 'CreateObject("WScript.Shell").Run "%s", 0, False\r\n' % " ".join('""%s""' % a for a in argv)
 
 
+# --------------------------------------------------------------------------- dashboard shortcut
+
+SHORTCUT_FILE = "Chitragupta.url"
+
+
+def shortcut_dirs(desktop=False):
+    """Start menu Programs folder (and the Desktop). CHITRAGUPTA_STARTMENU_DIR / CHITRAGUPTA_DESKTOP_DIR override them;
+    with CHITRAGUPTA_NO_TASK set and no override (dev and tests) there is no folder, so nothing is written."""
+    out = []
+    sm = common.env("STARTMENU_DIR") or (None if common.env("NO_TASK") or os.name != "nt" else
+                                         os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs"))
+    if sm:
+        out.append(sm)
+    if desktop:
+        dk = common.env("DESKTOP_DIR") or (None if common.env("NO_TASK") or os.name != "nt" else
+                                           os.path.join(os.environ.get("USERPROFILE", ""), "Desktop"))
+        if dk:
+            out.append(dk)
+    return out
+
+
+def shortcut_text(url):
+    """An Internet Shortcut: plain text, opens the address in the default browser; nothing is executed."""
+    return "[InternetShortcut]\r\nURL=%s\r\n" % url
+
+
+def write_shortcuts(url, desktop=False):
+    """-> {ok, paths, detail}. Rewrites only our own file name; never touches other shortcuts."""
+    paths = []
+    try:
+        for d in shortcut_dirs(desktop):
+            p = os.path.join(d, SHORTCUT_FILE)
+            common.write_text(p, shortcut_text(url))
+            paths.append(p)
+    except OSError as e:
+        return {"ok": False, "paths": paths, "detail": "shortcut not written: %s" % e}
+    return {"ok": True, "paths": paths, "detail": ("shortcut " + ", ".join(paths)) if paths else "shortcut skipped (no Start menu here)"}
+
+
+def remove_shortcuts():
+    out = []
+    for d in shortcut_dirs(desktop=True):
+        p = os.path.join(d, SHORTCUT_FILE)
+        try:
+            if os.path.isfile(p) and "[InternetShortcut]" in common.read_text(p):
+                os.remove(p)
+                out.append("shortcut removed: %s" % p)
+        except OSError as e:
+            out.append("shortcut left: %s (%s)" % (p, e))
+    return out
+
+
 def register_task(cfg=None):
     """Register the task; when Task Scheduler refuses (policy), install the hidden Startup-folder launcher instead.
     -> {ok, method: "task" | "startup" | "skipped", detail}"""

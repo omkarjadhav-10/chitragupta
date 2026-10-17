@@ -1,0 +1,12 @@
+{
+  "name": "chitragupta-ui-checks",
+  "private": true,
+  "description": "Dev-only browser checks for the dashboard (see run.py). Not part of the runtime.",
+  "license": "MIT",
+  "scripts": {
+    "check": "python ../../scripts/ui/run.py"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

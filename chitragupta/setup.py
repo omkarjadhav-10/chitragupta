@@ -650,6 +650,11 @@ def apply(home, prefixes=(), repos=(), bruno=(), task=True, github_remote=None, 
             step("task", t["ok"], t["detail"])
         else:
             step("task", True, "skipped (--no-task)")
+        if task:
+            from . import dashboard as dash
+            from . import install
+            sc = install.write_shortcuts(dash.url(dash.port(common.load_config()), "today"))
+            step("shortcut", sc["ok"], sc["detail"])
 
         s = install_skill()
         step("skill", s["ok"], s["detail"])

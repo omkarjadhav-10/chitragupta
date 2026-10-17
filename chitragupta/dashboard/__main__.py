@@ -5,6 +5,8 @@
   stop [--json]         stop our server on the port (never a foreign app)
   status [--json]       who answers on the port: down | ours (version, pid, home) | foreign
   url [ROUTE]           the URL, e.g. `url tickets/ABC-1001`
+  open [ROUTE] [--no-browser]   ensure, then open the page (or ROUTE) in the default browser
+  shortcut [--desktop]  (re)write the Start menu shortcut (and one on the Desktop)
 """
 import json
 import sys
@@ -59,6 +61,27 @@ def main(argv):
         else:
             print("port %d is held by another app: %s" % (r["port"], r.get("detail", "")))
         return 0
+    if cmd == "open":
+        route = next((a for a in argv[1:] if not a.startswith("--")), "")
+        r = ensure(timeout=1.5, wait=6.0)
+        if r.get("status") not in ("started", "running", "replaced"):
+            print("Dashboard not available: %s%s" % (r.get("status"), (" (%s)" % r["detail"]) if r.get("detail") else ""))
+            return 1
+        link = url(port(), route)
+        opened = False
+        if "--no-browser" not in argv:
+            import webbrowser
+            try:
+                opened = webbrowser.open(link)
+            except Exception:  # noqa: BLE001 — printing the address is enough
+                opened = False
+        print("%s: %s" % ("Opened" if opened else "Dashboard", link))
+        return 0
+    if cmd == "shortcut":
+        from .. import install
+        r = install.write_shortcuts(url(port(), "today"), desktop="--desktop" in argv)
+        print(r["detail"])
+        return 0 if r["ok"] else 1
     if cmd == "url":
         route = next((a for a in argv[1:] if not a.startswith("--")), "")
         print(url(port(), route))

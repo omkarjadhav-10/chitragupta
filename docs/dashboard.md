@@ -1,56 +1,115 @@
 # Dashboard
 
-The dashboard is a read-only page served from your machine. It shows what Chitragupta has recorded. It lives at `http://127.0.0.1:7419/` by default.
+The dashboard is a page served from your own machine. It shows what Chitragupta has recorded: today, your tickets, your timesheet, the knowledge it has gathered and its own health. It lives at `http://127.0.0.1:7419/` by default, works offline and only reads your data.
 
-## Start, stop, address
+![The Today page with synthetic data](images/dashboard-today.png)
+
+## Open it
 
 | How | What happens |
 |---|---|
-| `/cg:dashboard` | Starts the dashboard if it isn't running and prints its address |
+| `/cg:dashboard [day YYYY-MM-DD \| ticket KEY \| page]` | Starts the dashboard if it isn't running and opens it in your browser |
+| Start menu | Setup adds a **Chitragupta** shortcut to the Start menu. `… dashboard shortcut --desktop` adds one to the Desktop too. |
+| As an app | In Chrome or Edge, use *Install Chitragupta* in the address bar (or *Apps → Install this site as an app*). It then opens in its own window and appears in the Start menu with Today, Tickets, Timesheet and Health as jump-list shortcuts. |
 | Automatically | The `Chitragupta` scheduled task (at logon and every 5 minutes) and the SessionStart maintenance step (at most every 10 minutes) start it if it's down, or replace an older version. Turn this off with `dashboard.autostart: false` or `CHITRAGUPTA_DASHBOARD=0`. |
-| `… dashboard ensure [--json]` | Same as `/cg:dashboard`. It waits up to 6 s and prints `Dashboard started: http://127.0.0.1:7419/` |
+
+The command line, where `…` is the stable launcher `py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py"`:
+
+| Command | Does |
+|---|---|
+| `… dashboard open [ROUTE] [--no-browser]` | Starts it when needed (waits up to 6 s) and opens the page, for example `dashboard open tickets/ABC-1001` |
+| `… dashboard ensure [--json]` | Starts it when needed and prints `Dashboard started: http://127.0.0.1:7419/` |
 | `… dashboard stop [--json]` | Stops *our* server on the port. A foreign app on that port is left alone. |
-| `… dashboard status [--json]` | Reports who answers on the port: `down`; `ours` (with version, pid and data home); or `foreign` |
-| `… dashboard url [ROUTE]` | Prints a link, for example `dashboard url tickets/ABC-1001` |
+| `… dashboard status [--json]` | Who answers on the port: `down`; `ours` (with version, pid and data home); or `foreign` |
+| `… dashboard url [ROUTE]` | Prints a link |
+| `… dashboard shortcut [--desktop]` | Writes the Start menu shortcut again (and one on the Desktop) |
 | `… dashboard serve [--port N]` | Runs it in the foreground, for debugging |
 
-`…` is the stable launcher, `py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py"`.
+The server runs detached and windowless. Its log is `<home>\.worklog\logs\dashboard.log`, cleared on each start. **One server per port:** the port is the lock. `/api/health` answers `{"app": "chitragupta", "version", "pid", "home"}`, and a newer plugin version replaces an older server. A server for a different data home, or another app on the port, is never touched; `ensure` says the port is taken, and you pick another with `dashboard.port`.
 
-The server runs detached and windowless. Its log is `<home>\.worklog\logs\dashboard.log`, and it is cleared on each start.
+The installed app window and the shortcuts only work on this machine: the server listens on `127.0.0.1` and nowhere else. There is no offline copy of your data: when the server isn't running, the window says so instead of showing old numbers.
 
-**One server per port.** The port acts as the lock. `/api/health` answers `{"app": "chitragupta", "version", "pid", "home"}`, and a newer plugin version replaces an older server. A server for a *different* data home, or another app on the port, is never touched. Instead, `ensure` reports that the port is taken; pick another with `dashboard.port`.
+## Layout
+
+- **Top bar:** the command field (<kbd>Ctrl</kbd> <kbd>K</kbd>), status for capture, Slack and each MCP server (each an icon and words, linking to Health), and the theme switch.
+- **Navigation** down the left: Today, Tickets, Timesheet, Knowledge, Search, Health, and at the bottom Setup and Settings. *Show labels* (or <kbd>[</kbd>) widens it; the choice is remembered in this browser.
+- **Side list:** each page's own list or filters (the day's tickets, ticket filters, months, tables, result types). Below 1040 px it folds into a *Show …* button above the page.
+- **The page.**
 
 ## Pages
 
 | Route | Shows |
 |---|---|
-| `#/today` | Time per ticket so far today, and tonight's Jira-worklog entries with a copy button for each entry's start, duration and description, plus one for the whole message. Before 20:00 this is a live preview. It uses no model and no Jira and saves nothing, so its descriptions are uncondensed and time already in Jira isn't subtracted. Once the day is composed, it shows the saved message. |
-| `#/tickets` | A searchable list of tickets with title, last activity, time and counts (`#/tickets?q=checkout`) |
-| `#/tickets/ABC-1001` (or `#/ticket/ABC-1001`) | One ticket: an alert banner when its branches need attention, findings, saved requests with *copy as curl*, the DB flow drawn with Mermaid (including the QA worked example when there is one), **Branches & PRs** (a graph of the bases and the ticket's branches, the delivery matrix, branches and PRs tables; see [branch-tracking.md](branch-tracking.md)), queries, artifacts, timeline and file paths. *Export (full)* / *Export (shareable)* download the whole page as one HTML file. |
-| `#/timesheet` | Hours per ticket by ISO week (`?period=month` for months), leave and holidays, and a CSV export |
-| `#/health` | Last hook event, last tick, last push, Slack send status, MCP servers seen by the last jobs, MCP calls and tokens today, recent errors, and whether capture is paused |
+| `#/today` | A ring of time tracked against the day's target; delivery alerts across all tickets; **the day, ticket by ticket**: one lane per ticket with the stretches you worked and a tick for each commit (also as a table); **tonight's Jira entries** with a copy button for each start, duration and description and *Copy all* for the whole message. Before 20:00 this is a live preview: it uses no model and no Jira and saves nothing, so descriptions are uncondensed and time already in Jira isn't subtracted. Once the day is composed, it shows the saved message and whether it was sent. |
+| `#/day/YYYY-MM-DD` | The same for any past day (previous and next day buttons, <kbd>p</kbd> / <kbd>n</kbd>) |
+| `#/tickets` | Every ticket, sortable by key, title, status, last activity, time, findings and requests. Filter by text, status, repo, *only with delivery alerts* and last active; the filters live in the address, so a filtered list can be bookmarked. Long lists scroll without slowing down. |
+| `#/tickets/ABC-1001` | One ticket with a header that stays in view (title, Jira status, repo and branch chips, time, alerts) and tabs: **Overview** (in short, the problem, findings grouped by kind: root cause, fix, decisions, open questions…), **Branches & PRs** (the branch graph, delivery matrix, branches and PRs; see [branch-tracking.md](branch-tracking.md)), **DB flow** (with the QA worked example), **Requests** (copy as curl), **Queries**, **Artifacts**, **Timeline** (each day links to that day) and **Notes** (the ticket's README and its files). *Export* and *Export to share* download the page as one HTML file. |
+| `#/timesheet` | A month calendar shaded by hours against each day's target, with leave, half days, holidays and extra workdays named in each cell; click a day to see its tickets. Weekly bars against the target, and hours per ticket by ISO week or month with *Download CSV*. |
+| `#/knowledge` | **DB map:** the map of every table and link, zoom and pan; pick a table to see its columns, its neighbourhood and which links the QA link map verified. **APIs:** the catalog with method, path, host, direction, purpose and tickets, filterable. **Integrations.** |
+| `#/search?q=` | Everything at once: tickets, findings, queries, APIs, tables, artifacts and daily notes, grouped by type with the matching words marked. <kbd>↑</kbd> <kbd>↓</kbd> move through the results. |
+| `#/health` | Capture, background runs, the daily push, Slack, the scheduled task, MCP calls blocked by the read-only guard, each configured MCP server (connected, signed out, missing or switched off, from the last cached `claude mcp list`), today's MCP jobs and tokens against the budget, warnings and recent errors. *Copy diagnostics* copies all of it as text. |
+| `#/setup` | The `/cg:doctor` checks as a checklist, each with what to run to fix it |
+| `#/settings` | Appearance: theme, density and motion, saved in this browser |
 
-**Updates.** The page checks `/api/changes` every 10 seconds while the tab is visible. It redraws only when something changed, and it keeps your scroll position, focus and open sections.
+## Command palette
 
-**Themes.** Light and dark follow your system setting, and the toggle cycles *auto → light → dark*. The page works fully with the keyboard: there is a skip link, real links and buttons, and visible focus.
+<kbd>Ctrl</kbd> <kbd>K</kbd> (or <kbd>/</kbd>) opens it from anywhere. Type part of a page, ticket, table, API or word: it lists matching pages, tickets and actions, then what search finds in your worklog. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> closes. Actions: switch theme, show or hide navigation labels, copy tonight's Jira message, download the timesheet CSV, show the keyboard shortcuts.
 
-**Offline.** The page is one self-contained file with no CDN and no web fonts. Mermaid is vendored (see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)) and served at `/vendor/mermaid.min.js`. If that file is missing, diagrams show their source text instead.
+## Keyboard shortcuts
+
+<kbd>?</kbd> lists them on any page. Shortcuts are off while you type in a field; <kbd>Ctrl</kbd> <kbd>K</kbd> always works.
+
+| Keys | Does |
+|---|---|
+| <kbd>Ctrl</kbd> <kbd>K</kbd> or <kbd>/</kbd> | Command palette |
+| <kbd>?</kbd> | Show the shortcuts |
+| <kbd>g</kbd> then <kbd>t</kbd> · <kbd>k</kbd> · <kbd>s</kbd> · <kbd>n</kbd> · <kbd>f</kbd> · <kbd>h</kbd> · <kbd>u</kbd> · <kbd>e</kbd> | Today · Tickets · Timesheet · Knowledge · Search · Health · Setup · Settings |
+| <kbd>j</kbd> / <kbd>k</kbd> | Next / previous item in the side list |
+| <kbd>[</kbd> | Show or hide navigation labels |
+| <kbd>c</kbd> | Today: copy the whole Jira message |
+| <kbd>p</kbd> / <kbd>n</kbd> | Today and Timesheet: previous / next day or month |
+| <kbd>1</kbd> … <kbd>8</kbd> | Ticket: switch tab |
+| <kbd>←</kbd> <kbd>→</kbd> <kbd>Home</kbd> <kbd>End</kbd> | Within tabs and option groups |
+| <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd> and arrows | Within a focused diagram: zoom, reset, pan |
+| <kbd>Esc</kbd> | Close a dialog |
+
+## Live updates
+
+The page keeps one Server-Sent Events connection (`/api/events`) open while the tab is visible. The server sends a new change cursor as soon as any file the page reads changes, and the page fetches again. It keeps your scroll position, focus, typed filters and open sections. If the stream can't connect, the page checks `/api/changes` every 10 seconds instead and keeps retrying the stream.
+
+## Appearance and accessibility
+
+- **Themes:** system, light or dark; the switch is in the top bar and on Settings. Density (comfortable or compact) and motion (system, reduce or full) are on Settings. All three are remembered in this browser only.
+- **Fonts:** the system's own (Segoe UI Variable and Sitka on Windows), so nothing is downloaded.
+- **Keyboard:** a skip link, landmarks and one heading per page; every control can be reached and used from the keyboard with a visible focus ring; dialogs keep focus inside and give it back when closed; moving to a new page moves focus to its heading.
+- **Screen readers:** tabs, dialogs, the palette (combobox and listbox) and option groups follow the WAI-ARIA patterns; copy confirmations and updates are announced in a polite live region; charts and diagrams have a table or text version next to them.
+- **Never colour alone:** every status has an icon and a word.
+- **Checked automatically:** every page in both themes against WCAG 2.2 AA with axe, at 1440, 1280 and 900 px, plus a keyboard walk (see [development.md](development.md#ui-checks)).
 
 ## API
 
-The page uses these endpoints. Every one of them is GET/HEAD and returns JSON unless noted.
+The page uses these endpoints. Every one is GET/HEAD and returns JSON unless noted.
 
 | Path | Returns |
 |---|---|
-| `/` | The page |
+| `/` | The page (`app/index.html`) |
+| `/app/<file>` | The page's own scripts, styles and icons. Only files that exist under `chitragupta/dashboard/app/` with an allowed extension (`.js .css .svg .png .woff2 .webmanifest .json`) are served; anything else gets 404. |
+| `/manifest.webmanifest` | The web app manifest |
+| `/vendor/preact.module.js`, `/vendor/hooks.module.js`, `/vendor/mermaid.min.js` | Vendored libraries (see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)) |
 | `/api/health` | App, version, pid and data home |
-| `/api/today` | Today's tickets and minutes, the saved worklog or a preview |
-| `/api/tickets?q=` | Ticket list |
-| `/api/tickets/<KEY>` | One ticket. A malformed key gets 400; an unknown key gets 404. Includes `git` (branches, PRs, delivery, alerts, and a Mermaid graph per repo). |
+| `/api/today` | Today's tickets and minutes, the saved worklog or a preview, plus `lanes` (activity spans per ticket), `commit_list`, `sessions`, `last_activity`, `target_minutes` and `day_kind` |
+| `/api/day/<YYYY-MM-DD>` | The same for any day. A past day's preview is composed for the whole day; a saved worklog still wins. A malformed date gets 400. |
+| `/api/calendar?from=&to=` | Minutes per day and per ticket, each day's kind (`workday`, `weekend`, `leave`, `half_day`, `holiday`, `extra_workday`), its note and target. Default: the 365 days ending today; at most 400 days. |
+| `/api/knowledge` | Tables (with columns from the QA schema cards), relations (`verified` when the QA link map confirmed them), the code that writes each table, APIs and integrations |
+| `/api/search?q=&type=&limit=` | Full-text search over tickets, findings, queries, artifacts, APIs, tables, integrations and daily files, grouped by type. Snippets are plain text with hit offsets. |
+| `/api/setup` | The setup checklist: each check's status (`ok`, `warn`, `bad`, `off`), detail and the fix to run. Built from `doctor --fast` and cached for 60 s. |
+| `/api/events` | Server-Sent Events: a `cursor` event when the stream opens and whenever a file the page reads changes, and a keep-alive comment every 25 s. At most 16 open streams; more get 503 with `Retry-After: 5`. |
+| `/api/tickets?q=` | Ticket list, with each ticket's branch alerts and first linked branches |
+| `/api/tickets/<KEY>` | One ticket. A malformed key gets 400; an unknown key gets 404. Includes `git` (branches, PRs, delivery, alerts, and a Mermaid graph per repo) and `readme` (the ticket's `README.md`). |
 | `/api/tickets/<KEY>/export?mode=full\|shareable` | The whole ticket page as one self-contained HTML file (attachment), built in memory: nothing is written. `shareable` applies the public redaction pass and drops QA values, PR and internal URLs, hosts and file paths. |
 | `/api/timesheet?period=week\|month` | Hours table and calendar notes |
 | `/api/timesheet.csv?period=` | CSV in long format (`period,ticket,title,minutes,hours`), UTF-8 with BOM. Values that look like spreadsheet formulas are escaped. |
-| `/api/status` | Health page data |
+| `/api/status` | Health page data, including `mcp.live` (the last `claude mcp list` check that setup, doctor or maintenance cached; the dashboard never runs it) and `search` (index engine, size and build time) |
 | `/api/changes` | A cursor that changes when any file the page reads changes |
 
 ## Security model
@@ -62,10 +121,12 @@ The dashboard shows your worklog, so it is locked to your own browser on your ow
 - **Read-only.** Only GET and HEAD are accepted; any other method gets 405. There is no endpoint that writes data.
 - **No CORS.** Other sites can't read responses.
 - **Headers on every response, errors included:** a strict Content-Security-Policy, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cross-Origin-Resource-Policy: same-origin`.
-- **No file serving.** Only the page and the vendored Mermaid file are served, so a crafted path can't reach any other file.
+- **Scripts only from the server itself.** The Content-Security-Policy allows no inline script, no `eval`, no workers, no plugins and no external origins. Preact escapes every value it renders; the only raw HTML is the page's own Markdown renderer, which escapes its input first, and Mermaid's SVG (`securityLevel: strict`).
+- **No file serving.** Only the page, the files under `app/` with an allowed extension and the vendored libraries are served. A request path is looked up as an exact key in a list built by walking `app/`; it is never joined onto a folder, so a crafted path can't reach any other file.
+- **Search stays in memory.** The search index is an in-memory SQLite database (FTS5 when available, else a plain scan), rebuilt when the data changes and never written to disk. User input is always quoted, so it can't use FTS syntax.
 - **Robust to bad input.** A malformed request gets an error status (400, 414 or 505), never a crash. Sockets time out after 15 s.
 - **Shutdown is guarded.** `/api/shutdown` needs a random token that only your user account can read (`%USERPROFILE%\.chitragupta\dashboard\<port>.token`). `dashboard stop` uses it.
-- **No outgoing requests.** The server doesn't call out, and the page doesn't either. Mermaid runs with `securityLevel: strict`.
+- **No outgoing requests.** The server doesn't call out, and the page doesn't either.
 
 ## Configuration
 
@@ -78,12 +139,11 @@ The dashboard shows your worklog, so it is locked to your own browser on your ow
 
 ## Ticket export
 
-The same file comes from `/cg:ticket <KEY> --export [--mode shareable]`, which saves it under `tickets\<KEY>\exports\` (local only, never pushed; the nightly backup zip includes it). The file embeds the ticket's data and the page's own CSS and script, and Mermaid only when the ticket has a diagram (about 3.5 MB). It opens offline, makes no requests and shows *Exported <date> · full|shareable*.
+The same file comes from `/cg:ticket <KEY> --export [--mode shareable]`, which saves it under `tickets\<KEY>\exports\` (local only, never pushed; the nightly backup zip includes it). The file is the dashboard's own page with its styles and scripts inlined, the ticket's data, and Mermaid only when the ticket has a diagram (about 4 MB with it). It opens offline in any modern browser, has the same tabs, makes no requests (a Content-Security-Policy inside the file blocks them) and shows *Exported <date> · full|shareable*.
 
-## Known gaps in v0.1.0
+## Known gaps
 
-- **MCP status is not live.** The Health page reports the servers the *last* background job saw; it doesn't run a live check. `/cg:doctor` does a live check.
+- **Read only for now.** Settings, marking leave and holidays, pausing capture, sending a test message and the Fix buttons on Setup arrive in the next update, together with the write protections they need. Until then use `/cg:setup`, `/cg:log` and `/cg:pause`.
+- **MCP status is the last cached check.** Health shows the last `claude mcp list` result that setup, doctor or maintenance (daily) cached, and what the last background job saw. `/cg:doctor` runs a fresh check.
 - **The Today preview is not the final message.** It isn't condensed, and time already in Jira isn't subtracted, so it can differ from what is sent at 20:00.
-- **Only today has a Today view.** There is no page for a past day: the `/cg:dashboard day <date>` deep link opens Today. Use `/cg:today <date>` for a past day.
 - **The Markdown renderer is basic.** Links show as text.
-- **No settings page.** The dashboard can't change configuration (see the [roadmap](roadmap.md)).

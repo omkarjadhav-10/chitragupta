@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "Chitragupta",
+  "short_name": "Chitragupta",
+  "description": "Your Claude Code worklog: today, tickets, timesheet, knowledge and health, on this machine only.",
+  "start_url": "/#/today",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#E8EBEF",
+  "theme_color": "#8A1F5E",
+  "icons": [
+    { "src": "/app/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/app/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Today", "url": "/#/today" },
+    { "name": "Tickets", "url": "/#/tickets" },
+    { "name": "Timesheet", "url": "/#/timesheet" },
+    { "name": "Health", "url": "/#/health" }
+  ]
+}

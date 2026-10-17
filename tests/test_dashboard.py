@@ -24,6 +24,11 @@ from chitragupta import common
 TICKET = "ABC-1001"
 
 
+def server_mod():
+    from chitragupta.dashboard import server
+    return server
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -399,9 +404,11 @@ class TestHttp(Base):
 
     def test_security_headers(self):
         r, _ = self.get("/api/health")
-        self.assertEqual(r.getheader("Content-Security-Policy").split("; ")[:6],
-                         ["default-src 'self'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline'",
-                          "img-src 'self' data:", "connect-src 'self'", "frame-ancestors 'none'"])
+        self.assertEqual(r.getheader("Content-Security-Policy").split("; "),
+                         ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+                          "img-src 'self' data:", "connect-src 'self'", "font-src 'self'", "manifest-src 'self'",
+                          "worker-src 'none'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'none'",
+                          "form-action 'none'"])
         self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
         self.assertEqual(r.getheader("X-Frame-Options"), "DENY")
         self.assertEqual(r.getheader("Referrer-Policy"), "no-referrer")
@@ -446,7 +453,10 @@ class TestHttp(Base):
 
     def test_paths_cannot_escape(self):
         for p in ("/../../etc/passwd", "/page.html", "/chitragupta/common.py", "/vendor/../server.py", "/api/tickets/..%2F..%2Fx",
-                  "/api/tickets/ABC-1001/../../x", "/%2e%2e/%2e%2e/LICENSE", "/third_party/mermaid/LICENSE", "/api/tickets/abc"):
+                  "/api/tickets/ABC-1001/../../x", "/%2e%2e/%2e%2e/LICENSE", "/third_party/mermaid/LICENSE", "/api/tickets/abc",
+                  "/app/../server.py", "/app/%2e%2e/server.py", "/app/..%5cserver.py", "/app/missing.js", "/app/", "/app",
+                  "/app/index.html", "/app//main.js", "/app/./main.js", "/app/MAIN.JS", "/vendor/../x", "/vendor/x.js",
+                  "/vendor/preact/LICENSE", "/api/day/../../x", "/api/day/2026-13-45", "/api/day/x"):
             r, body = self.get(p)
             self.assertIn(r.status, (400, 404), p)
             self.assertNotIn(b"import ", body)
@@ -457,17 +467,39 @@ class TestHttp(Base):
         self.assertTrue(r.getheader("Content-Type").startswith("text/html"))
         html = body.decode("utf-8")
         self.assertIn("<title>Chitragupta</title>", html)
-        self.assertEqual(re.findall(r"(?i)\b(?:https?:)?//[a-z0-9.-]+\.[a-z]{2,}", html), [], "no external URLs")
-        self.assertNotRegex(html, r"(?i)<(script|link|img|iframe)[^>]+(src|href)\s*=\s*[\"']?(https?:|//)")
-        for route in ("#/today", "#/tickets", "#/timesheet", "#/health"):
-            self.assertIn(route, html)
-        self.assertIn("prefers-color-scheme: dark", html)
-        self.assertIn("localStorage", html)
         self.assertIn('class="skip"', html)
-        self.assertIn("/api/changes", html)
+        self.assertIn('<script type="module" src="/app/main.js"></script>', html)
+        self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', html)
+        for tag in re.findall(r"<script[^>]*>", html):  # no inline script: the CSP allows 'self' only
+            self.assertIn(" src=", tag)
         etag = r.getheader("ETag")
         r2, b2 = self.get("/", headers={"If-None-Match": etag})
         self.assertEqual(r2.status, 304)
+        # every module the page loads is served, and nothing in the app points off the machine
+        app = os.path.join(os.path.dirname(server_mod().PAGE))
+        seen = 0
+        for root, _d, files in os.walk(app):
+            for fn in files:
+                rel = os.path.relpath(os.path.join(root, fn), app).replace(os.sep, "/")
+                if fn.endswith(".html"):
+                    continue
+                r, body = self.get("/app/" + rel)
+                self.assertEqual(r.status, 200, rel)
+                if fn.endswith((".js", ".css", ".webmanifest", ".svg")):
+                    text = body.decode("utf-8")
+                    self.assertEqual(re.findall(r"(?i)(?:https?:)?//[a-z0-9.-]+\.[a-z]{2,}", text), [], rel)
+                    seen += 1
+        self.assertGreater(seen, 10)
+        core = self.get("/app/lib/core.js")[1].decode("utf-8")
+        for hook in ("/api/events", "/api/changes", "localStorage", "'today', 'tickets', 'timesheet'"):
+            self.assertIn(hook, core)
+        self.assertIn("prefers-color-scheme: dark", self.get("/app/app.css")[1].decode("utf-8"))
+        for v in ("/vendor/preact.module.js", "/vendor/hooks.module.js"):
+            r, body = self.get(v)
+            self.assertEqual(r.status, 200, v)
+            self.assertTrue(r.getheader("Content-Type").startswith("text/javascript"))
+        r, body = self.get("/manifest.webmanifest")
+        self.assertEqual(json.loads(body)["display"], "standalone")
         r, body = self.get("/vendor/mermaid.min.js")
         self.assertEqual(r.status, 200)
         self.assertGreater(len(body), 100000)
@@ -504,7 +536,8 @@ class TestHttp(Base):
     def test_read_only(self):
         before = snapshot(self.home)
         for p in ("/", "/api/today", "/api/tickets", "/api/tickets/ABC-1001", "/api/tickets/ABC-1002", "/api/timesheet",
-                  "/api/timesheet?period=month", "/api/timesheet.csv", "/api/status", "/api/changes", "/api/health"):
+                  "/api/timesheet?period=month", "/api/timesheet.csv", "/api/status", "/api/changes", "/api/health",
+                  "/api/day/" + self.days["yday"], "/api/calendar", "/api/knowledge", "/api/search?q=order"):
             self.assertEqual(self.get(p)[0].status, 200, p)
         self.assertEqual(snapshot(self.home), before, "the dashboard wrote into the data home")
 
