@@ -328,7 +328,7 @@ dialog.dlg[open] { animation: pop var(--dur-2) var(--ease); }
 @media (min-width: 1400px) { .tkbar.stuck .tkbar-id { display: flex; } }
 .exported .tkbar { top: 0; }
 @media (max-width: 1499px) { .tkbar .tabs [role="tab"] { padding: 8px 7px; font-size: 13.5px; gap: 4px; } }
-@media (max-width: 1180px) { .tkbar .tabs [role="tab"] { padding: 8px 5px; font-size: 13px; } .tkbar .tabcount { padding: 0 5px; } }
+@media (max-width: 1180px) { .tkbar .tabs [role="tab"] { padding: 8px 5px; font-size: 13px; } .tkbar .tabcount { padding: 0 5px; } .tkbar.stuck .tabcount { display: none; } }
 .tkhead-row { display: flex; gap: var(--s3); align-items: flex-start; }
 .tkhead-row > div:first-child { flex: 1; min-width: 0; }
 .findings { list-style: none; padding: 0; margin: 0; }
