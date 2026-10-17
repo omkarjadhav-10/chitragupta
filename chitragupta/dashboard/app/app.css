@@ -212,8 +212,8 @@ tr.spacer td, tr.spacer { padding: 0; border: 0; }
 .alert .grow { flex: 1; min-width: 0; }
 
 /* tabs */
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--rule); overflow-x: auto; margin: 0 0 var(--s5); scrollbar-width: thin; }
-.tabs [role="tab"] { all: unset; display: inline-flex; align-items: center; gap: 6px; padding: 9px 12px; min-height: 24px; color: var(--ink-2); cursor: pointer; white-space: nowrap;
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--rule); margin: 0 0 var(--s5); }
+.tabs [role="tab"] { all: unset; display: inline-flex; align-items: center; gap: 6px; padding: 9px 10px; min-height: 24px; color: var(--ink-2); cursor: pointer; white-space: nowrap;
   border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 6px 6px 0 0; }
 .tabs [role="tab"]:hover { color: var(--ink); background: var(--sunk); }
 .tabs [role="tab"][aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
@@ -313,12 +313,20 @@ dialog.dlg[open] { animation: pop var(--dur-2) var(--ease); }
 .other-list li { display: flex; justify-content: space-between; gap: var(--s3); padding: 4px 0; border-bottom: 1px solid var(--rule); }
 
 /* ------------------------------------------------------------ Ticket */
-.tkhead { position: sticky; top: var(--top-h); z-index: 5; background: var(--surface); margin: calc(-1 * var(--s5)) calc(-1 * var(--s6)) var(--s4); padding: var(--s5) var(--s6) 0; border-radius: var(--r-pane) var(--r-pane) 0 0; }
-.exported .tkhead { top: 0; }
+.tkhead { margin: 0 0 var(--s2); }
 .tkhead h1 { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
 .tkhead h1 .title { font-size: var(--fs-xl); color: var(--ink-2); font-weight: 500; }
-.tkhead .chips { margin: var(--s2) 0 var(--s3); }
-.tkhead .tabs { margin-bottom: 0; }
+.tkhead .chips { margin: var(--s2) 0 0; }
+.chip .mono { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.tkbar { position: sticky; top: var(--top-h); z-index: 5; display: flex; align-items: flex-end; gap: var(--s4); background: var(--surface);
+  margin: 0 calc(-1 * var(--s6)) var(--s5); padding: 0 var(--s6); border-bottom: 1px solid var(--rule); }
+.tkbar.stuck { box-shadow: 0 6px 12px -10px rgba(0, 0, 0, .35); }
+.tkbar .tabs { flex: 1; min-width: 0; margin: 0; border-bottom: 0; }
+.tkbar-id { display: none; flex: none; max-width: 30%; align-self: center; gap: var(--s2); white-space: nowrap; overflow: hidden; }
+.tkbar-id span { display: none; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (min-width: 1500px) { .tkbar-id { flex: 0 1 auto; } .tkbar-id span { display: inline; } }
+@media (min-width: 1400px) { .tkbar.stuck .tkbar-id { display: flex; } }
+.exported .tkbar { top: 0; }
 .tkhead-row { display: flex; gap: var(--s3); align-items: flex-start; }
 .tkhead-row > div:first-child { flex: 1; min-width: 0; }
 .findings { list-style: none; padding: 0; margin: 0; }
@@ -414,7 +422,8 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .rail-toggle { display: flex; }
   .pane { grid-column: 2; }
   .pane { padding: var(--s4) var(--s4) var(--s6); }
-  .tkhead { margin: calc(-1 * var(--s4)) calc(-1 * var(--s4)) var(--s4); padding: var(--s4) var(--s4) 0; }
+  .tkbar { margin: 0 calc(-1 * var(--s4)) var(--s4); padding: 0 var(--s4); }
+  .tkbar .tabs [role="tab"] { padding: 8px 7px; font-size: 13.5px; gap: 4px; }
   .two { grid-template-columns: 1fr; }
   .entry { grid-template-columns: 1fr 1fr; } .entry .fld.desc { grid-column: 1 / -1; }
   .top { grid-template-columns: auto minmax(160px, 1fr) auto; }

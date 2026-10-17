@@ -1,6 +1,6 @@
 // Tickets: a filterable, sortable list; and one ticket with a sticky header and tabs (Overview · Branches & PRs ·
 // DB flow · Requests · Queries · Artifacts · Timeline · Notes), plus the export links.
-import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
+import { useEffect, useMemo, useRef, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
 import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT, parseDay, isoDay } from '../lib/core.js';
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
@@ -215,6 +215,30 @@ function DbFlow({ df }) {
 const TABS = ['overview', 'branches', 'dbflow', 'requests', 'queries', 'artifacts', 'timeline', 'notes'];
 function Plain({ children }) { return children; }
 
+// Only this slim bar stays in view: the tabs, plus the key and title once the page heading has scrolled away. The
+// full header above it scrolls normally, so a small window keeps most of its height for the content.
+function TicketBar({ t, tabs, tab, setTab }) {
+  const [stuck, setStuck] = useState(false);
+  const mark = useRef(null);
+  const topH = () => (EXPORT ? 0 : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h')) || 60);
+  useEffect(() => {
+    const h1 = document.getElementById('page-title');
+    if (!h1 || !window.IntersectionObserver) return undefined;
+    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting), { rootMargin: '-' + topH() + 'px 0px 0px 0px' });
+    io.observe(h1);
+    return () => io.disconnect();
+  }, [t.key]);
+  const change = (id) => {
+    setTab(id);
+    // switching tabs further down the page starts the new tab at its top, right under the bar
+    const m = mark.current;
+    if (stuck && m) window.scrollTo({ top: m.getBoundingClientRect().top + window.scrollY - topH(), behavior: 'instant' });
+  };
+  return html`<div ref=${mark}></div><div class=${'tkbar' + (stuck ? ' stuck' : '')}>
+    <span class="tkbar-id" aria-hidden="true"><strong>${t.key}</strong>${t.title ? html`<span>${t.title}</span>` : null}</span>
+    <${Tabs} tabs=${tabs} active=${tab} onChange=${change} label=${t.key + ' sections'} idBase="tk" /></div>`;
+}
+
 export function TicketPage({ route }) {
   const key = route.arg;
   const res = useApi('/api/tickets/' + encodeURIComponent(key));
@@ -259,8 +283,8 @@ export function TicketPage({ route }) {
         <div class="chips">
           ${t.status ? html`<${Chip} title="Jira status">${t.status}</${Chip}>` : null}
           ${(t.repos || []).map((r) => html`<${Chip} key=${'r' + r} icon="branch" title="Repo">${r}</${Chip}>`)}
-          ${(t.branches || []).slice(0, 3).map((b) => html`<${Chip} key=${'b' + b} title="Branch"><span class="mono">${b}</span></${Chip}>`)}
-          ${(t.branches || []).length > 3 ? html`<${Chip}>+${t.branches.length - 3} branches</${Chip}>` : null}
+          ${(t.branches || []).slice(0, 2).map((b) => html`<${Chip} key=${'b' + b} title=${'Branch ' + b}><span class="mono">${b}</span></${Chip}>`)}
+          ${(t.branches || []).length > 2 ? html`<${Chip} title=${t.branches.slice(2).join(', ')}>+${t.branches.length - 2} branches</${Chip}>` : null}
           <${Chip} icon="today" title="Time recorded">${fmtMin(t.minutes)}</${Chip}>
           <${Chip} title="Active">${(t.first || '—') + ' to ' + (t.last || '—')}</${Chip}>
           ${(g.alerts || []).length ? html`<${Status} kind="warn">${plural(g.alerts.length, 'delivery alert')}</${Status}>` : null}
@@ -268,8 +292,8 @@ export function TicketPage({ route }) {
         ${EXPORT ? html`<p class="exportline">Exported ${String((t.export || {}).at || '').replace('T', ' ').slice(0, 16)} · ${(t.export || {}).mode || 'full'}</p>`
           : html`<div class="pagehead-act"><a class="btn" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=full'} download title="Everything as recorded, for your own use"><${Icon} name="download" size=${16} />Export</a>
             <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a></div>`}
-        </div>
-        <${Tabs} tabs=${tabs} active=${tab} onChange=${setTab} label=${t.key + ' sections'} idBase="tk" /></div>
+        </div></div>
+      <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
         ${tab === 'overview' ? html`<${Overview} t=${t} />` : null}
         ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
