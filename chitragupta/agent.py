@@ -14,6 +14,8 @@ import traceback
 
 from . import branches  # noqa: E402
 from . import common  # noqa: E402
+from . import delivery  # noqa: E402
+from . import gittrack  # noqa: E402
 from . import extract  # noqa: E402
 from . import features as featmod  # noqa: E402
 from . import gitsync  # noqa: E402
@@ -167,6 +169,8 @@ class Agent:
         self.day_closed = False
         self.extras = []  # commit-message extras
         self.cfg_dirty = False
+        self.git_events = []  # post-tool hook events, for branch tracking (git commands, PR links)
+        self.git_force = set()  # tickets whose branch picture must be recomputed (manual inbox decisions)
         self.features = featmod.Features(self)
         from . import jiraworklog
         from . import kbjobs
@@ -286,6 +290,8 @@ class Agent:
                 elif ev.get("event") in ("session-start", "user-prompt"):
                     s["ended"] = False
                 s["pending_chars"] = s.get("pending_chars", 0) + extract.event_chars(ev)
+                if ev.get("event") == "post-tool" and ev.get("repo_root"):
+                    self.git_events.append(ev)
                 self._learn(ev)
                 t = ev.get("ticket") or common.ticket_from_branch(ev.get("branch"), self.prefixes)
                 if t:
@@ -578,12 +584,6 @@ class Agent:
         sources.mark_commits_seen(st, commits)
         st["last_commit_scan"] = common.now_iso()
 
-        # branches: parent, creation, env status, and today's branch activity
-        try:
-            self.run_branches()
-        except Exception:
-            common.log("agent", "branch scan failed: " + traceback.format_exc())
-
         # Bruno
         for b in sources.scan_bruno(cfg, st):
             day = common.workday(b["ts"], cfg)
@@ -619,6 +619,8 @@ class Agent:
 
         # inbox
         for n in sources.scan_inbox(cfg, st):
+            if self.handle_branch_directive(n):
+                continue  # branch-link: / branch-unlink: / branch-abandon: / branch-restore: / strategy: lines
             if self.jwl.handle_inbox(n):
                 continue  # time: / leave: / half-day: / holiday: / workday: / resend: lines (jira worklog)
             day = common.workday(n["ts"], cfg)
@@ -645,58 +647,75 @@ class Agent:
                 if iid not in slot["item_ids"]:
                     slot["item_ids"].append(iid)
 
+        # branches, commits and PRs per ticket; after the inbox, so manual links / abandons apply at once
+        try:
+            self.run_branches()
+        except Exception:
+            common.log("agent", "branch tracking failed: " + traceback.format_exc())
+
+    def handle_branch_directive(self, n):
+        d = gittrack.parse_directive(n.get("text") or "")
+        if not d:
+            return False
+        ok, msg = gittrack.apply_directive(d, self.store, self.cfg, n.get("ts"))
+        common.log("agent", "inbox branch directive: %s (%s)" % (msg, "ok" if ok else "ignored"))
+        if d.get("ticket"):
+            self.git_force.add(d["ticket"])
+        self.store.branches_dirty = True
+        return True
+
     def run_branches(self):
         cfg, st = self.cfg, self.state
-        allb = self.store.branches()
         since_map = st.setdefault("branch_activity_since", {})
         baseline = st.setdefault("branch_baseline", {})
-        for repo in cfg.get("watched_repos") or []:
-            if not os.path.exists(os.path.join(repo, ".git")):
-                continue
-            name = os.path.basename(repo.rstrip("/\\"))
-            key = common.norm_path(repo)
-            branches.fetch_if_due(cfg, st, repo)
-            known = allb.get(name) or {}
-            recs = branches.scan_repo(cfg, repo, known)
+        tr = gittrack.Tracker(cfg, st, self.store, active_ticket=lambda ts: self.active_ticket_within(ts, 2 * 3600))
+        for ev in self.git_events:
+            tr.add_session_event(ev)
+        self.git_events = []
+        before = {n: {b: dict(r) for b, r in gittrack.RepoData(n).branches.items()} for n in gittrack.all_repo_names()}
+        rx = tr.refresh()
+        self.store.reload_branches()
+        for name, r in rx.items():
+            key = common.norm_path(r.path)
             # first sight of a repo: record current branches, but only log activity from the start of today
             if key not in baseline:
                 baseline[key] = common.day_bounds(common.workday(common.now(), cfg), cfg)[0].isoformat(timespec="seconds")
             base_ts = common.parse_ts(baseline[key])
-            changed_tickets = set()
-            for b, rec in recs.items():
+            known = before.get(name) or {}
+            for b, rec in r.data.branches.items():
                 old = known.get(b)
-                if old is None:
-                    rec["first_seen"] = common.now_iso()
+                if old is None and rec.get("local"):
                     ct = common.parse_ts(rec.get("created_at"))
                     if ct and base_ts and ct >= base_ts:
                         self._branch_event(ct, {"kind": "create", "repo_name": name, "branch": b, "from": rec.get("parent"),
                                                 "text": "created %s from %s" % (b, rec.get("parent") or "?")})
+                elif old and old.get("local") and not rec.get("local"):
+                    self._branch_event(common.now(), {"kind": "delete", "repo_name": name, "branch": b,
+                                                      "text": "deleted local branch " + b})
                 if old != rec:
                     self.store.branches_dirty = True
-                    if rec.get("ticket"):
-                        changed_tickets.add(rec["ticket"])
-            for b, old in known.items():
-                if b not in recs and not old.get("deleted_at"):
-                    gone = dict(old, deleted_at=common.now_iso())
-                    recs[b] = gone
-                    self.store.branches_dirty = True
-                    if old.get("ticket"):
-                        changed_tickets.add(old["ticket"])
-                    self._branch_event(common.now(), {"kind": "delete", "repo_name": name, "branch": b, "text": "deleted local branch " + b})
-                elif b not in recs:
-                    recs[b] = old
-            allb[name] = recs
-            for t in changed_tickets:
-                tk = self.store.ticket(t)
-                for b, rec in recs.items():
-                    if rec.get("ticket") == t:
-                        tk["branches"] = storemod._union(tk.get("branches"), [b])
-                        tk["repos"] = storemod._union(tk.get("repos"), [name])
-                self.store.touch_ticket(t)
             since = since_map.get(key) or baseline[key]
-            for a in branches.head_activity(cfg, repo, since):
+            for a in branches.head_activity(cfg, r.path, since):
                 self._branch_event(common.parse_ts(a["ts"]), a)
             since_map[key] = common.now_iso()
+        # ticket pictures: tickets whose branches changed, recently active ones (targets move), manual decisions
+        recent = tr.active_tickets(30)
+        linked = {}
+        for name, r in rx.items():
+            for b, rec in r.data.branches.items():
+                if rec.get("ticket"):
+                    linked.setdefault(rec["ticket"], set()).add((name, b))
+        for t in sorted(set(linked) & (recent | tr.changed_tickets | self.git_force) | (self.git_force & set(linked))):
+            tk = self.store.ticket(t)
+            for name, b in sorted(linked[t]):
+                tk["branches"] = storemod._union(tk.get("branches"), [b])
+                tk["repos"] = storemod._union(tk.get("repos"), [name])
+            if delivery.update_ticket(self.store, t, rx, cfg, force=t in self.git_force):
+                self.store.touch_ticket(t)
+                today = common.workday(common.now(), cfg)
+                if t in (self.store.day(today).get("tickets") or {}):
+                    self.store.touch_day(today)  # the daily file's "Branches & PRs" line
+        self.git_force = set()
 
     def _branch_event(self, ts, rec):
         day = common.workday(ts, self.cfg)
@@ -742,9 +761,9 @@ class Agent:
                              "revealed": tk["queries"][q].get("revealed")} for q in slot.get("query_ids", []) if q in tk["queries"]],
                 "apis": slot.get("api_keys", []), "files_changed": slot.get("files_changed", [])[:30],
                 "commits": [c["subject"] for c in dd["commits"] if c.get("ticket") == t],
-                "branches": [{"branch": r["branch"], "parent": r.get("parent"), "created": (r.get("created_at") or "")[:16],
-                              "envs": {e: (s or {}).get("status") for e, s in (r.get("envs") or {}).items()}}
-                             for r in render.ticket_branches(self.store, t)],
+                "branches": [{"branch": b["branch"], "parent": b.get("parent"), "status": b.get("status")}
+                             for x in ((tk.get("git") or {}).get("repos") or {}).values() for b in x.get("branches", [])],
+                "delivery": (tk.get("git") or {}).get("summary"),
                 "previous_tldr": tk.get("tldr"),
             }
         other = {g: {"activity": [w["text"] for w in s.get("what_i_did", [])],
@@ -940,6 +959,11 @@ def cmd_tick(force=False):
         return 0
     agent = None
     try:
+        try:
+            from . import migrate
+            migrate.run_in_tick()  # forward data migrations of a new version (backed up first), before config is loaded
+        except Exception:
+            common.log("agent", "migration failed: " + traceback.format_exc())
         agent = Agent(force=force)
         agent.tick()
         return 0
@@ -948,6 +972,45 @@ def cmd_tick(force=False):
         if agent:
             agent.health["last_error"] = common.now_iso() + " tick: " + traceback.format_exc().splitlines()[-1][:200]
         return 1
+    finally:
+        if agent:
+            try:
+                save_state(agent)
+            except Exception:
+                common.log("agent", "state save failed: " + traceback.format_exc())
+        lock.release()
+
+
+def cmd_branch_check(key=None, wait_s=None):
+    """/cg:check [KEY]: fetch, refresh PRs and recompute the delivery check now (under the agent lock).
+    -> {"tickets": [...], "repos": [...]} or {"skipped": why}."""
+    lock = Lock()
+    if not lock.acquire_wait(LOCK_WAIT_S if wait_s is None else wait_s):
+        return {"skipped": "the background agent is busy; try again in a few minutes"}
+    agent = None
+    try:
+        agent = Agent(force=True)
+        cfg = agent.cfg
+        repos = cfg.get("watched_repos") or []
+        if key:
+            names = set(agent.store.ticket(key).get("repos") or [])
+            repos = [p for p in repos if gittrack.repo_key(p) in names] or repos
+        tr = gittrack.Tracker(cfg, agent.state, agent.store, force_fetch=True, only_tickets=[key] if key else None)
+        rx = tr.refresh(repos, fetch=True, force_pr=True)
+        agent.store.reload_branches()
+        if key:
+            tickets = [key]
+        else:
+            recent = tr.active_tickets(14)
+            tickets = sorted({b.get("ticket") for r in rx.values() for b in r.data.branches.values()} & recent - {None})
+        for t in tickets:
+            delivery.update_ticket(agent.store, t, rx, cfg, force=True)
+        agent.store.branches_dirty = True
+        agent.store.save()
+        render.render_all(agent.store, cfg, agent.health, days=set(), tickets=set(t for t in tickets if t in agent.store.tickets))
+        errors = {n: (r.data.meta.get("fetch_error") or r.data.meta.get("pr_error")) for n, r in rx.items()
+                  if r.data.meta.get("fetch_error") or r.data.meta.get("pr_error")}
+        return {"tickets": tickets, "repos": sorted(rx), "errors": errors}
     finally:
         if agent:
             try:

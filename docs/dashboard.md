@@ -26,7 +26,7 @@ The server runs detached and windowless. Its log is `<home>\.worklog\logs\dashbo
 |---|---|
 | `#/today` | Time per ticket so far today, and tonight's Jira-worklog entries with a copy button for each entry's start, duration and description, plus one for the whole message. Before 20:00 this is a live preview. It uses no model and no Jira and saves nothing, so its descriptions are uncondensed and time already in Jira isn't subtracted. Once the day is composed, it shows the saved message. |
 | `#/tickets` | A searchable list of tickets with title, last activity, time and counts (`#/tickets?q=checkout`) |
-| `#/tickets/ABC-1001` (or `#/ticket/ABC-1001`) | One ticket: findings, saved requests with *copy as curl*, the DB flow drawn with Mermaid (including the QA worked example when there is one), queries, artifacts, timeline and file paths |
+| `#/tickets/ABC-1001` (or `#/ticket/ABC-1001`) | One ticket: an alert banner when its branches need attention, findings, saved requests with *copy as curl*, the DB flow drawn with Mermaid (including the QA worked example when there is one), **Branches & PRs** (a graph of the bases and the ticket's branches, the delivery matrix, branches and PRs tables; see [branch-tracking.md](branch-tracking.md)), queries, artifacts, timeline and file paths. *Export (full)* / *Export (shareable)* download the whole page as one HTML file. |
 | `#/timesheet` | Hours per ticket by ISO week (`?period=month` for months), leave and holidays, and a CSV export |
 | `#/health` | Last hook event, last tick, last push, Slack send status, MCP servers seen by the last jobs, MCP calls and tokens today, recent errors, and whether capture is paused |
 
@@ -46,7 +46,8 @@ The page uses these endpoints. Every one of them is GET/HEAD and returns JSON un
 | `/api/health` | App, version, pid and data home |
 | `/api/today` | Today's tickets and minutes, the saved worklog or a preview |
 | `/api/tickets?q=` | Ticket list |
-| `/api/tickets/<KEY>` | One ticket. A malformed key gets 400; an unknown key gets 404. |
+| `/api/tickets/<KEY>` | One ticket. A malformed key gets 400; an unknown key gets 404. Includes `git` (branches, PRs, delivery, alerts, and a Mermaid graph per repo). |
+| `/api/tickets/<KEY>/export?mode=full\|shareable` | The whole ticket page as one self-contained HTML file (attachment), built in memory: nothing is written. `shareable` applies the public redaction pass and drops QA values, PR and internal URLs, hosts and file paths. |
 | `/api/timesheet?period=week\|month` | Hours table and calendar notes |
 | `/api/timesheet.csv?period=` | CSV in long format (`period,ticket,title,minutes,hours`), UTF-8 with BOM. Values that look like spreadsheet formulas are escaped. |
 | `/api/status` | Health page data |
@@ -74,6 +75,10 @@ The dashboard shows your worklog, so it is locked to your own browser on your ow
 | `CHITRAGUPTA_DASHBOARD_PORT` (env) | — | Overrides the port |
 | `dashboard.autostart` (config) | `true` | Start from the scheduled task and SessionStart maintenance |
 | `CHITRAGUPTA_DASHBOARD` (env) | — | `0` / `off` turns autostart off |
+
+## Ticket export
+
+The same file comes from `/cg:ticket <KEY> --export [--mode shareable]`, which saves it under `tickets\<KEY>\exports\` (local only, never pushed; the nightly backup zip includes it). The file embeds the ticket's data and the page's own CSS and script, and Mermaid only when the ticket has a diagram (about 3.5 MB). It opens offline, makes no requests and shows *Exported <date> · full|shareable*.
 
 ## Known gaps in v0.1.0
 

@@ -87,22 +87,6 @@ def sort_items(items, newest_first=True):
 
 # --------------------------------------------------------------------------- branches
 
-ENV_MARK = {"merged": "✅ merged", "cherry-picked": "✅ cherry-picked", "ticket commit": "≈ ticket commit",
-            "not merged": "—", "base": "· base (no own commits)", "contains base": "· has it (no own commits)"}
-
-
-def env_cell(st):
-    if not st:
-        return ""
-    s = st.get("status", "")
-    if s.startswith("partial"):
-        return "◐ " + s
-    out = ENV_MARK.get(s, s)
-    if st.get("commit"):
-        out += " " + code(st["commit"])
-    return out
-
-
 def _short_text(s, n):
     s = s or ""
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -117,8 +101,9 @@ def branch_parent(rec):
     p = rec.get("parent")
     if not p:
         return "?"
-    if (rec.get("parent_source") or "").startswith("reflog"):
-        return code(p)
+    src = rec.get("parent_source") or ""
+    if src in ("command", "reflog", "reflog (HEAD)"):
+        return code(p) + (" _(command)_" if src == "command" else "")
     alts = rec.get("parent_alternatives") or []
     return code(p) + (" _(inferred; same commit as %s)_" % ", ".join(alts) if alts else " _(inferred)_")
 
@@ -133,29 +118,31 @@ def branch_created(rec):
     return c
 
 
-def repo_envs(recs, envs_order=("qa", "uat", "staging", "master", "main", "develop")):
-    seen = set()
-    for r in recs:
-        seen |= set((r.get("envs") or {}).keys())
-    return [e for e in envs_order if e in seen] + sorted(seen - set(envs_order))
+def branch_where(rec):
+    if rec.get("deleted_at") and not rec.get("local") and not rec.get("on_remote"):
+        return "deleted %s" % rec["deleted_at"][:10]
+    w = [x for x, ok in (("local", rec.get("local")), ("remote", rec.get("on_remote"))) if ok]
+    if rec.get("remote_gone"):
+        w.append("deleted on remote")
+    return " + ".join(w) or "—"
 
 
 def branch_table(recs, with_repo=False, ticket_link="../tickets/"):
     """ticket_link=None hides the Ticket column."""
     recs = sorted(recs, key=lambda r: (r.get("created_at") or r.get("first_seen") or ""), reverse=True)
-    envs = repo_envs(recs)
     head = (["Repo"] if with_repo else []) + ["Branch"] + (["Ticket"] if ticket_link is not None else []) + \
-        ["Parent", "Created", "Last commit", "Own commits / parent moved"] + envs
+        ["Parent", "Created", "Last commit", "Own commits / parent moved", "Unpushed", "Where"]
     L = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for r in recs:
-        ab = "%s / %s" % (r.get("ahead"), r.get("behind")) if r.get("ahead") is not None else "—"
+        ab = "%s / %s" % (r.get("ahead"), r.get("behind") if r.get("behind") is not None else "?") \
+            if r.get("ahead") is not None else "—"
         row = ([cell(r.get("repo_name"))] if with_repo else [])
-        row.append(code(r["branch"]) + (" _(deleted %s)_" % r["deleted_at"][:10] if r.get("deleted_at") else ""))
+        row.append(code(r["branch"]))
         if ticket_link is not None:
             row.append("[%s](%s%s/README.md)" % (r["ticket"], ticket_link, r["ticket"]) if r.get("ticket") else "—")
         row += [branch_parent(r), branch_created(r),
-                "%s — %s" % (_date(r.get("last_commit")), cell(_short_text(r.get("last_subject"), 60))), ab]
-        row += [env_cell((r.get("envs") or {}).get(e)) for e in envs]
+                "%s — %s" % (_date(r.get("last_commit")), cell(_short_text(r.get("last_subject"), 60))), ab,
+                str(r.get("unpushed") or 0), branch_where(r)]
         L.append("| " + " | ".join(row) + " |")
     return L
 
@@ -163,22 +150,84 @@ def branch_table(recs, with_repo=False, ticket_link="../tickets/"):
 def render_branches(store):
     allb = store.branches()
     L = ["# Branches", "",
-         "Local branches in watched repos: where each came from, when it was created, and whether its work has reached",
-         "each environment branch. Parent and created time come from git's reflog (exact) unless marked _inferred_ or",
-         "_first commit_. Environment status is checked against `origin/<env>` as of your last fetch.", "",
-         "Legend: ✅ merged (in history) · ✅ cherry-picked (equivalent commits present) · ◐ partial · "
-         "≈ a commit there mentions the ticket (likely squash-merged) · — not merged · · base = cut from it, nothing committed on top yet", ""]
+         "Work branches in watched repos: where each came from, when it was created, and what is still unpushed.",
+         "Parent and created time come from the captured command or git's reflog (exact) unless marked _inferred_ or",
+         "_first commit_. Whether the work reached qa / release / … is on each ticket's page (Branches & PRs).", ""]
     if not allb:
         L.append("_No branches recorded yet._")
     for repo in sorted(allb):
-        recs = list(allb[repo].values())
-        live = [r for r in recs if not r.get("deleted_at")]
-        gone = [r for r in recs if r.get("deleted_at")]
-        L += ["## " + repo, ""] + (branch_table(live) if live else ["_No local feature branches._"]) + [""]
+        recs = [r for r in allb[repo].values() if isinstance(r, dict) and r.get("branch")]
+        live = [r for r in recs if r.get("local") or r.get("on_remote") or not r.get("deleted_at")]
+        gone = [r for r in recs if r not in live]
+        L += ["## " + repo, ""] + (branch_table(live) if live else ["_No work branches._"]) + [""]
         if gone:
-            L += ["<details><summary>Deleted locally (%d, kept for history)</summary>" % len(gone), ""] + \
+            L += ["<details><summary>Deleted (%d, kept for history)</summary>" % len(gone), ""] + \
                  branch_table(gone) + ["", "</details>", ""]
     return "\n".join(L) + "\n"
+
+
+# --------------------------------------------------------------------------- branches & PRs per ticket (delivery)
+
+ALERT_ORDER = ["lost", "only-copy", "gap", "unpushed", "pr-base", "wrong-parent", "check", "pr-stale"]
+DELIVERY_SYMBOL = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "✗", "reverted": "↩", "check": "?"}
+PR_SOURCE = {"merge-commit": "PR info from merge commits only", "gh": "PRs from gh", "glab": "PRs from glab",
+             "az": "PRs from az"}
+
+
+def git_alerts(tk):
+    al = list(((tk.get("git") or {}).get("alerts")) or [])
+    return sorted(al, key=lambda a: ALERT_ORDER.index(a["kind"]) if a.get("kind") in ALERT_ORDER else 99)
+
+
+def alert_line(t, tk):
+    """One factual line for SessionStart: the most serious alert, and how many more."""
+    al = git_alerts(tk)
+    if not al:
+        return ""
+    line = "%s: %s" % (t, al[0]["text"])
+    return line + (" (+%d more on the ticket page)" % (len(al) - 1) if len(al) > 1 else "")
+
+
+def git_section(tk):
+    g = tk.get("git") or {}
+    repos = g.get("repos") or {}
+    if not repos:
+        return None
+    L = ["_%s_" % g.get("summary", "")]
+    al = git_alerts(tk)
+    if al:
+        L += ["", "**Needs attention**"] + ["- ⚠ %s%s%s" % (a["text"], " — " if a.get("commits") else "",
+                                                           ", ".join(code(c) for c in a.get("commits", [])[:8])) for a in al]
+    for name, x in sorted(repos.items()):
+        how = ("strategy %s (%s)" % (x["strategy"], x.get("strategy_how"))) if x.get("strategy") else (x.get("note") or "no strategy")
+        L += ["", "#### %s — %s · %s" % (name, how, PR_SOURCE.get(x.get("pr_source"), "PR info unavailable"))]
+        if x.get("rows"):
+            tg = x.get("targets") or []
+            L += ["", "| Commit | Subject | " + " | ".join(cell(t["name"]) for t in tg) + " |", "|---|---|" + "---|" * len(tg)]
+            for row in x["rows"]:
+                cells = []
+                for t in tg:
+                    c = row["cells"].get(t["role"]) or {}
+                    extra = c.get("why") or ("PR #%s" % c["pr"] if c.get("pr") else "")
+                    cells.append(DELIVERY_SYMBOL.get(c.get("s"), "?") + (" " + cell(extra) if extra else ""))
+                L.append("| %s | %s | %s |" % (", ".join(code(s) for s in row["shas"][:3]), cell(_short_text(row["subject"], 70)),
+                                              " | ".join(cells)))
+        if x.get("branches"):
+            L += ["", "| Branch | Parent | Status | PRs | Unpushed | Own / behind | Linked by |", "|---|---|---|---|---|---|---|"]
+            for b in x["branches"]:
+                st = b["status"] + (" · %s?" % b["suggested"] if b.get("suggested") else "")
+                L.append("| %s | %s | %s | %s | %s | %s | %s |" % (
+                    code(b["branch"]), branch_parent(b), cell(st), ", ".join("#%s" % n for n in b.get("prs") or []) or "—",
+                    b.get("unpushed") or 0, "%s / %s" % (b.get("own"), b.get("behind") if b.get("behind") is not None else "?"),
+                    b.get("link") or "—"))
+        if x.get("prs"):
+            L += ["", "| PR | Source → target | State | Review | Merged |", "|---|---|---|---|---|"]
+            for pr in x["prs"]:
+                num = "[#%s](%s)" % (pr["number"], pr["url"]) if (pr.get("url") or "").startswith("http") else "#%s" % pr["number"]
+                L.append("| %s | %s → %s | %s | %s | %s |" % (num, code(pr.get("source")), code(pr.get("target")), pr.get("state"),
+                                                            pr.get("review") or "—", _date(pr.get("merged_at")) if pr.get("merged_at") else "—"))
+    L += ["", "_Fix a wrong link or mark a branch abandoned: `/cg:branch link|unlink|abandon|restore …`._"]
+    return L
 
 
 def ticket_branches(store, t):
@@ -351,6 +400,9 @@ def ticket_section(store, dd, t, slot):
                                     " @ " + a["host_or_service"] if a.get("host_or_service") else "", a.get("purpose") or a.get("direction"))
               for a in apis]
         L += ["  - %s · %s — %s" % (g.get("system"), g.get("artifact"), g.get("notes")) for g in igs]
+    summary = (tk.get("git") or {}).get("summary")
+    if summary:
+        L.append("- **Branches & PRs** — " + summary)
     commits = [c for c in dd.get("commits", []) if c.get("ticket") == t]
     if slot.get("files_changed") or commits:
         L.append("- **Files changed · commits**")
@@ -479,9 +531,13 @@ def render_ticket(store, t):
         fix += ["", "Commits:"] + ["- %s %s %s %s _(%s)_" % (c.get("date", "")[:10], c.get("repo_name"), code(c.get("short")), c.get("subject"), c.get("ref"))
                                    for c in sorted(tk["commits"].values(), key=lambda c: c.get("date", ""), reverse=True)]
     sec("Fix / changes", fix if any(x.strip() for x in fix) else None)
-    br = ticket_branches(store, t)
-    sec("Branches", branch_table(br, with_repo=True, ticket_link=None) +
-        ["", "_All branches: [knowledge/branches.md](../../knowledge/branches.md)_"] if br else None)
+    gs = git_section(tk)
+    if gs:
+        sec("Branches & PRs", gs + ["", "_All branches: [knowledge/branches.md](../../knowledge/branches.md)_"])
+    else:
+        br = ticket_branches(store, t)
+        sec("Branches", branch_table(br, with_repo=True, ticket_link=None) +
+            ["", "_All branches: [knowledge/branches.md](../../knowledge/branches.md)_"] if br else None)
     db = []
     if tk["tables"]:
         db += ["| Table / collection | DB | Purpose | Key columns | Relations |", "|---|---|---|---|---|"]
@@ -688,7 +744,8 @@ def render_context(store, t):
     """SessionStart context: plain facts, <= 4000 chars."""
     tk = store.ticket(t)
     path = os.path.join(common.home(), "tickets", t, "README.md")
-    L = ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + tk["title"] if tk.get("title") else "", path),
+    al = alert_line(t, tk)
+    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + tk["title"] if tk.get("title") else "", path),
          "Status (inferred): %s. First worked %s, last worked %s, about %s in total." % (
              tk.get("status") or "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
          if tk.get("first") else "No Claude Code activity recorded for it yet."]
@@ -706,14 +763,15 @@ def render_context(store, t):
     arts = artmod.latest(tk, 3)
     if arts:
         L.append("Latest artifacts: " + "; ".join("%s (%s)" % (a.get("name"), common.truncate(a.get("purpose") or a.get("kind"), 60)) for a in arts) + ".")
-    br = ticket_branches(store, t)
-    if br:
-        L.append("Branches:")
-        for r in sorted(br, key=lambda r: r.get("created_at") or "", reverse=True)[:6]:
-            envs = ", ".join("%s %s" % (e, (s or {}).get("status")) for e, s in (r.get("envs") or {}).items())
-            L.append("- %s (%s): from %s, created %s%s%s" % (r["branch"], r.get("repo_name"), r.get("parent") or "?",
-                                                           (r.get("created_at") or "?")[:16], "; " + envs if envs else "",
-                                                           "; deleted" if r.get("deleted_at") else ""))
+    g = tk.get("git") or {}
+    if g.get("summary"):
+        L.append("Branches & PRs: " + g["summary"] + ".")
+    for name, x in sorted((g.get("repos") or {}).items()):
+        for b in x.get("branches", [])[:6]:
+            if b.get("status") == "abandoned":
+                continue
+            L.append("- %s (%s): from %s, %s%s" % (b["branch"], name, b.get("parent") or "?", b["status"],
+                                                 "; PR " + ", ".join("#%s" % n for n in b["prs"]) if b.get("prs") else ""))
     finds = sort_items([i for i in tk["items"].values() if i.get("kind") not in OPEN_KINDS])[:8]
     if finds:
         L.append("Recent findings:")
@@ -773,7 +831,7 @@ An automatic record of my engineering work: what I did each day per ticket, what
 | `knowledge/db-map.md` | Every table seen across tickets, relationships, which components write which columns |
 | `_drop/` | Drop any file here with a ticket ID in its name; it is moved into that ticket's artifacts (git-ignored) |
 | `knowledge/db-tables.md`, `apis.md`, `integrations.md` | Cross-ticket catalogs |
-| `knowledge/branches.md` | Every local branch: parent, created, last commit, merged into qa / uat / staging / master |
+| `knowledge/branches.md` | Every work branch: parent, created, last commit, unpushed, where it lives |
 | `data/` | Canonical JSON the markdown is rendered from (never hand-edit) |
 | `inbox.md` | Manual notes, filed automatically (git-ignored). Prefix with `{ex}:` to attach to a ticket |
 | `.worklog/` | Config, optional prompt overrides, health; raw capture/logs/state are git-ignored |
@@ -806,8 +864,8 @@ You can also just ask (e.g. "what did I find on {ex}?"): the `chitragupta` skill
    tool-less `claude -p` call (models: {models}), pick up my git commits, Bruno requests, SQL scripts and
    `inbox.md`, merge into `data/`, render markdown, redact-check, commit, and push every {push} minutes
    (or when a session ends / a day closes).
-   Branch records come from git itself (reflog + ancestry), no AI: parent, creation time, and env status
-   against `origin/<env>` as of your last fetch (set `"branch_fetch": true` in config to fetch hourly).
+   Branches, commits and PRs per ticket come from git and the Git host's CLI, no AI: parent, PRs, and
+   whether every commit reached the targets of the repo's branching strategy (`"branching"` in config).
 3. **Close the day** — after {day} the previous work day is consolidated (final summary, per-ticket TL;DR and
    status, standup) and open TODOs carry into the next day. Work before {day} counts toward the previous day.
 

@@ -1,6 +1,7 @@
 """Read-only views of the data home for the dashboard.
 
-Every function here only reads: data/days, data/tickets, data/timesheets, data/calendar.json, data/qa-trace,
+Every function here only reads: data/days, data/tickets (incl. the branch-tracking "git" block), data/timesheets,
+data/calendar.json, data/qa-trace,
 tickets/<T>/*.md, .worklog/health.json, .worklog/raw and .worklog/logs. Nothing is written, no model and no MCP
 server is called. Results are plain JSON-ready dicts.
 """
@@ -275,6 +276,42 @@ def _artifacts(key, tk):
     return out
 
 
+MAX_GIT_ROWS = 300
+
+
+def _git(tk):
+    """tk["git"] for the page (never mutating the cached record): every repo gets its Mermaid gitGraph ("graph", None
+    when too large or not drawable) and a legend of renamed branches; long matrices are cut to MAX_GIT_ROWS rows."""
+    g = tk.get("git")
+    if not isinstance(g, dict) or not g:
+        return {}
+    from .. import gitview
+    repos = {}
+    for name, e in sorted((g.get("repos") or {}).items()):
+        if not isinstance(e, dict):
+            continue
+        x = dict(e)
+        rows = x.get("rows") or []
+        if len(rows) > MAX_GIT_ROWS:
+            x["rows"] = rows[-MAX_GIT_ROWS:]
+            x["rows_cut"] = len(rows) - MAX_GIT_ROWS
+        try:
+            gr = gitview.graph(e)
+        except Exception as ex:  # noqa: BLE001 — the tables still show
+            gr = {"source": None, "legend": {}, "why": "graph failed: %s" % ex.__class__.__name__}
+        x["graph"], x["graph_legend"], x["graph_why"] = gr["source"], gr["legend"], gr["why"]
+        repos[name] = x
+    return {"repos": repos, "alerts": list(g.get("alerts") or []), "summary": g.get("summary") or "",
+            "checked_at": g.get("checked_at")}
+
+
+def _linked_branches(tk):
+    """The branches branch tracking linked to the ticket; before it has run, the names seen in sessions."""
+    repos = ((tk.get("git") or {}).get("repos")) or {}
+    names = [b["branch"] for x in repos.values() for b in x.get("branches") or [] if b.get("branch")]
+    return names or [b for b in tk.get("branches") or [] if b and not b.startswith("refs/")]
+
+
 def ticket(key):
     """Everything the dashboard shows for one ticket, or None when unknown."""
     if not TICKET_RE.match(key or ""):
@@ -287,13 +324,13 @@ def ticket(key):
     out = ticket_summary(key, tk)
     out.update({
         "problem": tk.get("problem") or "", "title_source": tk.get("title_source") or "",
-        "branches": tk.get("branches") or [], "jira": tk.get("jira") or {},
+        "branches": _linked_branches(tk), "jira": tk.get("jira") or {},
         "findings": _items(tk), "queries": _queries(tk), "requests": _requests(key, tk, paths),
         "dbflow": _dbflow(key, paths), "artifacts": _artifacts(key, tk),
         "timeline": [{"day": d, "minutes": int((v or {}).get("minutes") or 0), "line": (v or {}).get("line") or ""}
                      for d, v in sorted((tk.get("timeline") or {}).items(), reverse=True)],
         "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
-        "paths": paths,
+        "paths": paths, "git": _git(tk),
     })
     return out
 

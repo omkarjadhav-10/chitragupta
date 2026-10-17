@@ -11,7 +11,7 @@
       "displayName": "Chitragupta",
       "source": "./",
       "description": "Keeps a worklog of your Claude Code sessions, with an evening Jira-worklog summary and a local dashboard.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     }
   ]

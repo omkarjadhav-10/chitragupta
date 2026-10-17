@@ -96,7 +96,8 @@ class ApplyTests(SetupCase):
         self.assertEqual(cfg["github_remote"], "https://github.com/acme/wl")
         self.assertIn("database-mcp-rename", cfg["chitragupta_migrations"])
         self.assertTrue(os.path.isdir(os.path.join(self.home, "_drop")))
-        self.assertEqual(rd(os.path.join(self.user_dir, "runtime", "current")).strip(), "0.1.0")
+        from chitragupta import __version__
+        self.assertEqual(rd(os.path.join(self.user_dir, "runtime", "current")).strip(), __version__)
         skill = rd(os.path.join(self.claude_dir, "skills", "chitragupta", "SKILL.md"))
         self.assertIn("recall from %s" % self.home, skill)
         self.assertIn(os.path.join(self.user_dir, "runtime", "run.py"), skill)

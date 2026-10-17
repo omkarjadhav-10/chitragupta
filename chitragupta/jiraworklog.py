@@ -465,6 +465,15 @@ class JiraWorklog:
             save_sheet(day, sh)
             return sh
         text = res["text"]
+        if res["kind"] == "message":
+            try:  # after the closing note; the Jira entries above stay exactly as composed
+                day_tickets = sorted({e["ticket"] for e in res.get("entries") or [] if e.get("ticket")} |
+                                     set((self.store.day(day).get("tickets") or {}).keys()))
+                block = delivery_block(self.store, day_tickets)
+                if block:
+                    text = text + "\n\n" + block
+            except Exception:
+                common.log("agent", "delivery check block failed: " + traceback.format_exc())
         ver = {"v": len(sh.get("versions") or []) + 1, "at": common.now_iso(), "kind": res["kind"], "why": why, "text": text,
                "jira_facts": res.get("facts", False)}
         if res["kind"] == "message":
@@ -505,6 +514,40 @@ class JiraWorklog:
                     day, sh["attempts"], (r.get("error") or "")[:120])
         save_sheet(day, sh)
         return sh
+
+
+# --------------------------------------------------------------------------- delivery check (branch tracking)
+
+_PR_NO = re.compile(r"PR #(\d+)")
+_HINT = re.compile(r":\s*/cg:branch\s+\S+(?:\s+\S+){1,3}\s*$")
+
+
+def _public(text):
+    """The public pass, except PR numbers (the digit-run rule would mask them; they aren't sensitive)."""
+    keep = []
+
+    def hold(m):
+        keep.append(m.group(1))
+        return "PR #\x00%d\x00" % (len(keep) - 1)
+    out = redact(_PR_NO.sub(hold, text), mode="public")
+    return re.sub(r"PR #\x00(\d+)\x00", lambda m: "PR #" + keep[int(m.group(1))], out)
+
+
+def delivery_block(store, tickets, max_lines=12):
+    """'Delivery check' lines for the day's tickets with branch alerts, or "" (no extra model call: same send)."""
+    from . import render
+    lines = []
+    for t in tickets:
+        for a in render.git_alerts(store.ticket(t)):
+            shas = a.get("commits") or []
+            text = _HINT.sub(".", a["text"])  # the /cg:branch hint stays on the ticket page and in the session line
+            lines.append("• %s: %s%s" % (t, text, " (%s%s)" % (", ".join(shas[:3]), ", …" if len(shas) > 3 else "")
+                                          if shas and a.get("kind") in ("lost", "only-copy", "unpushed", "gap") else ""))
+    if not lines:
+        return ""
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + ["• … %d more on the ticket pages" % (len(lines) - max_lines)]
+    return _public("Delivery check\n" + "\n".join(lines))
 
 
 # --------------------------------------------------------------------------- daily file section

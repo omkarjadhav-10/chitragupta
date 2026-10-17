@@ -1,6 +1,6 @@
 ---
 name: chitragupta
-description: Answer questions from the user's automatic worklog (Chitragupta) at {{HOME}} — what they did on a day or week, everything known about a ticket (findings, root cause, how it works, DB queries, tables, APIs, integrations, files, decisions), standups, timesheets and handover notes; the daily Jira worklog sent to Slack at 20:00 (log extra time or a meeting, leave, half days, holidays, working weekend days, resend or show a day's worklog); replay or run a ticket's saved requests, save requests to the worklog, show or map a ticket's DB flow (which tables and columns change, from what to what), and find a ticket's artifacts. Use whenever they mention a ticket ID, ask what they did or found, what we know about something, which tables, APIs or queries were involved, want to replay / save / pin a request, map a DB flow, find an analysis doc or export, or want a standup, timesheet, weekly summary or handover, say they were on leave / took a half day / worked extra time, or ask a read-only Jira or database question about a ticket — even if they don't say "worklog".
+description: Answer questions from the user's automatic worklog (Chitragupta) at {{HOME}} — what they did on a day or week, everything known about a ticket (findings, root cause, how it works, DB queries, tables, APIs, integrations, files, decisions), standups, timesheets and handover notes; the daily Jira worklog sent to Slack at 20:00 (log extra time or a meeting, leave, half days, holidays, working weekend days, resend or show a day's worklog); replay or run a ticket's saved requests, save requests to the worklog, show or map a ticket's DB flow (which tables and columns change, from what to what), find a ticket's artifacts, and a ticket's branches, PRs and delivery check (did every commit reach release / qa / uat / staging, which PRs are open). Use whenever they mention a ticket ID, ask what they did or found, what we know about something, which tables, APIs or queries were involved, want to replay / save / pin a request, map a DB flow, find an analysis doc or export, ask whether a ticket reached release / qa or which PRs are open, or want a standup, timesheet, weekly summary or handover, say they were on leave / took a half day / worked extra time, or ask a read-only Jira or database question about a ticket — even if they don't say "worklog".
 ---
 
 # Worklog recall (Chitragupta)
@@ -26,7 +26,10 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 - `tickets/<TICKET>/artifacts/INDEX.md` — every artifact (analysis docs, HTML pages, diagrams, payloads, scripts,
   exports, screenshots, published links) with date, purpose, source and where it is stored (`local/` = this machine only)
 - `knowledge/db-tables.md`, `knowledge/apis.md` (with a "Replay in" column), `knowledge/integrations.md` — catalogs
-- `knowledge/branches.md` — every local branch: parent, created, env status (qa / uat / staging / master)
+- `knowledge/branches.md` — every work branch: parent, created, last commit, unpushed, where it lives
+- `data/tickets/<KEY>.json` → `git` — per repo: strategy, branches (parent + how found, status), PRs, the delivery
+  matrix (each commit × each required target: in / same change / via squash PR / PR open / missing / reverted / check)
+  and alerts; `data/git/<repo>/` holds the raw events, branch records and PRs
 - `daily/YYYY/MM/YYYY-MM-DD.md` — per day: summary, per-ticket work with times (incl. requests saved, DB flow
   updates, new artifacts), other work, outside Claude Code, commits, standup. A work day starts at `day_starts_at`
   in `.worklog/config.json`.
@@ -104,6 +107,15 @@ A line for a day already messaged (up to 3 days back) makes the agent send one "
 "Show today's worklog" is a read-only preview (nothing sent, no Jira call): `/cg:today`, or
 `py -3 "{{LAUNCHER}}" agent worklog-show [YYYY-MM-DD]`
 
+## Branches, PRs, delivery ("did ABC-1234 reach release?", "which PRs are still open?")
+Answer from `py -3 "{{LAUNCHER}}" cli branches <KEY>` (or the ticket JSON's `git` block): give the alerts first in plain
+sentences with their commits ("3 commits not in release/1.4 — pushed after PR #812 merged" means they never arrived), then
+per target how many commits are ✓ / ⏳ / ✗. For "which PRs are open", look through `git.repos.*.prs` of recently active
+tickets (state open or draft). The data is as of the last background tick; `/cg:check <KEY>` fetches and refreshes now.
+Never run git in the user's repos for this. To fix tracking, the user runs `/cg:branch link|unlink|abandon|restore|strategy …`
+(or you append the matching `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` line
+to `inbox.md` when they ask).
+
 ## Read-only MCP use (Jira, the database MCP)
 When asked ("status of ABC-1234?", "which proc sets is_locked?") you may use the Jira MCP read tools (`jira_get_issue`,
 `jira_search`, `jira_get_worklog`, `jira_batch_get_changelogs`) and the database MCP's read tools (describe a table,
@@ -118,7 +130,8 @@ values never.
 
 ## The only writes allowed (only when the user explicitly asks)
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;
-  `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `resend:` lines for the Jira worklog, see above).
+  `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `resend:` lines for the Jira worklog, and
+  `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking).
 - Create a file in `{{HOME}}\_drop\` whose name starts with the ticket ID, e.g. `ABC-1234_lock-analysis.md`
   ("save this analysis to the worklog for ABC-1234"); the agent files it under the ticket's artifacts.
 Never edit any other worklog file.

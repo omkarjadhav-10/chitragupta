@@ -7,6 +7,7 @@ Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks reco
 - a **daily note** with a summary, a standup draft and a section for each ticket
 - **ticket notes** with findings, root causes, queries, the APIs you called, saved requests you can replay, a DB-flow map and the files you produced
 - a local **knowledge base** of tables, APIs, integrations and branches
+- **branch tracking** per ticket: its branches and their parents, the PRs, and whether every commit reached every branch your branching strategy requires, with warnings on the ticket page, at session start, while you work and at 20:00 (see [docs/branch-tracking.md](docs/branch-tracking.md))
 - an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
 - a **read-only dashboard** on `127.0.0.1`
 
@@ -38,7 +39,10 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | Command | What it does |
 |---|---|
 | `/cg:today [YYYY-MM-DD]` | Time per ticket so far today, plus a preview of tonight's Jira-worklog message (nothing is sent) |
-| `/cg:ticket <KEY>` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, file paths |
+| `/cg:ticket <KEY> [--export [--mode shareable]]` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, branches, file paths; `--export` saves the whole page as one HTML file |
+| `/cg:branches <KEY>` | The ticket's branches, PRs, delivery check per target and alerts |
+| `/cg:check [KEY]` | Fetch the watched repos and refresh branches, PRs and the delivery check now |
+| `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy |
 | `/cg:timesheet [week\|month] [date] [csv]` | Hours per ticket by day (week) or by ISO week (month), with leave and holidays; optional CSV |
 | `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
 | `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |
@@ -54,7 +58,7 @@ You type the `/cg:` commands yourself; Claude never runs them on its own. Setup 
 Run `/cg:dashboard`, or open `http://127.0.0.1:7419/` once a session has started it. It has these pages:
 
 - **Today**: time per ticket, and tonight's Jira entries with copy buttons
-- **Tickets**: searchable; each ticket shows its findings, saved requests (copy as curl), the DB flow drawn with Mermaid, queries and artifacts
+- **Tickets**: searchable; each ticket shows its findings, saved requests (copy as curl), the DB flow drawn with Mermaid, queries, artifacts, and Branches & PRs (graph, delivery matrix, alerts); export a ticket as one HTML file
 - **Timesheet**: weekly and monthly totals with a CSV export
 - **Health**: hooks, last tick, last push, Slack status, MCP calls, errors
 
@@ -66,6 +70,7 @@ The dashboard is read-only, works offline and listens only on `127.0.0.1`. See [
 - **What can be pushed.** If you set a GitHub remote, only `daily/**`, `README.md`, `.gitignore` and `.gitattributes` are pushed. They go only after a check confirms the repository is private, and only after a public redaction pass.
 - **Masking.** Secrets and personal data are masked when captured, before any model call and before any commit.
 - **Model calls.** These run as `claude -p` with hooks disabled. MCP jobs are read-only and go through a guard that allows only `SELECT`-style reads on QA connections.
+- **Your work repos are only read.** Branch tracking runs read-only git through one allowlisted wrapper; its only network calls are `git fetch` into remote-tracking refs (never pruning) and your Git host's own CLI (`gh`, `glab`, `az`) with its own sign-in.
 - **Known limit.** Names written in free text are not reliably masked. Review the daily notes before you push them anywhere shared.
 
 Details are in [docs/privacy.md](docs/privacy.md).
@@ -84,7 +89,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

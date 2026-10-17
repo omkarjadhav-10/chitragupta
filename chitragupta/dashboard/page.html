@@ -155,6 +155,24 @@ ul.plain > li:last-child { border-bottom: 0; }
 footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(--s5); color: var(--ink-3); font-size: 12px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .nowrap { white-space: nowrap; }
+/* branch tracking */
+.gitalerts { border: 1px solid var(--warn); background: var(--warn-bg); margin: 0 0 var(--s4); padding: var(--s2) 0; }
+.gitalerts .gah { padding: 0 var(--s4) var(--s1); font-weight: 600; }
+.gitalerts ul { list-style: none; margin: 0; padding: 0; }
+.gitalerts li { padding: var(--s1) var(--s4) var(--s1) calc(var(--s4) - 3px); border-left: 3px solid transparent; word-break: break-word; }
+.gitalerts li.bad { border-left-color: var(--bad); background: var(--bad-bg); font-weight: 600; }
+.gitalerts li.bad .chip { color: var(--bad); border-color: var(--bad); }
+.gitalerts .shas code { margin-right: 4px; font-weight: 400; }
+.gitrepo h3 { margin-top: 0; font-family: var(--font-mono); font-size: 15px; }
+.gitrepo + .gitrepo, .gitsep { border-top: 1px solid var(--line); }
+.gitsub { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); padding: var(--s3) var(--s4) var(--s2); margin: 0; }
+td.dv { white-space: nowrap; font-weight: 600; font-size: 13px; }
+td.dv.good { color: var(--ok); background: var(--ok-bg); }
+td.dv.open { color: var(--warn); background: var(--warn-bg); }
+td.dv.bad { color: var(--bad); background: var(--bad-bg); }
+td.dv.check { color: var(--accent); background: var(--accent-2); }
+.exportline { font-size: 13px; color: var(--ink-2); border-left: 3px solid var(--accent); padding-left: var(--s2); margin: 0 0 var(--s3); }
+.exported nav.main, .exported #live, .exported .crumbs { display: none; }
 @media (max-width: 720px) {
   .bar { gap: var(--s2); }
   .kpi { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -184,12 +202,21 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
   </div>
 </header>
 <main id="main" tabindex="-1"><p class="muted">Loading…</p></main>
-<footer class="foot">Read-only · this page only reads your local worklog and never sends anything.</footer>
+<footer class="foot" id="foot">Read-only · this page only reads your local worklog and never sends anything.</footer>
+<!-- cg:export-data -->
 <script>
 (function () {
   'use strict';
   var root = document.getElementById('main');
   var S = { cursor: null, copySeq: 0, mmdCache: new Map(), lastRoute: null, tickets: null };
+  // An exported ticket (chitragupta export) carries its data here: no API calls, straight to the ticket view.
+  var EXP = null;
+  try { var expEl = document.getElementById('cg-export'); if (expEl) EXP = JSON.parse(expEl.textContent); } catch (e) { EXP = null; }
+  if (EXP) {
+    document.documentElement.classList.add('exported');
+    var ft = document.getElementById('foot');
+    if (ft) ft.textContent = 'Exported ' + String((EXP.export || {}).at || '').replace('T', ' ').slice(0, 16) + ' · ' + ((EXP.export || {}).mode || 'full') + ' · a snapshot of the local worklog; this file makes no requests.';
+  }
 
   // ------------------------------------------------------------------ helpers
   function esc(s) {
@@ -241,6 +268,10 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
     return '<section class="block"><div class="head"><h2>' + esc(title) + '</h2>' + (extra || '') + '</div>' + inner + '</section>';
   }
   function api(path) {
+    if (EXP) {
+      if (path.indexOf('/api/tickets/') === 0) return Promise.resolve(EXP);
+      return Promise.reject(new Error('Not part of this export'));
+    }
     return fetch(path, { headers: { 'Accept': 'application/json' }, cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
         if (!r.ok) { var e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
@@ -272,6 +303,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
 
   // ------------------------------------------------------------------ router
   function parseRoute() {
+    if (EXP) return { name: 'tickets', arg: String(EXP.key || ''), params: {} };
     var raw = (location.hash || '').replace(/^#\/?/, '');
     var qi = raw.indexOf('?');
     var path = qi >= 0 ? raw.slice(0, qi) : raw, qs = qi >= 0 ? raw.slice(qi + 1) : '';
@@ -477,6 +509,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
   var mmdLoad = null, mmdSeq = 0;
   function loadMermaid() {
     if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (EXP) return Promise.reject(new Error('Mermaid is not included in this export'));
     if (!mmdLoad) {
       mmdLoad = new Promise(function (res, rej) {
         var s = document.createElement('script');
@@ -489,6 +522,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
     return mmdLoad;
   }
   var mmdTheme = null;
+  var QUIET_MMD = '<div class="note">The branch graph could not be drawn here; the tables below have the same facts.</div>';
   function renderMermaid() {
     var nodes = Array.prototype.slice.call(root.querySelectorAll('[data-mmd]'));
     if (!nodes.length) return Promise.resolve();
@@ -511,6 +545,8 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
             S.mmdCache.set(key, r.svg);
             n.innerHTML = r.svg;
           }, function (e) {
+            document.querySelectorAll('body > [id^="dmmd"], body > svg[id^="mmd"]').forEach(function (x) { x.remove(); });
+            if (n.hasAttribute('data-mmd-quiet')) { n.innerHTML = QUIET_MMD; return; }
             n.innerHTML = '<div class="note">This diagram could not be drawn (' + esc((e && e.message || String(e)).split('\n')[0].slice(0, 160)) + '). Its source:</div><pre>' + esc(code) + '</pre>';
             document.querySelectorAll('body > [id^="dmmd"], body > svg[id^="mmd"]').forEach(function (x) { x.remove(); });
           });
@@ -521,6 +557,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
       nodes.forEach(function (n) {
         var code = n.getAttribute('data-code') || (n.querySelector('.mmd-src') || {}).textContent || '';
         n.setAttribute('data-code', code);
+        if (n.hasAttribute('data-mmd-quiet')) { n.innerHTML = QUIET_MMD; return; }
         n.innerHTML = '<div class="note">' + esc(e.message) + '; showing the diagram source.</div><pre>' + esc(code) + '</pre>';
       });
     });
@@ -616,6 +653,113 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
       return h;
     }).then(function (html) { setTimeout(function () { var i = root.querySelector('#ticket-search'); if (i) filterTickets(i.value); }, 0); return html; });
   }
+  // ------------------------------------------------------------------ branches & PRs (tk.git, from branch tracking)
+  var DSYM = { 'in': '✓', same: '✓', squash: '✓', open: '⏳', missing: '✗', reverted: '↩', check: '?' };
+  var DLAB = { 'in': 'in target', same: 'same change in target', squash: 'via squash PR', open: 'PR open', missing: 'missing', reverted: 'reverted', check: 'check by hand' };
+  var DCLS = { 'in': 'good', same: 'good', squash: 'good', open: 'open', missing: 'bad', reverted: 'bad', check: 'check' };
+  var AKIND = { lost: 'lost commits', 'only-copy': 'only copy', gap: 'gap', check: 'check by hand', 'wrong-parent': 'wrong parent',
+    'pr-base': 'PR base', unpushed: 'not pushed', 'pr-stale': 'stale PR' };
+  var BSTATE = { active: ['off', 'active'], pr_open: ['warn', 'PR open'], merged: ['ok', 'merged'], deleted_remote: ['off', 'deleted on remote'], abandoned: ['off', 'abandoned'] };
+  var PSTATE = { merged: 'ok', open: 'warn', draft: 'off', closed: 'off' };
+  function isHttp(u) { return typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u); }
+  function shas(list) { return (list || []).map(function (c) { return '<code>' + esc(String(c).slice(0, 9)) + '</code>'; }).join(''); }
+  function prSourceText(src) {
+    return { gh: 'PR info from GitHub (gh)', glab: 'PR info from GitLab (glab)', az: 'PR info from Azure DevOps (az)',
+      'merge-commit': 'PR info from merge commits (open PRs and reviews unavailable)', test: 'PR info from test data' }[src || ''] || 'PR info unavailable';
+  }
+  function gitAlerts(g) {
+    var al = (g && g.alerts) || [];
+    if (!al.length) return '';
+    var rank = { lost: 0, 'only-copy': 1 };
+    al = al.slice().sort(function (a, b) { return (a.kind in rank ? rank[a.kind] : 9) - (b.kind in rank ? rank[b.kind] : 9); });
+    return '<div class="gitalerts" role="alert" id="git-alerts"><div class="gah">Branches and delivery need attention</div><ul>' + al.map(function (a) {
+      var bad = a.kind === 'lost' || a.kind === 'only-copy';
+      return '<li class="' + (bad ? 'bad' : '') + '"><span class="chip">' + esc(AKIND[a.kind] || a.kind) + '</span> ' +
+        (a.repo ? '<span class="muted">' + esc(a.repo) + ' ·</span> ' : '') + esc(a.text) +
+        (a.commits && a.commits.length ? ' <span class="shas">' + shas(a.commits) + '</span>' : '') + '</li>';
+    }).join('') + '</ul></div>';
+  }
+  function cellTitle(c) {
+    return [c.why, c.pr ? 'PR #' + c.pr : '', c.via ? 'via ' + c.via : '', c.ref ? 'checked in ' + c.ref : ''].filter(Boolean).join(' · ');
+  }
+  function gitMatrix(e) {
+    var ts = e.targets || [], rows = e.rows || [];
+    if (!ts.length || !rows.length) return e.strategy ? '<div class="body muted small">No commits for this ticket in this repo yet.</div>' : '';
+    return '<p class="gitsub">Delivery</p><div class="scroll"><table class="matrix"><thead><tr><th>Commit</th><th>Subject</th>' +
+      ts.map(function (t) { return '<th title="' + esc(t.how || '') + '">' + esc(t.name || t.role) + (t.name !== t.role ? ' <span class="muted" style="text-transform:none">' + esc(t.role) + '</span>' : '') + '</th>'; }).join('') +
+      '</tr></thead><tbody>' + rows.map(function (r) {
+        return '<tr><td class="mono nowrap">' + (r.shas || []).map(esc).join('<br>') + ((r.loose || []).length ? '<br><span class="muted" title="cherry-picked with changes">~' + r.loose.map(esc).join(' ~') + '</span>' : '') + '</td>' +
+          '<td>' + esc(r.subject) + '<div class="muted small">' + fmtTs(r.date) + ((r.branches || []).length ? ' · <span class="mono">' + esc(r.branches.join(', ')) + '</span>' : '') + '</div></td>' +
+          ts.map(function (t) {
+            var c = (r.cells || {})[t.role] || { s: 'missing' };
+            return '<td class="dv ' + (DCLS[c.s] || 'check') + '" title="' + esc(cellTitle(c)) + '">' + esc((DSYM[c.s] || '?') + ' ' + (DLAB[c.s] || c.s)) + '</td>';
+          }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>' + (e.rows_cut ? '<div class="body muted small">' + esc(e.rows_cut) + ' older commits not shown.</div>' : '');
+  }
+  function gitBranches(e) {
+    var bs = e.branches || [];
+    if (!bs.length) return '';
+    return '<p class="gitsub">Branches</p><div class="scroll"><table><thead><tr><th>Branch</th><th>Parent</th><th>Status</th><th>PRs</th><th class="num">Commits</th><th class="num">Unpushed</th><th class="num">Ahead / behind</th><th>Linked by</th></tr></thead><tbody>' +
+      bs.map(function (b) {
+        var st = BSTATE[b.status] || ['off', b.status || '—'];
+        var inferred = b.parent_source === 'inferred' || b.role_guessed;
+        var sup = b.suggested ? /superseded by (.+?)\)?$/.exec(b.suggested) : null;
+        var sug = b.suggested ? '<div class="muted small" title="' + esc(b.suggested) + '">abandoned? (suggested)' + (sup ? ' · superseded by <span class="mono">' + esc(sup[1]) + '</span>' : '') + '</div>' : '';
+        var where = [b.local ? 'local' : '', b.on_remote ? 'remote' : ''].filter(Boolean).join(' · ');
+        return '<tr><td class="mono">' + esc(b.branch) + (b.created_at ? '<div class="muted small" style="font-family:var(--font-body)">created ' + fmtTs(b.created_at) + '</div>' : '') + '</td>' +
+          '<td><span class="mono">' + esc(b.parent || '—') + '</span>' + (inferred ? ' <span class="muted">(inferred)</span>' : b.parent_source ? ' <span class="chip">' + esc(b.parent_source) + '</span>' : '') + '</td>' +
+          '<td>' + state(st[0], st[1]) + sug + (where ? '<div class="muted small">' + esc(where) + '</div>' : '') + '</td>' +
+          '<td class="nowrap">' + ((b.prs || []).length ? b.prs.map(function (n) { return '#' + esc(n); }).join(', ') : '<span class="muted">—</span>') + '</td>' +
+          '<td class="num">' + esc(b.own != null ? b.own : '') + '</td>' +
+          '<td class="num">' + (b.unpushed ? '<strong>' + esc(b.unpushed) + '</strong>' : '<span class="muted">0</span>') + '</td>' +
+          '<td class="num">' + (b.ahead != null || b.behind != null ? '↑' + esc(b.ahead == null ? '?' : b.ahead) + ' ↓' + esc(b.behind == null ? '?' : b.behind) : '<span class="muted">—</span>') + '</td>' +
+          '<td>' + esc(b.link || '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function gitPrs(e) {
+    var ps = e.prs || [];
+    if (!ps.length) return '';
+    return '<p class="gitsub">Pull requests</p><div class="scroll"><table><thead><tr><th>PR</th><th>Title</th><th>Source → target</th><th>State</th><th>Review</th><th>Created</th><th>Merged</th></tr></thead><tbody>' +
+      ps.map(function (p) {
+        var num = '#' + esc(p.number);
+        return '<tr><td class="nowrap">' + (isHttp(p.url) ? '<a href="' + esc(p.url) + '" rel="noopener noreferrer" target="_blank">' + num + '</a>' : num) + '</td>' +
+          '<td>' + esc(p.title || '') + '</td><td class="mono small">' + esc(p.source || '?') + ' → ' + esc(p.target || '?') + '</td>' +
+          '<td>' + state(PSTATE[p.state] || 'off', p.state || '—') + '</td><td>' + esc(p.review || '—') + '</td>' +
+          '<td class="nowrap">' + fmtTs(p.created_at) + '</td><td class="nowrap">' + (p.merged_at ? fmtTs(p.merged_at) : '<span class="muted">—</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function gitRepo(name, e) {
+    var h = '<div class="body gitrepo" data-repo="' + esc(name) + '"><h3>' + esc(name) + '</h3><p class="small">' +
+      (e.strategy ? 'Strategy <strong>' + esc(e.strategy) + '</strong>' + (e.strategy_how ? ' <span class="muted">(' + esc(e.strategy_how) + ')</span>' : '')
+        : '<span class="muted">' + esc(e.note || 'No branching strategy set for this repo') + '</span>') +
+      ' · ' + esc(prSourceText(e.pr_source)) + '</p>';
+    if (e.graph) {
+      var lg = e.graph_legend || {}, ks = Object.keys(lg);
+      h += '<div class="diagram gitgraph" data-mmd data-mmd-quiet><pre class="mmd-src">' + esc(e.graph) + '</pre></div>' +
+        '<p class="muted small">Highlighted dots start the base branches (their own history is not drawn); crossed commits are missing from a target; tags mark merged PRs and cherry-picked copies.' +
+        (ks.length ? ' Renamed in the graph: ' + ks.map(function (k) { return '<code>' + esc(k) + '</code> = <code>' + esc(lg[k]) + '</code>'; }).join(', ') + '.' : '') + '</p>';
+    } else if (e.graph_why) {
+      h += '<p class="muted small">No graph (' + esc(e.graph_why) + '); the tables below have everything.</p>';
+    }
+    h += '</div>';
+    return h + gitMatrix(e) + gitBranches(e) + gitPrs(e);
+  }
+  function gitBlock(g) {
+    var names = Object.keys((g && g.repos) || {}).sort();
+    if (!names.length) return '';
+    var nb = 0, np = 0;
+    names.forEach(function (n) { nb += (g.repos[n].branches || []).length; np += (g.repos[n].prs || []).length; });
+    var inner = g.summary ? '<div class="body small" style="border-bottom:1px solid var(--line)"><strong>' + esc(g.summary) + '</strong>' + (g.checked_at ? ' <span class="muted">· checked ' + fmtTs(g.checked_at) + '</span>' : '') + '</div>' : '';
+    inner += names.map(function (n, i) { return (i ? '<div class="gitsep"></div>' : '') + gitRepo(n, g.repos[n]); }).join('');
+    return block('t:git', 'Branches & PRs', nb + ' branch' + (nb === 1 ? '' : 'es') + ' · ' + np + ' PR' + (np === 1 ? '' : 's'), inner);
+  }
+  function exportControl(key) {
+    if (EXP) return '';
+    var base = '/api/tickets/' + encodeURIComponent(key) + '/export?mode=';
+    return '<div class="toolbar" id="export-ctl"><span class="muted small">Export this ticket as one HTML file:</span>' +
+      '<a class="btn" href="' + base + 'full" download title="Everything as recorded, for your own use">Export (full)</a>' +
+      '<a class="btn" href="' + base + 'shareable" download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export (shareable)</a></div>';
+  }
   var KIND = { root_cause: 'root cause', finding: 'finding', how_it_works: 'how it works', fix: 'fix', decision: 'decision', config: 'config',
     repro_test: 'repro / test', reference: 'reference', blocker: 'blocker', question: 'question', todo: 'todo' };
   function viewTicket(r) {
@@ -623,11 +767,14 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
     return api('/api/tickets/' + encodeURIComponent(key)).then(function (t) {
       var h = '<div class="crumbs"><a href="#/tickets">Tickets</a> / ' + esc(t.key) + '</div>';
       h += '<h1>' + esc(t.key) + (t.title ? ' <span class="sub">' + esc(t.title) + '</span>' : '') + '</h1>';
+      if (EXP) h += '<p class="exportline">Exported ' + esc(String((EXP.export || {}).at || '').replace('T', ' ').slice(0, 16)) + ' · ' + esc((EXP.export || {}).mode || 'full') + '</p>';
+      h += gitAlerts(t.git);
       h += '<dl class="meta">' +
         (t.status ? '<dt>Status</dt><dd>' + esc(t.status) + '</dd>' : '') +
         (t.repos.length ? '<dt>Repos</dt><dd>' + esc(t.repos.join(', ')) + '</dd>' : '') +
         (t.branches.length ? '<dt>Branches</dt><dd class="mono">' + esc(t.branches.join(', ')) + '</dd>' : '') +
         '<dt>Active</dt><dd>' + esc(t.first || '—') + ' → ' + esc(t.last || '—') + '</dd><dt>≈ Time</dt><dd>' + fmtMin(t.minutes) + '</dd></dl>';
+      h += exportControl(t.key);
       if (t.tldr) h += '<p class="lede"><strong>TL;DR</strong> ' + esc(t.tldr) + '</p>';
       if (t.problem) h += '<p class="lede">' + esc(t.problem) + '</p>';
       // findings
@@ -640,6 +787,8 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
       }
       h += block('t:findings', 'Findings', f.length, f.length ? '<ul class="plain">' + f.map(item).join('') + '</ul>' : '<div class="empty">Nothing recorded yet.</div>');
       if (open.length) h += block('t:open', 'Open questions and todos', open.length, '<ul class="plain">' + open.map(item).join('') + '</ul>');
+      // branches & PRs
+      h += gitBlock(t.git);
       // requests
       var rq = t.requests;
       var ri = '';
@@ -647,10 +796,10 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
         if (rq.setup) ri += '<div class="body"><p class="muted small">Run these in Git Bash from the data home; the first block loads base URLs and secrets from bruno/.env.</p><div class="copyrow" style="justify-content:flex-end;margin-bottom:4px">' + copyBtn(rq.setup, 'Copy', 'setup') + '</div><pre><code>' + esc(rq.setup) + '</code></pre></div>';
         ri += '<ul class="plain">' + rq.steps.map(function (s) {
           return '<li><div class="step-head"><strong>' + esc(s.n) + '. ' + esc(s.name) + '</strong>' + (s.method ? '<span class="method">' + esc(s.method) + '</span>' : '') +
-            (s.url ? '<span class="url">' + esc(s.url) + '</span>' : '') + '<span class="spacer"></span>' + copyBtn(s.curl, 'Copy as curl', 'for step ' + s.n) + '</div>' +
+            (s.url ? '<span class="url">' + esc(s.url) + '</span>' : '') + '<span class="spacer"></span>' + (s.curl ? copyBtn(s.curl, 'Copy as curl', 'for step ' + s.n) : '') + '</div>' +
             '<div class="small muted" style="margin-bottom:6px">Expected: ' + esc(s.expected || '2xx') + (s.owner === 'user' ? ' · yours' : '') + (s.executed === false ? ' · not yet executed' : '') +
             (s.critical_fields && s.critical_fields.length ? ' · critical: ' + esc(s.critical_fields.join(', ')) : '') + '</div>' +
-            '<details data-key="t:curl:' + esc(s.n) + '"><summary class="small">curl</summary><pre><code>' + esc(s.curl) + '</code></pre></details></li>';
+            (s.curl ? '<details data-key="t:curl:' + esc(s.n) + '"><summary class="small">curl</summary><pre><code>' + esc(s.curl) + '</code></pre></details>' : '') + '</li>';
         }).join('') + '</ul>';
         ri += '<div class="body small muted">' + (rq.dropped ? rq.dropped + ' other captured calls left out. ' : '') + (rq.bruno_folder ? 'Bruno folder: <span class="mono">' + esc(rq.bruno_folder) + '</span> ' + copyBtn(rq.bruno_folder, 'Copy path') : '') + '</div>';
       } else {
@@ -766,7 +915,7 @@ footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(-
 
   // ------------------------------------------------------------------ live updates: poll the change cursor
   function poll() {
-    if (document.hidden) return;
+    if (EXP || document.hidden) return;
     api('/api/changes').then(function (c) {
       var moved = S.cursor !== null && c.cursor !== S.cursor;
       S.cursor = c.cursor;

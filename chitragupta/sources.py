@@ -7,6 +7,7 @@ import os
 import re
 
 from . import common
+from . import gitro
 from .redact import redact
 
 # --------------------------------------------------------------------------- git commits
@@ -20,17 +21,16 @@ def scan_commits(cfg, state, since_dt):
     emails = [e for e in cfg.get("git_author_emails") or [] if e]
     if not emails:
         return []
-    git = common.git_exe(cfg)
     prefixes = cfg.get("ticket_prefixes") or []
     out = []
     for repo in cfg.get("watched_repos") or []:
         if not os.path.isdir(os.path.join(repo, ".git")) and not os.path.isfile(os.path.join(repo, ".git")):
             continue
-        args = [git, "-C", repo, "log", "--all", "--source", "--no-merges",
+        args = ["log", "--all", "--source", "--no-merges",
                 "--since=" + since_dt.isoformat(timespec="seconds"), "--name-status",
                 "--format=" + _SEP_REC + "%H" + _SEP_FLD + "%aI" + _SEP_FLD + "%S" + _SEP_FLD + "%s" + _SEP_FLD + "%b" + _SEP_FLD]
         args += ["--author=" + re.escape(e) for e in emails]
-        rc, so, se = common.run(args, timeout=60)
+        rc, so, se = gitro.run(cfg, repo, args, timeout=60)
         if rc != 0:
             common.log("agent", "git log failed for %s: %s" % (repo, se.strip()[:300]))
             continue

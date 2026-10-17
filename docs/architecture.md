@@ -14,7 +14,7 @@ Everything is Python standard library code in one package, `chitragupta`.
 ```mermaid
 flowchart LR
   subgraph CC["Claude Code session"]
-    H["Plugin hooks<br/>SessionStart (sync) · UserPromptSubmit · PostToolUse · Stop · SessionEnd (async)"]
+    H["Plugin hooks<br/>SessionStart · PreToolUse branch guard (sync) · UserPromptSubmit · PostToolUse · Stop · SessionEnd (async)"]
   end
   H -->|"redacted JSON lines"| RAW["raw events<br/>.worklog/raw/DAY/SESSION.jsonl"]
   H -.->|"SessionStart: spawn"| MAINT["maintenance<br/>runtime refresh · dashboard ensure · MCP status"]
@@ -42,7 +42,7 @@ flowchart LR
 
 ### 1. Capture (hooks)
 
-`hooks/hooks.json` registers five events and points them at `hooks/run.py` inside the plugin. Three rules apply:
+`hooks/hooks.json` registers six events and points them at `hooks/run.py` inside the plugin. The PreToolUse entry is the branch guard: it starts only for branch and PR creation commands (the hooks' `if` filter), reads a few small files, records nothing and finishes in well under 200 ms (see [branch-tracking.md](branch-tracking.md#the-guard)). Three rules apply to the others:
 
 - **SessionStart runs synchronously.** It uses `py -3` with a 10 s budget; the measured p95 is well under 100 ms. It registers the session and prints context for the active ticket: a short summary from `cache/context/<KEY>.md`, a warning line if something is broken, and at most a weekly reminder. Then it spawns a detached maintenance process.
 - **The other four events run asynchronously** with windowless `pyw -3`.
@@ -55,7 +55,7 @@ Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`
 The `Chitragupta` scheduled task runs `agent tick --from-task` through the stable launcher at logon and then every 5 minutes; `--from-task` also starts the dashboard if it is not running. It runs hidden, never overlaps itself and has a 20-minute limit. One lock makes the tick the single writer. Each tick:
 
 1. **Ingests** new raw events, plus the transcript safety net: Claude Code transcripts from the last 48 hours whose hooks didn't fire.
-2. **Reads extra sources:** your commits in watched repos, branch creation and merges, Bruno request edits, SQL scripts, `inbox.md` lines and files in `_drop/`.
+2. **Reads extra sources:** your commits in watched repos, Bruno request edits, SQL scripts, `inbox.md` lines and files in `_drop/`; then **branch tracking** (read-only git and the host CLI, no model): events, branches, parents, PRs and each active ticket's delivery check (see [branch-tracking.md](branch-tracking.md)).
 3. **Extracts.** Once a session has enough new text and is idle, ended or 20 minutes old, it makes one `claude -p` call per chunk. Each call gets a redacted digest and returns structured JSON: findings, queries, APIs, tables, request calls, DB-flow steps and worklog lines. If the call fails, it backs off and writes a deterministic fallback summary.
 4. **Merges** the results into `data/` with stable hash ids, so re-running never duplicates anything.
 5. **Renders** the changed Markdown. Your `My notes` sections survive every re-render.
@@ -117,7 +117,8 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
   tickets\<KEY>\queries.md  requests.md  replay.sh  db-flow.md  payloads\  artifacts\
   knowledge\apis.md  db-tables.md  db-map.md  integrations.md  branches.md
   bruno\                                     one Bruno collection, a folder per ticket; .env never read
-  data\meta.json  catalog.json  branches.json  generated.json  calendar.json
+  data\meta.json  catalog.json  generated.json  calendar.json  (branches.json: pre-0.2.0, kept as it was)
+  data\git\<repo>\events.jsonl  branches.json  prs.json  patch-ids.json  repo.json   branch tracking
   data\days\YYYY\YYYY-MM-DD.json             per-day structured record
   data\tickets\<KEY>.json                    per-ticket structured record
   data\timesheets\YYYY-MM-DD.json            the evening worklog as composed / sent

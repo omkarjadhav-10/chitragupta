@@ -1,5 +1,5 @@
 {
-  "description": "Chitragupta: capture Claude Code session events into the worklog. Every hook fails open (exit 0).",
+  "description": "Chitragupta: capture Claude Code session events into the worklog, and warn when a branch or PR doesn't fit the repo's strategy. Every hook fails open (exit 0).",
   "hooks": {
     "SessionStart": [
       {
@@ -8,8 +8,188 @@
           {
             "type": "command",
             "command": "py",
-            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "session-start"],
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "session-start"
+            ],
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(git checkout *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(git switch *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(git branch *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(git -C *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(gh pr create*)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(glab mr create*)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "Bash(az repos pr create*)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(git checkout *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(git switch *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(git branch *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(git -C *)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(gh pr create*)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(glab mr create*)",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "pre-tool"
+            ],
+            "if": "PowerShell(az repos pr create*)",
+            "timeout": 5
           }
         ]
       }
@@ -20,7 +200,12 @@
           {
             "type": "command",
             "command": "pyw",
-            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "user-prompt"],
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "user-prompt"
+            ],
             "async": true
           }
         ]
@@ -33,7 +218,12 @@
           {
             "type": "command",
             "command": "pyw",
-            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "post-tool"],
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "post-tool"
+            ],
             "async": true
           }
         ]
@@ -45,7 +235,12 @@
           {
             "type": "command",
             "command": "pyw",
-            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "stop"],
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "stop"
+            ],
             "async": true
           }
         ]
@@ -57,7 +252,12 @@
           {
             "type": "command",
             "command": "pyw",
-            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "session-end"],
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "session-end"
+            ],
             "async": true
           }
         ]

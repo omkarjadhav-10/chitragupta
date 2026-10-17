@@ -501,11 +501,9 @@ class BranchTests(HomeCase):
         st.branches()["repo"] = branches.scan_repo(self.cfg, self.repo, {})
         md = render.render_branches(st)
         self.assertIn("`feat/ABC-1/sms-flag`", md)
-        self.assertIn("✅ merged", md)
-        self.assertIn("✅ cherry-picked", md)
+        self.assertIn("| Own commits / parent moved | Unpushed | Where |", md)  # delivery moved to the ticket page
         self.assertIn("_(inferred)_", md)
-        self.assertIn("Branches:", render.render_context(st, "ABC-1"))
-        self.assertIn("## Branches", render.render_ticket(st, "ABC-1"))
+        self.assertIn("## Branches", render.render_ticket(st, "ABC-1"))  # no `git` block yet: the plain table
 
 
 if __name__ == "__main__":

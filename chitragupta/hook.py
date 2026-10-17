@@ -10,6 +10,7 @@ without writing anything. Once set up, SessionStart also starts the detached mai
 """
 import json
 import os
+import re
 import sys
 import time
 
@@ -112,7 +113,15 @@ def _outcome(tool, ti, resp, cwd, redact):
     if tool == "Artifact":
         links = capture.artifact_links(resp)
         return {"artifact_links": links} if links else {}
+    if tool in ("Bash", "PowerShell") and _PR_CREATE.search(str(ti.get("command", ""))):
+        from . import gittrack  # PR link only: nothing else from the output is kept
+        r = resp if isinstance(resp, dict) else {"stdout": str(resp or "")}
+        urls = gittrack.pr_urls("%s\n%s" % (r.get("stdout") or "", r.get("stderr") or ""))
+        return {"pr_urls": urls[:3]} if urls else {}
     return {}
+
+
+_PR_CREATE = re.compile(r"\b(?:gh\s+pr\s+create|glab\s+mr\s+create|az\s+repos\s+pr\s+create)\b")
 
 
 def _session_start_output(cfg, common, ev, inp):
@@ -163,6 +172,12 @@ def main():
     if not plugin.is_set_up():
         if event == "session-start":
             plugin.write_not_set_up()
+        return
+    if event == "pre-tool":  # the branch guard: never records anything
+        from . import guard
+        guard.main(_read_stdin())
+        if common.env("HOOK_TIMING"):
+            common.log("hook-timing", "%s %.1fms" % (event, (time.perf_counter() - _T0) * 1000))
         return
     try:
         _capture(event, common)

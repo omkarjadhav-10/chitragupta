@@ -537,6 +537,8 @@ def merged_config(existing, home, prefixes=(), repos=(), bruno=(), github_remote
     py = sys.executable
     pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
     found = {"python": py, "pythonw": pyw if os.path.isfile(pyw) else "", "git": shutil.which("git") or ""}
+    for cli in ("gh", "glab", "az"):  # Git host CLIs for PR data (branch tracking); their own sign-in, no token stored
+        found[cli] = shutil.which(cli) or ""
     for k, v in found.items():
         if not paths.get(k) and v:
             paths[k] = v.replace("\\", "/")

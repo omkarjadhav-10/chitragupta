@@ -10,12 +10,14 @@ Sources, best first:
             2. every own commit has an equivalent patch there (git cherry) -> "cherry-picked"
             3. some do -> "partial n/m"
             4. a commit on the env branch mentions the ticket after creation -> "ticket commit" (squash merge?)
-Env status reads origin/<env> when it exists, i.e. as of your last fetch (optional auto-fetch: config branch_fetch).
+Env status reads origin/<env> when it exists, i.e. as of the last fetch (gittrack fetches; branch_fetch is retired).
+Since v0.2.0 the tick uses gittrack.py; the helpers here (reflog, parent from HEAD, head activity) are shared.
 """
 import os
 import re
 
 from . import common
+from . import gitro
 from .redact import redact
 
 DEFAULT_ENVS = ["qa", "uat", "staging", "master", "main", "develop"]
@@ -24,7 +26,7 @@ _SEL = re.compile(r"@\{(.+)\}$")
 
 
 def _git(cfg, repo, args, timeout=60):
-    return common.run([common.git_exe(cfg), "-C", repo] + args, timeout=timeout)
+    return gitro.run(cfg, repo, args, timeout=timeout)
 
 
 def env_names(cfg):
@@ -304,18 +306,3 @@ def head_activity(cfg, repo, since_iso):
             rec["from"], rec["to"] = m.group(1), m.group(2)
         out.append(rec)
     return out
-
-
-def fetch_if_due(cfg, state, repo):
-    """Optional (config branch_fetch=true): `git fetch --prune` at most hourly, never prompting."""
-    if not cfg.get("branch_fetch"):
-        return
-    key = common.norm_path(repo)
-    last = common.parse_ts((state.setdefault("branch_fetch_at", {})).get(key))
-    if last and (common.now() - last).total_seconds() < 3600:
-        return
-    rc, so, se = common.run([common.git_exe(cfg), "-C", repo, "fetch", "--prune", "--quiet", "origin"], timeout=120,
-                            env_extra={"GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=15"})
-    state["branch_fetch_at"][key] = common.now_iso()
-    if rc != 0:
-        common.log("agent", "branch fetch failed for %s: %s" % (repo, (se or so).strip()[:200]))

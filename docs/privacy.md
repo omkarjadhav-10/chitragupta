@@ -120,7 +120,9 @@ Jira results are cached locally in `data\jira\`. They can include colleagues' na
 |---|---|
 | `claude -p` (through Claude Code) | Extraction, consolidation, curation, DB-flow view, worklog condense, Slack send and MCP jobs, all in the background tick |
 | `api.github.com/repos/<owner>/<repo>` (unauthenticated GET) | Privacy check before pushing, at most daily, only when a GitHub remote is set |
-| `git fetch` / `git push` | To `github_remote` only. Also `git fetch` in watched repos if `branch_fetch` is on |
+| `git fetch` / `git push` | Push: to `github_remote` only. Fetch: in watched repos with tickets active in the last 14 days, at most every 30 minutes and before 20:00, base and ticket branches only, into remote-tracking refs, never pruning (branch tracking; `branching.fetch.enabled: false` turns it off) |
+| `git ls-remote --heads` | With each fetch, to notice branches deleted on the remote |
+| `gh` / `glab` / `az repos` | PR data for active tickets' branches (hourly for open PRs, and before 20:00), with the CLI's own sign-in; never a token stored |
 | Slack, Jira and database MCP servers | Only through the MCP jobs above, and only when you've connected them |
 
 The dashboard makes no external requests. Mermaid is served from the plugin itself, not from a CDN.

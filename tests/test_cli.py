@@ -16,7 +16,7 @@ from tests.support import PY, ROOT, RUN_PY, Isolated, rd, write_config, wr
 from chitragupta import cli, common
 from chitragupta import timesheet as T
 
-SKILLS = ["today", "ticket", "timesheet", "trace", "log", "pause", "dashboard", "setup", "doctor"]
+SKILLS = ["today", "ticket", "timesheet", "trace", "log", "pause", "dashboard", "setup", "doctor", "branches", "check", "branch"]
 LAUNCH = 'py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py"'
 
 

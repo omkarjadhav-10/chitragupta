@@ -259,6 +259,11 @@ def cmd_ticket(a):
     if not tk and not files:
         out("Nothing recorded for %s in %s." % (key, common.home()))
         return 0
+    if getattr(a, "export", False):
+        from . import export
+        path = export.export_to_file(key, a.mode)
+        out("Exported %s (%s): %s" % (key, a.mode, path))
+        return 0
     s = ticket_summary(key, tk or {})
     if a.json:
         s["files"] = dict(files)
@@ -284,6 +289,127 @@ def cmd_ticket(a):
     out("Files:")
     for name, p in files:
         out("- %s: %s" % (name, p))
+    return 0
+
+
+# --------------------------------------------------------------------------- branches & PRs
+
+SYM = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "✗", "reverted": "↩", "check": "?"}
+
+
+def branches_report(key, tk):
+    """Compact chat view of tk['git']: strategy, branches, PRs, delivery per target, alerts."""
+    from . import render
+    g = tk.get("git") or {}
+    if not g.get("repos"):
+        return ["No branches recorded for %s yet (the background agent links them within one tick of seeing them)." % key]
+    L = ["# %s — branches & PRs" % key, g.get("summary", ""), ""]
+    for name, x in sorted(g["repos"].items()):
+        how = ("%s (%s)" % (x["strategy"], x.get("strategy_how"))) if x.get("strategy") else (x.get("note") or "no strategy")
+        L.append("## %s · strategy %s · %s" % (name, how, render.PR_SOURCE.get(x.get("pr_source"), "PR info unavailable")))
+        for b in x.get("branches") or []:
+            par = "%s%s" % (b.get("parent") or "?", " (inferred)" if b.get("parent_source") == "inferred" else "")
+            extra = []
+            if b.get("prs"):
+                extra.append("PR " + ", ".join("#%s" % n for n in b["prs"]))
+            if b.get("unpushed"):
+                extra.append("%d unpushed" % b["unpushed"])
+            if b.get("suggested"):
+                extra.append(b["suggested"] + "?")
+            L.append("- %s ← %s · %s%s" % (b["branch"], par, b["status"], " · " + " · ".join(extra) if extra else ""))
+        for p in x.get("prs") or []:
+            L.append("- PR #%s %s → %s · %s%s%s" % (p["number"], p.get("source"), p.get("target"), p.get("state"),
+                                                 " · " + p["review"] if p.get("review") else "",
+                                                 " · merged " + (p.get("merged_at") or "")[:10] if p.get("merged_at") else ""))
+        for t in x.get("targets") or []:
+            counts = {}
+            for row in x.get("rows") or []:
+                s = (row["cells"].get(t["role"]) or {}).get("s")
+                counts[s] = counts.get(s, 0) + 1
+            if counts:
+                L.append("- %s: %s" % (t["name"], " · ".join("%s %d" % (SYM.get(k, k), n) for k, n in sorted(counts.items()))))
+    al = render.git_alerts(tk)
+    if al:
+        L += ["", "Needs attention:"] + ["- ⚠ %s%s" % (a["text"], " (%s)" % ", ".join(a["commits"][:5]) if a.get("commits") else "")
+                                         for a in al]
+    L += ["", "Ticket page: %s" % os.path.join(common.home(), "tickets", key, "README.md")]
+    return L
+
+
+def cmd_branches(a):
+    key = norm_key(a.key)
+    if not key:
+        return 0  # informational: the /cg: skills inject this output
+    tk = read_ticket(key)
+    if a.json:
+        out(json.dumps(tk.get("git") or {}, indent=1, ensure_ascii=False))
+        return 0
+    for line in branches_report(key, tk):
+        out(line)
+    return 0
+
+
+def cmd_check(a):
+    from . import agent
+    key = norm_key(a.key) if a.key else None
+    res = agent.cmd_branch_check(key)
+    if res.get("skipped"):
+        out("Not checked: " + res["skipped"])
+        return 3
+    out("Fetched and refreshed %s." % (", ".join(res["repos"]) or "no repos"))
+    for n, e in (res.get("errors") or {}).items():
+        out("! %s: %s" % (n, e))
+    for t in res["tickets"]:
+        out()
+        for line in branches_report(t, read_ticket(t)):
+            out(line)
+    if not res["tickets"]:
+        out("No active tickets with branches.")
+    return 0
+
+
+def _append_inbox(line):
+    path = common.hp("inbox.md")
+    existing = common.read_text(path)
+    if any(l.strip() == line for l in existing.splitlines()):
+        return False
+    common.ensure_dir(os.path.dirname(path))
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(line + "\n")
+    return True
+
+
+def cmd_branch(a):
+    """branch link|unlink <repo> <branch> <KEY> · branch abandon|restore <repo> <branch> · branch strategy <repo|KEY> <name>
+    -> one inbox.md line (the background agent is the only writer of the data)."""
+    from . import gittrack
+    act, args = a.action, a.args
+    if act in ("link", "unlink") and len(args) == 3:
+        line = "branch-%s: %s %s %s" % (act, args[2].upper(), args[0], args[1])
+    elif act in ("abandon", "restore") and len(args) == 2:
+        line = "branch-%s: %s %s" % (act, args[0], args[1])
+    elif act == "strategy" and len(args) == 2:
+        line = "strategy: %s %s" % (args[0], args[1])
+    else:
+        sys.stderr.write("usage: branch link|unlink <repo> <branch> <KEY> | branch abandon|restore <repo> <branch> | "
+                         "branch strategy <repo|KEY> <strategy>\n")
+        return 2
+    d = gittrack.parse_directive(line)
+    if not d or d["kind"] == "invalid":
+        sys.stderr.write("Not added: could not read %r\n" % line)
+        return 2
+    if d["kind"] in ("strategy", "ticket-strategy"):
+        names = sorted(gittrack.settings(common.load_config())["strategies"])
+        if d["strategy"] not in names:
+            sys.stderr.write("Not added: unknown strategy %r (known: %s)\n" % (d["strategy"], ", ".join(names)))
+            return 2
+    if _append_inbox(line):
+        out("Added to inbox.md: `%s`" % line)
+        out("The background agent applies it on its next tick (within about 5 minutes); /cg:check applies it now.")
+    else:
+        out("Already in inbox.md: `%s` (nothing added)." % line)
     return 0
 
 
@@ -472,16 +598,9 @@ def cmd_log(a):
     if err:
         sys.stderr.write("Not added: %s.\n%s\n" % (err, GRAMMAR))
         return 2
-    path = common.hp("inbox.md")
-    existing = common.read_text(path)
-    if any(l.strip() == line for l in existing.splitlines()):
+    if not _append_inbox(line):
         out("Already in inbox.md: `%s` (the agent ignores repeated lines, so nothing was added)." % line)
         return 0
-    common.ensure_dir(os.path.dirname(path))
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        if existing and not existing.endswith("\n"):
-            f.write("\n")
-        f.write(line + "\n")
     out("Added to inbox.md: `%s`" % line)
     out("The background agent applies it on its next tick (within about 5 minutes).")
     from . import jiraworklog
@@ -508,7 +627,20 @@ def parser():
     s = sub.add_parser("ticket")
     s.add_argument("key", nargs="?", default="")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--export", action="store_true", help="save the whole ticket page as one HTML file")
+    s.add_argument("--mode", choices=("full", "shareable"), default="full")
     s.set_defaults(fn=cmd_ticket)
+    s = sub.add_parser("branches")
+    s.add_argument("key", nargs="?", default="")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_branches)
+    s = sub.add_parser("check")
+    s.add_argument("key", nargs="?", default="")
+    s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("branch")
+    s.add_argument("action", choices=("link", "unlink", "abandon", "restore", "strategy"))
+    s.add_argument("args", nargs="*")
+    s.set_defaults(fn=cmd_branch)
     s = sub.add_parser("trace")
     s.add_argument("key", nargs="?", default="")
     s.set_defaults(fn=cmd_trace)

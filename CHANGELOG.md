@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
+### Added
+- **Branch tracking per ticket** ([docs/branch-tracking.md](docs/branch-tracking.md)). For every ticket: its branches and the parent each came from (captured command, reflog, or inferred and labelled), its commits, its PRs (source → target, state, review, merge), and a delivery check of every commit against every branch the repo's strategy requires (in target · same change · via squash PR · PR open · missing · reverted · check by hand). No model calls.
+  - **Strategies are config:** `release-then-qa`, `qa-only` and `qa-cherry-pick` built in, per-repo base names, per-ticket rules (for example by Jira parent), and `ignore_tickets`.
+  - **Alerts:**
+    - commits pushed after their PR merged, or in one target but not another
+    - commits only on an abandoned branch
+    - a wrong parent, or a PR into an unexpected base (with the commits it would carry)
+    - unpushed commits, changed-patch cherry-picks, stale or approved-but-unmerged PRs
+  - **PR data:** from `gh`, `glab` or `az repos` with the CLI's own sign-in; without one, from the PR merge commits on the base branches.
+  - **Work repos are read-only:** all git goes through one allowlisted wrapper (`gitro`), with a unit test that scans for mutating calls. `git fetch` only updates remote-tracking refs, never prunes, and waits out git lock files.
+- **Where it shows:**
+  - the dashboard ticket page (alert banner, graph, delivery matrix, branches and PRs tables) and the ticket README
+  - one line at session start for a ticket with alerts
+  - a `Delivery check` block after the closing note of the 20:00 Slack message (same send, Jira entries unchanged)
+  - one summary line per ticket in the daily file
+  - the recall skill
+- **Guard:** a PreToolUse hook warns (or asks, with `branching.guard_mode: ask`) when Claude Code creates a branch from a parent, or a PR into a base, that doesn't fit the ticket's strategy. It fails open and finishes in well under 200 ms.
+- **Commands:**
+  - `/cg:branches <KEY>`
+  - `/cg:check [KEY]` (fetch and refresh now)
+  - `/cg:branch link|unlink|abandon|restore|strategy` (one `inbox.md` line each)
+  - `/cg:ticket <KEY> --export [--mode shareable]`: the whole ticket page as one self-contained HTML file
+- **Migration `branch-tracking`** (`schema_version` 4). It backs up first, seeds `data/git/<repo>/` from `data/branches.json` and the current reflogs, and adds `"branching"` to the config. The tick runs pending migrations itself.
+
+### Changed
+- `knowledge/branches.md` shows parent, unpushed commits and where each branch lives. Delivery moved to each ticket's page.
+- Setup records the paths of `gh`, `glab` and `az` when found.
+
+### Removed
+- `branch_fetch` (it ran `git fetch --prune`). Fetching is now `branching.fetch`, and it never prunes.
+
 ## [0.1.0] - unreleased
 
 The first release. It takes an existing standalone worklog engine and makes it the `cg` Claude Code plugin, with a read-only dashboard and a first run that works with or without Slack and Jira.

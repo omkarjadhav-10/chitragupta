@@ -34,8 +34,8 @@ A minimal config after setup:
 | `bruno_collections` | list of paths | `[]` | Bruno collections outside the data home. Request edits there show up under "Outside Claude Code". |
 | `sql_script_dirs` | list of paths | `[]` | Folders of `.sql` scripts to watch. |
 | `sql_script_globs` | list of globs | `[]` | Glob patterns for more SQL script folders, for example `["C:/Users/you/AppData/Roaming/SomeIDE/consoles/db/*"]`. |
-| `env_branches` | list of strings | `["qa","uat","staging","master","main","develop"]` | Environment branches checked for "is my branch merged into qa/uat/…". |
-| `branch_fetch` | bool | `false` | Run `git fetch` hourly in watched repos, so environment status stays current. |
+| `env_branches` | list of strings | `["qa","uat","staging","master","main","develop"]` | Base branches of watched repos that have no `branching.repos` entry. |
+| `branch_fetch` | bool | — | Retired in v0.2.0 (it pruned). Fetching is `branching.fetch`. |
 | `day_starts_at` | `"HH:MM"` | `"04:00"` | Work-day boundary. Work before this time counts as the previous day. |
 | `push_interval_minutes` | int | `30` | Minimum gap between pushes. A push also happens when a session ends or a day closes. |
 | `raw_retention_days` | int | `30` | Raw event files older than this are pruned, but only after they have been processed. |
@@ -44,6 +44,25 @@ A minimal config after setup:
 | `extract_triggers.max_interval_minutes` | int | `20` | Extract at least this often while a session is active. |
 | `extra_sensitive_patterns` | list of regexes | `[]` | Extra patterns to mask everywhere, for example `["\\bINTERNAL-[0-9]+\\b"]`. |
 | `allow_patterns` | list of regexes | `[]` | Patterns that are never masked, for example a public test host. |
+
+## `branching`
+
+Branch tracking: strategies, per-repo base names, the guard and fetching. Full description in [branch-tracking.md](branch-tracking.md).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `branching.strategies` | object | `release-then-qa`, `qa-only`, `qa-cherry-pick` | `{name: {"targets": [roles], "steps": [{"from", "pr_into", "brings"?}]}}`, merged over the built-in three. |
+| `branching.repos.<repo>.strategy` | string | none | The repo's default strategy. Repos without an entry are tracked but get no delivery check. |
+| `branching.repos.<repo>.bases` | object role → name / pattern / list | `release/*`, `qa`, `uat`, `staging`, `main`/`master` | This repo's branch names for each role, e.g. `{"qa": "develop-qa", "release": ["release/*", "*-hotfix"]}`. |
+| `branching.repos.<repo>.rules` | list | `[]` | `[{"jira_parent": "OPS-*", "strategy": "qa-only"}]`: a ticket whose Jira parent matches uses that strategy. |
+| `branching.repos.<repo>.suffixes` | object | `-qa`, `-uat`, `-on-uat`, `-staging`, `-stg`, `-on-staging`, `-release` | Branch-name endings that name the target (the guard checks them). |
+| `branching.repos.<repo>.remote` | string | `"origin"` | The remote to read and fetch. |
+| `branching.repos.<repo>.pr_source` | string | the host CLI if installed | `"git"` forces PR data from merge commits only. |
+| `branching.guard_mode` | `"warn"` \| `"ask"` \| `"off"` | `"warn"` | What the PreToolUse guard does when a branch or PR doesn't fit. |
+| `branching.stale_pr_days` | int | `3` | An open PR older than this raises an alert. |
+| `branching.ignore_tickets` | list | `[]` | Tickets with no branch tracking at all. |
+| `branching.fetch` | object | `{"enabled": true, "every_minutes": 30, "active_days": 14, "before_send_minutes": 20}` | When the tick fetches. |
+| `branching.pr_refresh_minutes` | int | `60` | How often open PRs are re-read. |
 
 ## `models`
 
@@ -69,6 +88,7 @@ Absolute paths to executables. Setup fills in any that are empty and replaces a 
 | `paths.pythonw` | `""`, which means `pythonw.exe` next to `python` | Windowless Python for the scheduled task |
 | `paths.claude` | `""`, which means looked up (see [install.md](install.md#the-claude-path-the-scheduled-task-needs)) | A real `claude.exe` (never a `.cmd` shim) |
 | `paths.git` | `""`, which means `git` on `PATH` | Git |
+| `paths.gh`, `paths.glab`, `paths.az` | found on `PATH` by setup | The Git host CLIs that branch tracking reads PRs with |
 
 ## `render`
 

@@ -6,7 +6,9 @@ Routes
   /api/health            identity: {"app", "version", "pid", "home"} — the port is the lock, this says who holds it
   /api/today             time per ticket today + tonight's Jira-worklog preview (read-only, no model call)
   /api/tickets[?q=]      ticket list
-  /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts
+  /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts, branches & PRs
+  /api/tickets/<KEY>/export?mode=full|shareable   the ticket page as one self-contained HTML file (attachment;
+                         built in memory, nothing is written). /api/ticket/<KEY>/export is the same.
   /api/timesheet?period=week|month[&limit=N]   hours per ticket per ISO week / month, leave and holidays
   /api/timesheet.csv?period=week|month         the same as CSV
   /api/status            health page data
@@ -48,6 +50,7 @@ SECURITY_HEADERS = [
     ("Cross-Origin-Resource-Policy", "same-origin"),
 ]
 TICKET_PATH = re.compile(r"^/api/tickets/([A-Za-z0-9-]{1,20})$")
+EXPORT_PATH = re.compile(r"^/api/tickets?/([A-Za-z0-9-]{1,20})/export$")
 
 
 def mermaid_path():
@@ -299,6 +302,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "bad ticket key"}, 400)
             data = api.ticket(key)
             return self.send_json(data) if data else self.send_json({"error": "unknown ticket", "key": key}, 404)
+        m = EXPORT_PATH.match(path)
+        if m:
+            key = m.group(1).upper()
+            mode = q("mode", "full")
+            if not api.TICKET_RE.match(key) or mode not in ("full", "shareable"):
+                return self.send_json({"error": "bad ticket key or mode (full|shareable)"}, 400)
+            from .. import export
+            res = export.export_ticket(key, mode)
+            if not res:
+                return self.send_json({"error": "unknown ticket", "key": key}, 404)
+            fname, html = res
+            return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
+                              [("Content-Disposition", 'attachment; filename="%s"' % fname)])
         if path == "/api/timesheet":
             return self.send_json(api.timesheet(q("period", "week"), _int(q("limit"), 12), cfg))
         if path == "/api/timesheet.csv":

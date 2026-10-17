@@ -76,10 +76,23 @@ class Store:
         return self._catalog
 
     def branches(self):
-        """{repo_name: {branch: record}}"""
+        """{repo_name: {branch: record}} from data/git/<repo>/branches.json (branch tracking, schema 4).
+        Before the migration has run, the single legacy data/branches.json."""
         if self._branches is None:
-            self._branches = common.read_json(branches_path(), None) or {}
+            root = common.hp("data", "git")
+            out = {}
+            if os.path.isdir(root):
+                for name in sorted(os.listdir(root)):
+                    recs = common.read_json(os.path.join(root, name, "branches.json"), None)
+                    if isinstance(recs, dict):
+                        out[name] = recs
+                self._branches = out
+            else:
+                self._branches = common.read_json(branches_path(), None) or {}
         return self._branches
+
+    def reload_branches(self):
+        self._branches = None
 
     def touch_ticket(self, t):
         self.dirty_tickets.add(t)
@@ -99,8 +112,7 @@ class Store:
             common.write_json(day_path(d), redact_obj(self.days[d]))
         if self.catalog_dirty and self._catalog is not None:
             common.write_json(catalog_path(), redact_obj(self._catalog))
-        if self.branches_dirty and self._branches is not None:
-            common.write_json(branches_path(), redact_obj(self._branches))
+        # branch records are written by gittrack (data/git/<repo>/); branches_dirty only asks for a re-render
 
     # ---- listing
     @staticmethod

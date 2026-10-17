@@ -20,6 +20,7 @@ import shutil
 import zipfile
 
 from . import common
+from . import gitro
 from .redact import redact
 
 TEXT_EXT = {".md": "doc", ".markdown": "doc", ".txt": "doc", ".html": "html", ".htm": "html", ".mmd": "diagram",
@@ -336,8 +337,7 @@ def tracked_before(cfg, repo, path, since_iso):
     """True when the file was already committed before the session started (then it's a code change)."""
     if not repo:
         return False
-    git = common.git_exe(cfg)
-    rc, so, _ = common.run([git, "-C", repo, "log", "--diff-filter=A", "--format=%aI", "--", path], timeout=20)
+    rc, so, _ = gitro.run(cfg, repo, ["log", "--diff-filter=A", "--format=%aI", "--", path], timeout=20)
     if rc != 0 or not so.strip():
         return False
     first = common.parse_ts(so.strip().splitlines()[-1])
@@ -346,8 +346,7 @@ def tracked_before(cfg, repo, path, since_iso):
 
 
 def untracked(cfg, repo):
-    git = common.git_exe(cfg)
-    rc, so, _ = common.run([git, "-C", repo, "ls-files", "--others", "--exclude-standard", "-z"], timeout=30)
+    rc, so, _ = gitro.run(cfg, repo, ["ls-files", "--others", "--exclude-standard", "-z"], timeout=30)
     if rc != 0:
         return []
     return [os.path.join(repo, p) for p in so.split("\0") if p]

@@ -1,7 +1,7 @@
 {
   "name": "cg",
   "displayName": "Chitragupta",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keeps a worklog of your Claude Code sessions: daily notes, per-ticket findings, saved requests, DB flows, an evening Jira-worklog summary and a local read-only dashboard.",
   "author": {
     "name": "Omkar Jadhav",
@@ -10,5 +10,11 @@
   "homepage": "https://github.com/omkarjadhav-10/chitragupta",
   "repository": "https://github.com/omkarjadhav-10/chitragupta",
   "license": "MIT",
-  "keywords": ["worklog", "timesheet", "jira", "journal", "dashboard"]
+  "keywords": [
+    "worklog",
+    "timesheet",
+    "jira",
+    "journal",
+    "dashboard"
+  ]
 }

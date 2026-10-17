@@ -14,3 +14,5 @@ v0.1.0 brings the existing worklog features into the `cg` plugin. It also adds a
 - **Better free-text name redaction.** Names in labelled fields are masked; names written into prose are not reliably masked yet.
 - **A past-day view in the dashboard**, so `/cg:dashboard day <date>` opens that day instead of Today.
 - **A repeatable `resend:`.** Inbox lines are de-duplicated, so repeating the exact same `resend:` line is ignored.
+- **PR data through a host's read-only MCP** for branch tracking, when no host CLI is installed (v0.2.0 falls back to the PR merge commits).
+- **Base-branch relations in the branch graph.** The dashboard draws extra base branches forking from the first one; it doesn't know how qa, release and main relate.
