@@ -24,6 +24,7 @@ def run():
     out = []
     home = common.home()
     out += install.unregister_task()
+    out += install.remove_shortcuts()
 
     rt = plugin.runtime_dir()
     if os.path.isdir(rt):

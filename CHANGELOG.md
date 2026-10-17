@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **Dashboard 2.0, read side** ([docs/dashboard.md](docs/dashboard.md)): a new look and layout (navigation, a side list per page, the page), live updates, and these pages:
+  - **Today**: time against the day's target, the day lane by lane per ticket with commits, delivery alerts across all tickets, tonight's Jira entries with a copy button per field; **past days** at `#/day/<date>`
+  - **Tickets**: filter by text, status, repo, alerts and last active; sort any column. **Ticket**: a header that stays in view and tabs (Overview, Branches & PRs, DB flow, Requests, Queries, Artifacts, Timeline, Notes)
+  - **Timesheet**: a month calendar shaded against each day's target with leave, half days, holidays and extra workdays, weekly bars, a day panel, hours per ticket and CSV
+  - **Knowledge**: the DB map (zoom, pan, links verified by the QA link map), the API catalog and integrations
+  - **Search** over tickets, findings, queries, APIs, tables, artifacts and daily notes; **Setup** (the doctor checks as a checklist with the fix for each); **Settings** (theme, density, motion)
+  - **Command palette** (Ctrl+K) and **keyboard shortcuts** (`?` lists them)
+  - Health adds the scheduled task, MCP calls blocked by the read-only guard, each MCP server's state from the last `claude mcp list`, and *Copy diagnostics*
+- **Open it like an app:** `/cg:dashboard [day|ticket|page]` now opens the page in your browser; setup adds a **Start menu** shortcut (`dashboard shortcut --desktop` adds one to the Desktop); Chrome and Edge can install it as an app with its own window (web app manifest; no offline copy of your data).
+- **Accessibility:** WCAG 2.2 AA, checked with axe on every page in both themes; skip link, landmarks, visible focus, WAI-ARIA tabs, dialogs, combobox and live region; text or table versions of every chart and diagram; status never shown by colour alone.
+- New read-only endpoints: `/api/day/<date>`, `/api/calendar`, `/api/knowledge`, `/api/search` (in-memory SQLite FTS5, or a plain scan), `/api/setup`, `/api/events` (Server-Sent Events). `/api/tickets` adds alerts and branches, `/api/tickets/<KEY>` the README, `/api/status` the cached MCP status and search stats.
+- `scripts/ui/`: browser checks on a synthetic home (axe, keyboard, palette, layouts, no outgoing requests).
+
+### Changed
+- The page is now ES modules under `chitragupta/dashboard/app/` with a vendored Preact (MIT), and a stricter Content-Security-Policy: no inline script at all. `page.html` is gone.
+- A ticket export is the new page with its scripts and styles inlined; it keeps the tabs, opens offline and carries its own CSP that blocks every request.
+- The dashboard still writes nothing: settings and actions come in the next update.
+
+### Fixed
+- Health read an MCP status field nothing wrote; it now reads the cached `claude mcp list` result.
+- Ticket page: the DB-flow tables can be scrolled from the keyboard, and dark mode meets contrast everywhere.
 ## [0.2.1] - 2026-10-18
 
 ### Fixed

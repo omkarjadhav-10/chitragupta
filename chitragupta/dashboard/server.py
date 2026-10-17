@@ -1,10 +1,20 @@
 """The dashboard's HTTP server: 127.0.0.1 only, GET/HEAD only, Host checked, strict headers, read-only.
 
 Routes
-  /                      the page (page.html, one self-contained file)
+  / and /index.html      the page (app/index.html)
+  /app/<path>            the page's own files: only files that exist under app/ with an allowed extension
+                         (.js .css .svg .png .woff2 .webmanifest .json), looked up in an allowlist map
+  /manifest.webmanifest  app/manifest.webmanifest
   /vendor/mermaid.min.js the vendored Mermaid build (third_party/mermaid)
+  /vendor/preact.module.js, /vendor/hooks.module.js   the vendored Preact build (third_party/preact)
   /api/health            identity: {"app", "version", "pid", "home"} — the port is the lock, this says who holds it
   /api/today             time per ticket today + tonight's Jira-worklog preview (read-only, no model call)
+  /api/day/<YYYY-MM-DD>  the same for any day (a past day's preview is composed whole)
+  /api/calendar?from=&to=   minutes per day with leave / holidays / targets (default: the last 365 days)
+  /api/knowledge         tables, relations, writers, APIs and integrations from the catalog and the QA link map
+  /api/search?q=&type=&limit=   full-text search (in-memory index, see search.py)
+  /api/setup             a read-only setup checklist (doctor's fast mode, cached 60 s)
+  /api/events            Server-Sent Events: "cursor" events when /api/changes would move (max 16 streams)
   /api/tickets[?q=]      ticket list
   /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts, branches & PRs
   /api/tickets/<KEY>/export?mode=full|shareable   the ticket page as one self-contained HTML file (attachment;
@@ -21,6 +31,7 @@ import json
 import os
 import re
 import secrets
+import select
 import socket
 import sys
 import threading
@@ -35,13 +46,21 @@ from .. import common
 from . import api
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAGE = os.path.join(HERE, "page.html")
-MERMAID_CANDIDATES = [
-    os.path.join(os.path.dirname(common.PACKAGE_DIR), "third_party", "mermaid", "mermaid.min.js"),
-    os.path.join(common.PACKAGE_DIR, "third_party", "mermaid", "mermaid.min.js"),
-]
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-       "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+APP_DIR = os.path.join(HERE, "app")
+PAGE = os.path.join(APP_DIR, "index.html")
+MANIFEST = os.path.join(APP_DIR, "manifest.webmanifest")
+# third_party sits next to the package in a checkout and inside it in the runtime copy
+THIRD_PARTY = [os.path.join(os.path.dirname(common.PACKAGE_DIR), "third_party"), os.path.join(common.PACKAGE_DIR, "third_party")]
+MERMAID_CANDIDATES = [os.path.join(d, "mermaid", "mermaid.min.js") for d in THIRD_PARTY]
+VENDOR = {"/vendor/preact.module.js": ("preact", "preact.module.js"), "/vendor/hooks.module.js": ("preact", "hooks.module.js")}
+STATIC_TYPES = {
+    ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
+    ".png": "image/png", ".woff2": "font/woff2", ".webmanifest": "application/manifest+json", ".json": "application/json",
+}
+STATIC_RESCAN = 2.0  # seconds between walks of app/, so edits during development show up
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'none'; object-src 'none'; "
+       "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SECURITY_HEADERS = [
     ("Content-Security-Policy", CSP),
     ("X-Content-Type-Options", "nosniff"),
@@ -51,13 +70,49 @@ SECURITY_HEADERS = [
 ]
 TICKET_PATH = re.compile(r"^/api/tickets/([A-Za-z0-9-]{1,20})$")
 EXPORT_PATH = re.compile(r"^/api/tickets?/([A-Za-z0-9-]{1,20})/export$")
+DAY_PATH = re.compile(r"^/api/day/(\d{4}-\d{2}-\d{2})$")
+MAX_STREAMS = 16
+STREAM_POLL = 1.0       # seconds between change checks on an open event stream
+STREAM_KEEPALIVE = 25.0  # seconds of silence before a ": keep-alive" comment
 
 
-def mermaid_path():
-    for p in MERMAID_CANDIDATES:
+def _first_file(paths):
+    for p in paths:
         if os.path.isfile(p):
             return p
     return None
+
+
+def mermaid_path():
+    return _first_file(MERMAID_CANDIDATES)
+
+
+def vendor_path(sub, name):
+    return _first_file([os.path.join(d, sub, name) for d in THIRD_PARTY])
+
+
+_static = {"at": None, "map": {}}
+_static_lock = threading.Lock()
+
+
+def static_map():
+    """{"/app/<relative path>": absolute path} of every servable file under app/ (re-walked at most every 2 s).
+    A request is answered only by an exact key lookup here: the URL is never joined onto a folder."""
+    now = time.monotonic()
+    with _static_lock:
+        if _static["at"] is not None and now - _static["at"] < STATIC_RESCAN:
+            return _static["map"]
+    out = {}
+    for dp, dns, fns in os.walk(APP_DIR):
+        dns[:] = [d for d in dns if not d.startswith(".")]
+        for fn in fns:
+            p = os.path.join(dp, fn)
+            if fn.startswith(".") or os.path.splitext(fn)[1].lower() not in STATIC_TYPES or os.path.islink(p):
+                continue
+            out["/app/" + os.path.relpath(p, APP_DIR).replace(os.sep, "/")] = p
+    with _static_lock:
+        _static.update(at=now, map=out)
+    return out
 
 
 def token_path(port):
@@ -83,7 +138,30 @@ class DashboardServer(ThreadingHTTPServer):
         self.started_at = common.now_iso()
         self.token = secrets.token_urlsafe(24)
         self.home = common.home()
+        self.stopping = threading.Event()  # set on shutdown: open event streams end within a poll
+        self.streams = 0
+        self.streams_lock = threading.Lock()
         super().__init__(("127.0.0.1", int(port)), Handler)
+
+    def shutdown(self):
+        self.stopping.set()
+        super().shutdown()
+
+    def server_close(self):
+        self.stopping.set()
+        super().server_close()
+
+    def open_stream(self):
+        """Count one more event stream; False when MAX_STREAMS are already open."""
+        with self.streams_lock:
+            if self.streams >= MAX_STREAMS:
+                return False
+            self.streams += 1
+            return True
+
+    def close_stream(self):
+        with self.streams_lock:
+            self.streams = max(0, self.streams - 1)
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: refuse a second listener on the same port
@@ -275,11 +353,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if path in ("/", "/index.html"):
             return self.send_file(PAGE, "text/html; charset=utf-8", "no-cache")
+        if path.startswith("/app/"):
+            p = static_map().get(path)
+            if not p:
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_file(p, STATIC_TYPES[os.path.splitext(p)[1].lower()], "no-cache")
+        if path == "/manifest.webmanifest":
+            return self.send_file(MANIFEST, STATIC_TYPES[".webmanifest"], "no-cache")
         if path == "/vendor/mermaid.min.js":
             p = mermaid_path()
             if not p:
                 return self.send_json({"error": "mermaid is not installed"}, 404)
             return self.send_file(p, "text/javascript; charset=utf-8", "max-age=86400")
+        if path in VENDOR:
+            p = vendor_path(*VENDOR[path])
+            if not p:
+                return self.send_json({"error": "not installed"}, 404)
+            return self.send_file(p, "text/javascript; charset=utf-8", "no-cache")
+        if path == "/api/events":
+            return self.stream_events()
         if path == "/api/health":
             return self.send_json(self.server.identity())
         if path == "/api/shutdown":
@@ -288,11 +380,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "bad token"}, 403)
             self.close_connection = True
             self.send_json({"ok": True, "pid": os.getpid()})
+            self.server.stopping.set()  # end open event streams now, not after serve_forever notices
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return None
         cfg = common.load_config()
         if path == "/api/today":
             return self.send_json(api.today(cfg))
+        if path.startswith("/api/day/"):
+            m = DAY_PATH.match(path)
+            try:
+                return self.send_json(api.day(m.group(1), cfg)) if m else self.send_json({"error": "bad date"}, 400)
+            except ValueError:
+                return self.send_json({"error": "bad date"}, 400)
+        if path == "/api/calendar":
+            try:
+                return self.send_json(api.calendar(q("from") or None, q("to") or None, cfg))
+            except ValueError as e:
+                return self.send_json({"error": str(e)[:200]}, 400)
+        if path == "/api/knowledge":
+            return self.send_json(api.knowledge())
+        if path == "/api/search":
+            from . import search
+            types = [t for t in re.split(r"[,\s]+", q("type")) if t] or None
+            return self.send_json(search.search(q("q"), types, _int(q("limit"), 40)))
+        if path == "/api/setup":
+            return self.send_json(api.setup())
         if path == "/api/tickets":
             return self.send_json(api.tickets(q("q")[:200]))
         m = TICKET_PATH.match(path)
@@ -328,6 +440,56 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/changes":
             return self.send_json(api.changes(cfg))
         return self.send_json({"error": "not found"}, 404)
+
+    def stream_events(self):
+        """Server-Sent Events: a "cursor" event now and whenever the change cursor moves, a comment every 25 s.
+        Ends when the client goes away (a failed write) or the server stops. Only writes: the socket timeout only
+        drops a client that stops reading for that long."""
+        srv = self.server
+        self.close_connection = True
+        if not srv.open_stream():
+            return self._send(503, _json_bytes({"error": "too many live connections"}), "application/json; charset=utf-8",
+                              [("Retry-After", "5")])
+        try:
+            self.send_response(200)
+            for k, v in SECURITY_HEADERS:
+                self.send_header(k, v)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command == "HEAD":
+                return None
+            self._event(b"retry: 3000\n\n")
+            last, quiet = None, time.monotonic()
+            while not srv.stopping.is_set():
+                cur = api.changes(max_age=STREAM_POLL)["cursor"]
+                if cur != last:
+                    self._event(("event: cursor\ndata: %s\n\n" % json.dumps({"cursor": cur})).encode("utf-8"))
+                    last, quiet = cur, time.monotonic()
+                elif time.monotonic() - quiet >= STREAM_KEEPALIVE:
+                    self._event(b": keep-alive\n\n")
+                    quiet = time.monotonic()
+                if srv.stopping.wait(STREAM_POLL) or self._client_gone():
+                    break
+        except (OSError, ValueError):  # the client went away (ValueError: write to a closed file)
+            pass
+        finally:
+            srv.close_stream()
+        return None
+
+    def _event(self, data):
+        self.wfile.write(data)
+        self.wfile.flush()
+
+    def _client_gone(self):
+        """True once the client closed its end (the socket reads as EOF). Without this a closed tab would hold its
+        slot until the next keep-alive write fails."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except (OSError, ValueError):
+            return True
 
 
 def _int(s, default):

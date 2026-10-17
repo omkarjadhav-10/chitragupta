@@ -246,16 +246,17 @@ class TestTicketApi(Base):
 
     def test_page_hooks(self):
         from chitragupta.dashboard import server
-        html = support.rd(server.PAGE)
-        for hook in ('id="git-alerts"', "Branches & PRs", "data-mmd-quiet", "gitBlock(t.git)", "gitAlerts(t.git)",
-                     "/export?mode=", "Export (full)", "Export (shareable)", "<!-- cg:export-data -->", "cg-export",
-                     "abandoned? (suggested)", "(inferred)", "PR info from merge commits", "PR info unavailable",
-                     "td.dv.good", "td.dv.bad", "td.dv.open", "td.dv.check", "isHttp(p.url)", 'class="scroll"'):
-            self.assertIn(hook, html)
-        self.assertEqual(re.findall(r"(?i)\b(?:https?:)?//[a-z0-9.-]+\.[a-z]{2,}", html), [], "no external URLs")
-        # every git value goes through esc(); the PR link only for http(s) URLs
-        js = html[html.index("function gitAlerts"):html.index("function exportControl")]
-        self.assertNotRegex(js, r"\+ (?:a|b|p|r|c|e|t)\.(?:text|branch|title|subject|parent|source|target|why|link|url|summary) \+")
+        js = support.rd(os.path.join(os.path.dirname(server.PAGE), "pages", "tickets.js"))
+        for hook in ('id="git-alerts"', "Branches & PRs", "/export?mode=", "Export to share", "abandoned? (suggested)", "(inferred)",
+                     "PR info from merge commits", "PR info unavailable", "'dv ' + (DCLS[c.s]", "isHttp(p.url)", "label=\"Delivery matrix\"",
+                     "EXPORT ? null"):
+            self.assertIn(hook, js)
+        self.assertEqual(re.findall(r"(?i)(?:https?:)?//[a-z0-9.-]+\.[a-z]{2,}", js), [], "no external URLs")
+        # Preact escapes every value; raw HTML is never built from ticket data on this page
+        self.assertNotIn("dangerouslySetInnerHTML", js)
+        page = support.rd(server.PAGE)
+        self.assertIn("<!-- cg:export-data -->", page)
+        self.assertIn("<!-- cg:export-head -->", page)
 
 
 # --------------------------------------------------------------------------- export

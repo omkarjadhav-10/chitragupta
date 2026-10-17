@@ -9,7 +9,7 @@ Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks reco
 - a local **knowledge base** of tables, APIs, integrations and branches
 - **branch tracking** per ticket: its branches and their parents, the PRs, and whether every commit reached every branch your branching strategy requires, with warnings on the ticket page, at session start, while you work and at 20:00 (see [docs/branch-tracking.md](docs/branch-tracking.md))
 - an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
-- a **read-only dashboard** on `127.0.0.1`
+- a **dashboard** on `127.0.0.1`: today, tickets, timesheet, knowledge and search, with a command palette, live updates and keyboard shortcuts
 
 It runs on Windows and uses only the Python standard library. Slack, Jira and a database MCP are optional. Everything stays on your machine unless you configure a private GitHub remote for the daily notes.
 
@@ -47,7 +47,7 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
 | `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |
 | `/cg:pause [resume\|status]` | Pause or resume capture |
-| `/cg:dashboard` | Start the local dashboard if needed and print its address |
+| `/cg:dashboard [day DATE \| ticket KEY \| page]` | Open the local dashboard in your browser, starting it first if needed |
 | `/cg:setup` | Set up, repair or upgrade (safe to re-run; never changes recorded data) |
 | `/cg:doctor` | Check hooks, the background tick, runtime, scheduled task, recall skill, CLAUDE.md block, Slack/Jira/database MCP and recent errors. It only diagnoses and never changes anything. |
 
@@ -55,14 +55,17 @@ You type the `/cg:` commands yourself; Claude never runs them on its own. Setup 
 
 ## Dashboard
 
-Run `/cg:dashboard`, or open `http://127.0.0.1:7419/` once a session has started it. It has these pages:
+Run `/cg:dashboard`, use the **Chitragupta** shortcut setup adds to the Start menu, or install it as an app from Chrome or Edge.
 
-- **Today**: time per ticket, and tonight's Jira entries with copy buttons
-- **Tickets**: searchable; each ticket shows its findings, saved requests (copy as curl), the DB flow drawn with Mermaid, queries, artifacts, and Branches & PRs (graph, delivery matrix, alerts); export a ticket as one HTML file
-- **Timesheet**: weekly and monthly totals with a CSV export
-- **Health**: hooks, last tick, last push, Slack status, MCP calls, errors
+![The Today page with synthetic data](docs/images/dashboard-today.png)
 
-The dashboard is read-only, works offline and listens only on `127.0.0.1`. See [docs/dashboard.md](docs/dashboard.md).
+- **Today**: time against the day's target, the day lane by lane per ticket, delivery alerts, and tonight's Jira entries with a copy button per field
+- **Tickets**: filter and sort every ticket; each ticket has tabs for its findings, Branches & PRs, DB flow, saved requests (copy as curl), queries, artifacts, timeline and notes, and exports as one HTML file
+- **Timesheet**: a month calendar against your targets, leave and holidays marked, weekly bars, hours per ticket and a CSV export
+- **Knowledge**: the DB map (tables, links, which ones QA verified), the API catalog and integrations
+- **Search** across everything, **Health**, a **Setup** checklist, and **Settings** for appearance
+
+<kbd>Ctrl</kbd> <kbd>K</kbd> opens a command palette from anywhere and <kbd>?</kbd> lists the keyboard shortcuts. The page updates live, works offline, is checked against WCAG 2.2 AA in both themes, and listens only on `127.0.0.1`. See [docs/dashboard.md](docs/dashboard.md).
 
 ## Privacy
 

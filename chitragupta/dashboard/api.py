@@ -1,9 +1,9 @@
 """Read-only views of the data home for the dashboard.
 
 Every function here only reads: data/days, data/tickets (incl. the branch-tracking "git" block), data/timesheets,
-data/calendar.json, data/qa-trace,
-tickets/<T>/*.md, .worklog/health.json, .worklog/raw and .worklog/logs. Nothing is written, no model and no MCP
-server is called. Results are plain JSON-ready dicts.
+data/calendar.json, data/qa-trace, data/catalog.json, data/db-schema, tickets/<T>/*.md, .worklog/health.json,
+.worklog/cache/mcp-status.json, .worklog/raw and .worklog/logs. Nothing is written, no model and no MCP server is
+called. Results are plain JSON-ready dicts.
 """
 import csv
 import datetime as _dt
@@ -113,8 +113,17 @@ def ticket_summary(key, tk):
         "key": key, "title": tk.get("title") or "", "status": tk.get("status") or ((tk.get("jira") or {}).get("status") or ""),
         "first": tk.get("first") or "", "last": tk.get("last") or "", "minutes": _ticket_minutes(tk),
         "tldr": tk.get("tldr") or "", "repos": [os.path.basename(str(r).rstrip("/\\")) for r in tk.get("repos") or []],
-        "counts": _counts(tk),
+        "counts": _counts(tk), "branches": _linked_branches(tk)[:5], "alerts": _alerts(tk),
     }
+
+
+def _alerts(tk):
+    """The branch-tracking alerts of a ticket, as {kind, text, repo} (empty when branch tracking found nothing)."""
+    out = []
+    for a in ((tk.get("git") or {}).get("alerts")) or []:
+        if isinstance(a, dict):
+            out.append({"kind": a.get("kind") or "", "text": a.get("text") or "", "repo": a.get("repo") or ""})
+    return out
 
 
 def tickets(q=None):
@@ -330,9 +339,27 @@ def ticket(key):
         "timeline": [{"day": d, "minutes": int((v or {}).get("minutes") or 0), "line": (v or {}).get("line") or ""}
                      for d, v in sorted((tk.get("timeline") or {}).items(), reverse=True)],
         "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
-        "paths": paths, "git": _git(tk),
+        "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
     })
     return out
+
+
+README_MAX = 200_000
+
+
+def _read_capped(path, limit=README_MAX):
+    """A text file's first `limit` bytes ("" when missing); a cut multi-byte character is dropped."""
+    if not path:
+        return ""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(limit)
+    except OSError:
+        return ""
+    text = data.decode("utf-8", errors="replace")
+    if len(data) >= limit:
+        text = text.rstrip("\ufffd")
+    return text[1:] if text.startswith("\ufeff") else text
 
 
 # --------------------------------------------------------------------------- today
@@ -354,7 +381,7 @@ def saved_worklog(day):
     v = vs[-1] if vs else {}
     return {"status": sh.get("status"), "sent_at": sh.get("sent_at"), "attempts": sh.get("attempts"),
             "last_error": sh.get("last_error"), "version": v.get("v"), "text": v.get("text") or "",
-            "entries": [_entry(e) for e in sh.get("entries") or []]}
+            "target": sh.get("target"), "entries": [_entry(e) for e in sh.get("entries") or []]}
 
 
 def _entry(e):
@@ -367,6 +394,13 @@ def _entry(e):
 def worklog_preview(day, cfg):
     """Tonight's Jira worklog as the tick would compose it now, without the model condense call, without Jira,
     and without saving anything. Reuses jiraworklog/timesheet read-only."""
+    return _preview(day, cfg)[0]
+
+
+def _preview(day, cfg):
+    """(preview, activity blocks): the blocks are the ones the preview was composed from ([] on failure), so the
+    day view draws its lanes without building a second Agent."""
+    bl = []
     try:
         from .. import agent as agentmod
         from .. import jiraworklog
@@ -376,7 +410,7 @@ def worklog_preview(day, cfg):
         j = a.jwl
         now = common.now()
         today = common.workday(now, a.cfg)
-        until = now if day == today else None
+        until = now if day == today else None  # a past day is composed whole
         cal = jiraworklog.load_cal()
         bl = j.blocks(day, until)
         manual = j.manual_for(day, cal)
@@ -390,14 +424,70 @@ def worklog_preview(day, cfg):
             for e in out["entries"]:
                 e["description"] = redact(e["description"], mode="public")
         out["send_at"] = j.ts.get("send_at")
-        return out
+        return out, bl
     except Exception as e:  # noqa: BLE001
-        return {"kind": "error", "reason": "preview unavailable: %s" % (str(e) or e.__class__.__name__)[:200], "entries": []}
+        return ({"kind": "error", "reason": "preview unavailable: %s" % (str(e) or e.__class__.__name__)[:200], "entries": []},
+                bl)
+
+
+def _lanes(blocks):
+    """Activity blocks -> one lane per ticket ("" = work without a ticket), most minutes first."""
+    per = {}
+    for b in blocks or []:
+        key = b.get("ticket") or ""
+        lane = per.setdefault(key, {"ticket": key, "title": _title(key) if key else "", "minutes": 0.0, "spans": []})
+        lane["minutes"] += float(b.get("minutes") or 0)
+        for s, e in b.get("spans") or []:
+            if s and e:
+                lane["spans"].append((s, e))
+    out = []
+    for lane in per.values():
+        lane["spans"] = [[common.hhmm(s), common.hhmm(e)] for s, e in sorted(lane["spans"])]
+        lane["minutes"] = int(round(lane["minutes"]))
+        out.append(lane)
+    out.sort(key=lambda l: (-l["minutes"], l["ticket"] == "", l["ticket"]))
+    return out
+
+
+def _last_activity(blocks):
+    ends = [e for b in blocks or [] for _, e in b.get("spans") or [] if e]
+    return common.hhmm(max(ends)) if ends else None
+
+
+def _commit_list(dd):
+    out = []
+    for c in dd.get("commits") or []:
+        if not isinstance(c, dict):
+            continue
+        repo = c.get("repo_name") or os.path.basename(str(c.get("repo") or "").rstrip("/\\"))
+        out.append({"time": common.hhmm(c.get("date")) if c.get("date") else "", "ticket": c.get("ticket") or "",
+                    "repo": repo, "short": c.get("short") or (c.get("sha") or "")[:7], "subject": c.get("subject") or ""})
+    out.sort(key=lambda c: c["time"])
+    return out
+
+
+def _sessions(dd):
+    s = dd.get("sessions")
+    return len(s) if isinstance(s, (dict, list)) else 0
 
 
 def today(cfg=None, now=None, preview=True):
+    """Today's view (see day())."""
     cfg = cfg or common.load_config()
-    day = _today(cfg, now)
+    return _day_view(_today(cfg, now), cfg, preview)
+
+
+def day(date, cfg=None, preview=True):
+    """One work day (YYYY-MM-DD; ValueError when malformed): time per ticket, other work, commits, sessions,
+    activity lanes and the Jira worklog (the saved one, else a preview: today's up to now, a past day's whole)."""
+    _dt.date.fromisoformat(date)
+    return _day_view(date, cfg or common.load_config(), preview)
+
+
+def _day_view(day, cfg, preview=True):
+    """The builder today() and day() share. `preview=False` skips the preview and the lanes (both come from the
+    same activity blocks, which need an Agent)."""
+    from .. import timesheet as T
     dd = day_data(day) or {}
     rows = []
     for key, slot in (dd.get("tickets") or {}).items():
@@ -407,12 +497,27 @@ def today(cfg=None, now=None, preview=True):
     rows.sort(key=lambda r: (-r["minutes"], r["key"]))
     other = sorted(({"group": g, "minutes": int((v or {}).get("minutes") or 0)} for g, v in (dd.get("other") or {}).items()),
                    key=lambda r: -r["minutes"])
+    saved = saved_worklog(day)
     out = {"day": day, "updated_at": dd.get("updated_at"), "closed": bool(dd.get("closed")),
            "summary": dd.get("summary") or "", "tickets": rows, "other": other,
            "total_minutes": sum(r["minutes"] for r in rows) + sum(r["minutes"] for r in other),
-           "commits": len(dd.get("commits") or []), "worklog_saved": saved_worklog(day)}
+           "commits": len(dd.get("commits") or []), "worklog_saved": saved,
+           "commit_list": _commit_list(dd), "sessions": _sessions(dd)}
+    blocks, pv = [], {}
     if preview:
-        out["worklog_preview"] = worklog_preview(day, cfg)
+        pv, blocks = _preview(day, cfg)
+        out["worklog_preview"] = pv
+    out["lanes"] = _lanes(blocks)
+    out["last_activity"] = _last_activity(blocks)
+    target = (saved or {}).get("target")
+    out["target_minutes"] = target if target is not None else pv.get("target")
+    kind = pv.get("day_kind")
+    if not kind:
+        try:
+            kind = T.day_kind(day, read_json_cached(common.hp("data", "calendar.json")), T.settings(cfg))
+        except (TypeError, ValueError, AttributeError):
+            kind = None
+    out["day_kind"] = kind
     return out
 
 
@@ -519,6 +624,196 @@ def _csv_safe(s):
     return ("'" + s) if s[:1] in ("=", "+", "-", "@") else s
 
 
+# --------------------------------------------------------------------------- calendar (year heatmap)
+
+CALENDAR_MAX_DAYS = 400
+
+
+def _date_arg(s, name):
+    try:
+        return _dt.date.fromisoformat(s)
+    except (TypeError, ValueError):
+        raise ValueError("bad %s date (YYYY-MM-DD): %r" % (name, str(s)[:40]))
+
+
+def calendar(frm=None, to=None, cfg=None):
+    """Minutes per day and per ticket with each day's kind and target, for a year heatmap. Default range: the 365
+    days ending today; longer ranges keep their last 400 days. ValueError on a malformed or reversed range.
+    kind: workday | weekend | leave | half_day | holiday | extra_workday (a calendar `workday:` on a day off)."""
+    from .. import timesheet as T
+    cfg = cfg or common.load_config()
+    end = _date_arg(to, "to") if to else _dt.date.fromisoformat(_today(cfg))
+    start = _date_arg(frm, "from") if frm else end - _dt.timedelta(days=364)
+    if start > end:
+        raise ValueError("from is after to")
+    start = max(start, end - _dt.timedelta(days=CALENDAR_MAX_DAYS - 1))
+    ts = T.settings(cfg)
+    try:
+        hours = float(ts.get("hours_per_day") or 8)
+    except (TypeError, ValueError):
+        hours = 8.0
+    full = int(round(hours * 60))
+    cal = read_json_cached(common.hp("data", "calendar.json")) or {}
+    days = []
+    d = start
+    while d <= end:
+        iso = d.isoformat()
+        dd = day_data(iso) or {}
+        per = {}
+        for key, slot in (dd.get("tickets") or {}).items():
+            per[key] = per.get(key, 0) + int((slot or {}).get("minutes") or 0)
+        other = sum(int((v or {}).get("minutes") or 0) for v in (dd.get("other") or {}).values())
+        for m in ((cal.get("time") or {}).get(iso)) or []:  # time logged by hand counts too
+            if isinstance(m, dict) and m.get("ticket"):
+                per[m["ticket"]] = per.get(m["ticket"], 0) + int(m.get("minutes") or 0)
+        kind = T.day_kind(iso, cal, ts)
+        note = ""
+        for src in ("leave", "holiday", "half_day", "workday"):
+            v = (cal.get(src) or {}).get(iso)
+            if v is not None:
+                note = v if isinstance(v, str) else ""
+                break
+        if kind == "workday" and iso in (cal.get("workday") or {}) and T.WEEKDAYS[d.weekday()] not in ts["workdays"]:
+            kind = "extra_workday"
+        target = {"workday": full, "extra_workday": full, "half_day": full // 2}.get(kind, 0)
+        days.append({"date": iso, "minutes": sum(per.values()) + other, "tickets": {k: v for k, v in per.items() if v},
+                     "kind": kind, "note": note, "target": target})
+        d += _dt.timedelta(days=1)
+    return {"from": start.isoformat(), "to": end.isoformat(), "hours_per_day": int(hours) if hours == int(hours) else hours,
+            "workdays": list(ts.get("workdays") or []), "days": days}
+
+
+# --------------------------------------------------------------------------- knowledge (catalog + DB link map)
+
+EVIDENCE_MAX = 300
+TEXT_MAX = 600
+FIELDS_MAX = 40
+
+
+def _cut(s, n=TEXT_MAX):
+    s = s if isinstance(s, str) else ("" if s is None else str(s))
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _strs(xs, n=FIELDS_MAX):
+    return [_cut(x, 120) for x in (xs if isinstance(xs, list) else [])[:n] if x not in (None, "")]
+
+
+def _schema_columns():
+    """{lowercase "schema.table" and bare "table": [column names]} from data/db-schema/<connection>/*.json."""
+    root = common.hp("data", "db-schema")
+    full, bare = {}, {}
+    for conn in _listdir(root):
+        cdir = os.path.join(root, conn)
+        if conn.startswith("_") or not os.path.isdir(cdir):
+            continue
+        for fn in _listdir(cdir):
+            if not fn.endswith(".json") or fn.startswith("_"):
+                continue
+            rec = read_json_cached(os.path.join(cdir, fn))
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("table") or fn[:-5]).lower()
+            cols = [c.get("name") for c in rec.get("describe") or [] if isinstance(c, dict) and c.get("name")]
+            if not cols:
+                continue
+            full.setdefault(name, cols)
+            bare.setdefault(name.rsplit(".", 1)[-1], []).append(cols)
+    return full, {k: v[0] for k, v in bare.items() if len(v) == 1}  # a bare name only when it is unambiguous
+
+
+def _verified_links(lm):
+    """Link-map links that QA sampling confirmed (>= 80 % of sampled values found), as lowercase part lists."""
+    out = []
+    for ln in ((lm or {}).get("result") or {}).get("links") or []:
+        try:
+            s, m = int(ln.get("sampled") or 0), int(ln.get("matched") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if ln.get("checked", True) and s and m / s >= 0.8:
+            out.append((str(ln.get("from") or "").lower().split("."), str(ln.get("to") or "").lower().split(".")))
+    return out
+
+
+def _ends_with(parts, ref):
+    return 0 < len(ref) <= len(parts) and parts[-len(ref):] == ref
+
+
+def _link_matches(a, b, links):
+    """A catalog relation a -> b ("table.column", "schema.table.column" or plain tables) matches a verified link
+    when each side is a suffix of the link's side (with or without the column), in either direction."""
+    a, b = a.lower().split("."), b.lower().split(".")
+    for lf, lt in links:
+        for x, y in ((lf, lt), (lt, lf)):
+            if (_ends_with(x, a) or _ends_with(x[:-1], a)) and (_ends_with(y, b) or _ends_with(y[:-1], b)):
+                return True
+    return False
+
+
+def knowledge():
+    """The knowledge base the tick builds from sessions: tables (with columns from the QA schema cards), relations
+    (verified = confirmed by the QA link map), the code that writes each table, APIs and integrations."""
+    cat = read_json_cached(common.hp("data", "catalog.json")) or {}
+    lm = read_json_cached(common.hp("data", "db-schema", "_linkmap.json")) or {}
+    full, bare = _schema_columns()
+    tables = []
+    for key, t in sorted((cat.get("tables") or {}).items()):
+        if not isinstance(t, dict):
+            continue
+        name = t.get("name") or key
+        cols = full.get(name.lower()) or bare.get(name.lower().rsplit(".", 1)[-1]) or []
+        tables.append({"name": name, "db": t.get("db") or "", "purpose": _cut(t.get("purpose")),
+                       "key_columns": _strs(t.get("key_columns")), "columns": _strs(cols, 400),
+                       "relations": _strs(t.get("relations"), 60), "tickets": _strs(t.get("tickets")),
+                       "last_seen": t.get("last_seen") or ""})
+    links = _verified_links(lm)
+    relations = []
+    for r in (cat.get("db_relations") or {}).values():
+        if not isinstance(r, dict):
+            continue
+        a, b = str(r.get("from") or ""), str(r.get("to") or "")
+        relations.append({"from": a, "to": b, "kind": r.get("kind") or "", "evidence": _cut(r.get("evidence"), EVIDENCE_MAX),
+                          "tickets": _strs(r.get("tickets")), "verified": bool(a and b and _link_matches(a, b, links))})
+    relations.sort(key=lambda r: (r["from"], r["to"]))
+    writers = []
+    for w in (cat.get("db_writers") or {}).values():
+        if not isinstance(w, dict):
+            continue
+        reads = [{"component": (v or {}).get("component") or k, "tickets": _strs((v or {}).get("tickets"))}
+                 for k, v in sorted((w.get("reads") or {}).items()) if isinstance(v, dict) or v is None]
+        writes = [{"component": (v or {}).get("component") or k.split("|")[0], "column": (v or {}).get("column") or "",
+                   "change": _cut((v or {}).get("change"), EVIDENCE_MAX), "tickets": _strs((v or {}).get("tickets"))}
+                  for k, v in sorted((w.get("writes") or {}).items()) if isinstance(v, dict) or v is None]
+        writers.append({"table": w.get("table") or "", "reads": reads[:60], "writes": writes[:60]})
+    writers.sort(key=lambda w: w["table"])
+    apis = []
+    for a in (cat.get("apis") or {}).values():
+        if not isinstance(a, dict):
+            continue
+        apis.append({"method": (a.get("method") or "").upper(), "path": _cut(a.get("path"), 300),
+                     "host": a.get("host_or_service") or a.get("host") or "", "direction": a.get("direction") or "",
+                     "auth_type": _cut(a.get("auth_type"), 200), "purpose": _cut(a.get("purpose")),
+                     "request_fields": _strs(a.get("request_fields")), "response_fields": _strs(a.get("response_fields")),
+                     "tickets": _strs(a.get("tickets")), "last_seen": a.get("last_seen") or ""})
+    apis.sort(key=lambda a: (a["host"], a["path"], a["method"]))
+    integrations = []
+    for k, i in sorted((cat.get("integrations") or {}).items()):
+        if isinstance(i, dict):
+            integrations.append({"system": i.get("system") or k, "artifact": _cut(i.get("artifact"), 300),
+                                 "notes": _cut(i.get("notes")), "tickets": _strs(i.get("tickets")),
+                                 "last_seen": i.get("last_seen") or ""})
+    res = lm.get("result") if isinstance(lm, dict) else None
+    linkmap = None
+    if isinstance(res, dict):
+        hier = [h for h in res.get("hierarchy") or [] if isinstance(h, dict)]
+        linkmap = {"env": lm.get("env") or "", "fetched_at": lm.get("fetched_at") or "",
+                   "schemas": len({(h.get("database"), h.get("schema")) for h in hier}),
+                   "tables": sum(len(h.get("tables") or []) for h in hier),
+                   "links": len(res.get("links") or []), "verified": len(links)}
+    return {"tables": tables, "relations": relations, "writers": writers, "apis": apis, "integrations": integrations,
+            "linkmap": linkmap}
+
+
 # --------------------------------------------------------------------------- health / status
 
 def latest_raw_event():
@@ -585,7 +880,23 @@ def _mcp(h, cfg, today_day):
             "calls_today": int(((m.get("calls") or {}).get(today_day)) or 0), "job_tool_calls_today": calls,
             "tokens_in_today": tokens_in, "tokens_out_today": tokens_out, "cost_today": round(cost, 4),
             "budget": mc.get("daily_call_budget"), "skip": m.get("skip") or {}, "offline": m.get("offline") or {},
-            "last_skip_reason": m.get("last_skip_reason") or "", "status": h.get("mcp_status") or None}
+            "last_skip_reason": m.get("last_skip_reason") or "", "live": mcp_live()}
+
+
+def mcp_live():
+    """The last `claude mcp list` check as setup / doctor / maintenance cached it (never run from here):
+    {"checked_at", "probed", "servers": [{"role", "server", "status", "detail"}]}, or None before the first check."""
+    from .. import plugin
+    st = read_json_cached(plugin.mcp_status_cache())
+    if not isinstance(st, dict) or not st:
+        return None
+    servers = []
+    for role in ("slack", "jira", "database"):
+        r = st.get(role)
+        if isinstance(r, dict):
+            servers.append({"role": role, "server": r.get("server") or "", "status": r.get("status") or "unknown",
+                            "detail": _cut(r.get("detail"), 400)})
+    return {"checked_at": st.get("checked") or st.get("checked_at"), "probed": bool(st.get("probed")), "servers": servers}
 
 
 def _slack(h, cfg):
@@ -654,7 +965,87 @@ def status(cfg=None, now=None, server=None):
         "errors_total": h.get("errors_total") or 0,
         "errors": recent_errors(h),
         "dashboard": server or {},
+        "search": _search_stats(),
     }
+
+
+def _search_stats():
+    try:
+        from . import search
+        return search.stats()
+    except Exception:  # noqa: BLE001 — the health page shows the rest
+        return None
+
+
+# --------------------------------------------------------------------------- setup checklist
+
+SETUP_TTL = 60.0
+_setup_cache = {"at": 0.0, "home": None, "value": None}
+_setup_lock = threading.Lock()
+# doctor row -> (id, label, status when failing, fix kind, fix text). The fix is what the user runs.
+_SETUP_ROWS = {
+    "python": ("python", "Python 3.10+", "bad", "none", "Install Python 3.10 or newer with the py launcher, then reopen Claude Code"),
+    "git": ("git", "Git", "bad", "none", "Install Git, then reopen Claude Code"),
+    "claude": ("claude", "Claude Code CLI", "bad", "cli", "claude install"),
+    "home": ("home", "Data home", "bad", "slash", "/cg:setup"),
+    "config": ("config", "Configuration", "bad", "slash", "/cg:setup"),
+    "hooks": ("hooks", "Session capture (hooks)", "bad", "claude",
+              "Run /plugin, make sure the cg plugin is enabled, then start a new Claude Code session"),
+    "last tick": ("tick", "Background tick", "warn", "slash", "/cg:setup"),
+    "last push": ("push", "GitHub backup push", "warn", "slash", "/cg:doctor"),
+    "runtime": ("runtime", "Stable runtime", "bad", "slash", "/cg:setup"),
+    "task": ("task", "Scheduled task", "bad", "slash", "/cg:setup"),
+    "recall skill": ("skill", "Recall skill", "bad", "slash", "/cg:setup"),
+    "CLAUDE.md block": ("claude-md", "CLAUDE.md block", "bad", "slash", "/cg:setup"),
+    "Slack": ("slack", "Slack (evening worklog DM)", "warn", "slash", "/cg:setup"),
+    "Jira": ("jira", "Jira MCP", "warn", "slash", "/cg:setup"),
+    "database MCP": ("database", "Database MCP", "warn", "slash", "/cg:setup"),
+    "recent errors": ("errors", "Recent errors", "warn", "slash", "/cg:doctor"),
+}
+_MCP_ROLE = {"Slack": "slack", "Jira": "jira", "database MCP": "database"}
+
+
+def _setup_item(row, mcp):
+    name = row.get("name") or ""
+    rid, label, failing, kind, text = _SETUP_ROWS.get(
+        name, (re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"), name, "warn", "slash", "/cg:doctor"))
+    detail = row.get("detail") or ""
+    status = "ok" if row.get("ok") else failing
+    role = _MCP_ROLE.get(name)
+    if role:
+        st = (mcp or {}).get(role) or {}
+        live = st.get("status")
+        if not mcp:
+            status = "warn"  # never checked: doctor without --fast (or /cg:setup) runs the live check
+            kind, text = "slash", "/cg:doctor"
+        elif live in ("missing", "unsupported") or (role == "slack" and st.get("state") == "off"):
+            status = "off"
+        elif live in ("signed out", "offline") and role != "slack":
+            kind, text = "claude", "Run /mcp in Claude Code and sign in to the %s server" % (st.get("server") or label)
+    elif name == "last push" and row.get("ok") and "no GitHub remote" in detail:
+        status = "off"
+    if status == "ok":
+        kind, text = "none", ""
+    return {"id": rid, "label": label, "status": status, "detail": _cut(detail, 400), "fix": {"kind": kind, "text": text}}
+
+
+def setup(max_age=SETUP_TTL):
+    """A read-only setup checklist from doctor's fast mode (the cached MCP status; never `claude mcp list`).
+    doctor still runs `git --version`, `claude --version` and the scheduled-task query, so the result is cached."""
+    home = common.home()
+    import time
+    with _setup_lock:
+        c = _setup_cache
+        if c["value"] is not None and c["home"] == home and time.monotonic() - c["at"] < max_age:
+            return c["value"]
+    from .. import doctor
+    from .. import setup as setupmod
+    rows = doctor.run(probe=False)
+    mcp = setupmod.cached_mcp_status()
+    value = {"checked_at": common.now_iso(), "items": [_setup_item(r, mcp) for r in rows]}
+    with _setup_lock:
+        _setup_cache.update(at=time.monotonic(), home=home, value=value)
+    return value
 
 
 # --------------------------------------------------------------------------- change cursor
@@ -666,6 +1057,11 @@ def _watch_paths(cfg):
     day = _today(cfg)
     yield common.wl("health.json")
     yield common.hp("data", "calendar.json")
+    yield common.hp("data", "catalog.json")
+    yield common.hp("data", "db-schema", "_linkmap.json")
+    yield common.hp("daily", day[:4], day[5:7], day + ".md")
+    from .. import plugin
+    yield plugin.mcp_status_cache()
     for d in (common.hp("data", "tickets"), common.hp("data", "timesheets"), common.hp("data", "qa-trace"),
               common.hp("data", "days", day[:4]), common.wl("raw", day), common.wl("raw", day, "time")):
         yield d

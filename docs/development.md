@@ -70,6 +70,19 @@ The tests are standard-library `unittest`. Each test runs in its own temp `CHITR
 
 CI (`.github/workflows/test.yml`) runs on Windows and Ubuntu with Python 3.10, 3.11 and 3.12. It runs the version check, the secret scan (`--secrets-only`, since the deny-list is local) and the unit suite.
 
+### UI checks
+
+Browser checks for the dashboard, on the same synthetic home the unit tests use (never a real one):
+
+```
+cd scripts/ui; npm ci; cd ../..                  # once: playwright-core, which drives your installed Chrome or Edge
+python scripts/ui/run.py [--shots <folder>]      # every page, both themes, 1440/1280/900 px
+```
+
+It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
+
+The page is plain ES modules with no build step: `chitragupta/dashboard/app/` (`main.js`, `lib/`, `pages/`, `app.css`) and the vendored Preact in `third_party/preact/`. Components use a small tagged-template helper (`lib/html.js`) instead of JSX.
+
 ### End-to-end (opt-in, real model calls)
 
 These scripts make real `claude -p` calls. That costs money and needs a signed-in Claude Code. They do nothing unless `CHITRAGUPTA_E2E=1`. Each runs in a throwaway home with synthetic data and never reaches Slack or Jira. `CHITRAGUPTA_E2E_CLAUDE` picks the `claude` executable.
