@@ -41,11 +41,13 @@ class KBJobs:
         today = common.workday(common.now(), self.cfg)
         st = self.a.state.setdefault("kbjobs", {})
         if st.get("files_day") != today:
-            mcpjobs.ensure_files(self.cfg)
+            if mcpjobs.configured(self.cfg):  # guard files only when an MCP job can run (mcpjobs.run makes them too)
+                mcpjobs.ensure_files(self.cfg)
             envmap.build(self.cfg)
             self.qa_values()
             st["files_day"] = today
-        if self.a.force is False and common.env("NO_MCP_JOBS"):
+        self.backup(today, st)  # local, no MCP: independent of NO_MCP_JOBS
+        if common.env("NO_MCP_JOBS"):
             return
         left = mcpjobs.budget_left(self.a.health, self.cfg, today)
         if mcpjobs.enabled(self.cfg, "jira") and not self._offline("jira") and left > EVENING_RESERVE:
@@ -60,7 +62,6 @@ class KBJobs:
                 if self.link_map(today):
                     st["linkmap_day"] = today
                     left -= 1
-        self.backup(today, st)
 
     # ------------------------------------------------------------------ Jira cards
     def jira_cards(self, today, limit=2, force=None):

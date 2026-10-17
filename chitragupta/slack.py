@@ -31,6 +31,29 @@ def server_def(cfg=None):
     return srv
 
 
+def _settings(cfg):
+    return ((cfg or {}).get("jira_worklog") or {}).get("slack") or {}
+
+
+def configured(cfg):
+    """Slack is set up for background sends: `slack-discover` stored my user id and the send tool, which it only does
+    after finding Slack's tools through the background config (.worklog/mcp/slack.json or the sender folder)."""
+    sl = _settings(cfg)
+    return bool(sl.get("self_user_id") and sl.get("send_tool"))
+
+
+def state(cfg):
+    """"ready" | "off" (jira_worklog.slack.enabled is false) | "not_connected" (no background Slack config).
+    jira_worklog.slack.enabled defaults to true only when Slack is configured for background sends."""
+    if _settings(cfg).get("enabled") is False:
+        return "off"
+    return "ready" if configured(cfg) else "not_connected"
+
+
+NOT_CONNECTED_NOTE = "Slack isn't connected: the evening worklog is saved in the daily file and data/timesheets/"
+OFF_NOTE = "Slack sending is off (jira_worklog.slack.enabled): the evening worklog is saved in the daily file"
+
+
 def sender_dir():
     return common.wl("slack-sender")
 
@@ -102,10 +125,10 @@ def discover(cfg, email):
 
 def send(cfg, text, health):
     """-> {ok, ts, error, tokens}. Never raises."""
-    sl = (cfg.get("jira_worklog") or {}).get("slack") or {}
+    sl = _settings(cfg)
     uid, tool, mode = sl.get("self_user_id"), sl.get("send_tool"), sl.get("mode") or "strict"
     if not (uid and tool):
-        return {"ok": False, "error": "Slack not set up (self_user_id / send_tool missing)"}
+        return {"ok": False, "error": "Slack not set up (self_user_id / send_tool missing)", "not_connected": True}
     if common.env("SLACK_FAIL"):  # tests: forced failure
         return {"ok": False, "error": "forced failure (WORKLOG_SLACK_FAIL)"}
     task = ("Send the text between <msg> tags, exactly, as a Slack DM to %s using %s. Do nothing else. "

@@ -134,7 +134,7 @@ def load_config():
             cfg = json.load(f)
     except (OSError, ValueError):
         cfg = {}
-    cfg = _merge(DEFAULT_CONFIG, cfg)
+    cfg = _merge(json.loads(json.dumps(DEFAULT_CONFIG)), cfg)  # deep copy: callers may mutate cfg
     if not cfg.get("worklog_home"):
         cfg["worklog_home"] = home().replace("\\", "/")
     return cfg

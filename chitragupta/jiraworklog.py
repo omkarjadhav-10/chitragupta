@@ -111,8 +111,12 @@ class JiraWorklog:
         common.write_json(cal_path(), cal)
         for day in days:
             sh = load_sheet(day)
-            if sh.get("status") in ("sent", "nudged") and (_dt.date.fromisoformat(today) - _dt.date.fromisoformat(day)).days <= 3:
+            recent = (_dt.date.fromisoformat(today) - _dt.date.fromisoformat(day)).days <= 3
+            if sh.get("status") in ("sent", "nudged") and recent:
                 sh["pending_correction"] = common.now_iso()  # debounced: sent >= 15 min after the last change
+                save_sheet(day, sh)
+            elif sh.get("status") == "not_connected" and recent:
+                sh["resend"] = common.now_iso()  # never sent: re-compose the saved message (no "Corrected" header)
                 save_sheet(day, sh)
         return True
 
@@ -428,6 +432,13 @@ class JiraWorklog:
             return
         h = self.a.health.setdefault("jira_worklog", {})
         h.setdefault("active_from", common.workday(common.now(), self.cfg))
+        sstate = slack.state(self.cfg)
+        if sstate == "ready":
+            h.pop("slack", None)
+            h.pop("slack_note", None)
+        else:  # shown by doctor / health; never a SessionStart warning
+            h["slack"] = sstate
+            h["slack_note"] = slack.OFF_NOTE if sstate == "off" else slack.NOT_CONNECTED_NOTE
         due = self.due_days()
         if not due:
             return
@@ -466,8 +477,18 @@ class JiraWorklog:
         self.store.touch_day(day)  # the daily file shows the message under "## Jira worklog"
         if not send:
             return sh
-        r = slack.send(self.cfg, text, self.a.health)
         h = self.a.health.setdefault("jira_worklog", {})
+        sstate = slack.state(self.cfg)
+        if sstate != "ready":  # no Slack: the message stays in the daily file and the timesheet; no retries
+            sh.update(status="not_connected", slack=sstate, checked_at=common.now_iso())
+            sh.pop("attempts", None)
+            save_sheet(day, sh)
+            h["slack"] = sstate
+            h["slack_note"] = slack.OFF_NOTE if sstate == "off" else slack.NOT_CONNECTED_NOTE
+            return sh
+        h.pop("slack", None)
+        h.pop("slack_note", None)
+        r = slack.send(self.cfg, text, self.a.health)
         ver["slack"] = {k: r.get(k) for k in ("ok", "ts", "error", "tokens", "mismatch")}
         if r.get("tokens"):
             h.setdefault("tokens", {})[day] = r["tokens"]
@@ -495,5 +516,7 @@ def daily_section(day):
         return []
     v = vs[-1]
     st = {"sent": "sent to Slack %s" % common.hhmm(sh.get("sent_at")), "nudged": "nudge sent", "failed": "Slack send failed — retrying",
-          "composed": "composed, not sent yet"}.get(sh.get("status"), sh.get("status") or "")
+          "composed": "composed, not sent yet", "not_connected": "saved here, Slack isn't connected"}.get(sh.get("status"), sh.get("status") or "")
+    if sh.get("status") == "not_connected" and sh.get("slack") == "off":
+        st = "saved here, Slack sending is off"
     return ["## Jira worklog", "_%s · version %d_" % (st, v["v"]), "", "~~~text", v["text"], "~~~", ""]

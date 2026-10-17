@@ -82,6 +82,8 @@ def child_env(home, user_dir, **extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith(ENV_PREFIXES)}
     env.update(GIT_IDENTITY)
     env.update(CHITRAGUPTA_HOME=home, CHITRAGUPTA_USER_DIR=user_dir, PYTHONDONTWRITEBYTECODE="1")
+    # A SessionStart hook would otherwise spawn maintenance (runtime copy + a real dashboard on the default port).
+    env.update(CHITRAGUPTA_NO_MAINTENANCE="1", CHITRAGUPTA_DASHBOARD="0", CHITRAGUPTA_NO_TASK="1")
     env.update(extra)
     return env
 

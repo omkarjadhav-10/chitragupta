@@ -3,6 +3,9 @@ notes/
 # Development copy of a data home
 .dev-home/
 .dev-throwaway/
+.dev-user/
+.dev-claude/
+.dev-scratch/
 # Never commit data, wherever it shows up
 .worklog/
 raw/
@@ -36,3 +39,5 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+# Opt this repo out of worklog capture (local choice)
+.worklog-ignore

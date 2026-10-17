@@ -1,0 +1,4 @@
+## Worklog (Chitragupta)
+My Claude Code sessions are recorded automatically into {{HOME}} by background hooks; don't write to those files yourself — except, only when I ask: appending a line to `inbox.md`, or creating a file in `_drop\` whose name starts with the ticket ID (e.g. "save this analysis to the worklog for ABC-1234").
+When a reply establishes something worth keeping — a root cause, how a flow works, an important query, table, API, config or decision — end that reply with one line: `Worklog note: <one specific sentence with file:line / table / endpoint>`. Only for genuinely important points, a few per session at most. Never put secrets or personal data in it.
+For questions about my past work or a ticket's history, replaying a ticket's requests, saving requests to the worklog, a ticket's DB flow or its artifacts, use the chitragupta skill.

@@ -1,10 +1,13 @@
-"""Remove the worklog's footprint from Claude Code and Windows; keep all data.
+"""Remove Chitragupta's footprint outside the data home; keep all data.
 
-Removes: our hooks + permission rule from ~/.claude/settings.json (backup first), the CLAUDE.md block,
-the worklog skill, the WorklogAgent scheduled task (or Startup launcher).
-Keeps: everything in the Worklog folder, including data/, daily/, tickets/ and the git repo.
+    python -m chitragupta uninstall [--json]
+
+Removes: the `Chitragupta` scheduled task (or its Startup-folder launcher), the stable runtime
+(<user dir>/runtime), the recall skill (only if its frontmatter name is ours), the CLAUDE.md block between
+<!-- chitragupta:start --> and <!-- chitragupta:end --> (backup first), and the home pointer.
+Keeps: everything in the data home (daily/, tickets/, data/, the git repo, config). The plugin itself is removed
+with `/plugin uninstall cg`.
 """
-import datetime as _dt
 import json
 import os
 import shutil
@@ -12,41 +15,61 @@ import sys
 
 from . import common
 from . import install
+from . import plugin
+from . import setup
 
 
-def main():
+def run():
     out = []
-    if os.path.exists(install.SETTINGS):
-        stamp = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
-        backup = install.SETTINGS + ".worklog-uninstall-bak." + stamp
-        shutil.copy2(install.SETTINGS, backup)
-        s = install.strip_ours(install.read_settings())
-        tmp = install.SETTINGS + ".worklog.tmp"
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            f.write(install.dump(s))
-        json.load(open(tmp, encoding="utf-8"))
-        os.replace(tmp, install.SETTINGS)
-        out.append("hooks + permission removed from settings.json (backup: %s)" % backup)
-    txt = common.read_text(install.CLAUDE_MD)
-    i, j = txt.find(install.MD_START), txt.find(install.MD_END)
-    if i >= 0 and j > i:
-        new = (txt[:i].rstrip("\n") + "\n" + txt[j + len(install.MD_END):].lstrip("\n")).strip("\n")
-        if new.strip():
-            common.write_text(install.CLAUDE_MD, new + "\n")
+    home = common.home()
+    out += install.unregister_task()
+
+    rt = plugin.runtime_dir()
+    if os.path.isdir(rt):
+        shutil.rmtree(rt, ignore_errors=True)
+        out.append("runtime removed: %s" % rt if not os.path.isdir(rt) else "runtime partly removed (files in use): %s" % rt)
+
+    sk = setup.skill_installed()
+    if sk["ours"]:
+        shutil.rmtree(os.path.dirname(sk["path"]), ignore_errors=True)
+        out.append("recall skill removed: %s" % os.path.dirname(sk["path"]))
+    elif os.path.exists(sk["path"]):
+        out.append("recall skill left alone: %s belongs to another skill (name: %s)" % (sk["path"], sk.get("name")))
+
+    md = plugin.claude_md_path()
+    txt = common.read_text(md)
+    if setup.MD_START in txt or setup.MD_END in txt:
+        problem = setup.check_markers(txt)
+        if problem:
+            out.append("CLAUDE.md block left alone: %s" % problem)
         else:
-            os.remove(install.CLAUDE_MD)
-        out.append("CLAUDE.md block removed")
-    skill_dir = os.path.dirname(install.SKILL)
-    if os.path.isdir(skill_dir):
-        shutil.rmtree(skill_dir)
-        out.append("skill removed")
-    rc, so, se = common.run(["schtasks", "/delete", "/tn", install.TASK_NAME, "/f"], timeout=60)
-    out.append("scheduled task removed" if rc == 0 else "scheduled task: " + (se or so).strip())
-    if os.path.exists(install.startup_launcher_path()):
-        os.remove(install.startup_launcher_path())
-        out.append("Startup launcher removed")
-    out.append("Data kept in %s" % common.home())
-    print("\n".join(out))
+            bak = md + ".chitragupta.bak"
+            shutil.copy2(md, bak)
+            new = setup.remove_block(txt)
+            if new.strip():
+                common.write_text(md, new)
+            else:
+                os.remove(md)
+            out.append("CLAUDE.md block removed (backup %s)" % bak)
+
+    for p in (common.home_pointer(), os.path.join(common.user_dir(), "maintenance.lock")):
+        if os.path.exists(p):
+            os.remove(p)
+            if p == common.home_pointer():
+                out.append("home pointer removed")
+    try:
+        os.rmdir(common.user_dir())  # only when empty
+    except OSError:
+        pass
+    out.append("Data kept in %s" % home)
+    out.append("To remove the plugin itself: /plugin uninstall cg")
+    return out
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    out = run()
+    print(json.dumps(out, indent=1) if "--json" in argv else "\n".join(out))
     return 0
 
 

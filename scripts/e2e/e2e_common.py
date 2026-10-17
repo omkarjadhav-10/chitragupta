@@ -61,7 +61,8 @@ class TempEnv:
         os.makedirs(self.user_dir)
         os.environ.update(support.GIT_IDENTITY)
         os.environ.update(CHITRAGUPTA_HOME=self.home, CHITRAGUPTA_USER_DIR=self.user_dir,
-                          CHITRAGUPTA_CLAUDE_DIR=os.path.join(self.user_dir, "claude"))
+                          CHITRAGUPTA_CLAUDE_DIR=os.path.join(self.user_dir, "claude"),
+                          CHITRAGUPTA_NO_MAINTENANCE="1", CHITRAGUPTA_DASHBOARD="0", CHITRAGUPTA_NO_TASK="1")
         support.install_launcher(self.user_dir)
 
     def child_env(self, **extra):

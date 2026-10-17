@@ -8,8 +8,9 @@ Raw tool results are taken from the stream-json events and written to local file
 and returns a short JSON. Never run from hooks; budget = mcp.daily_call_budget calls a day.
 
 The database MCP is whatever server mcp.database.server names (no default: absent -> database jobs are skipped).
-Its tool names (describe_table, run_query, ...) and argument names (connectionId, schema, table, limit, sql) are
-that configured server's API.
+Its tool names come from mcp.database.tools {query, describe_table, list_tables, list_schemas, list_connections}
+(defaults: run_query, describe_table, list_tables, list_schemas, list_connections), so any read-only database MCP
+can be wired by config. Argument names (connectionId, schema, table, limit, sql) are that server's API.
 """
 import datetime as _dt
 import json
@@ -51,7 +52,9 @@ def _refs(obj):
 # --------------------------------------------------------------------------- server definitions
 
 def claude_json():
-    return common.read_json(os.path.join(os.path.expanduser("~"), ".claude.json"), {}) or {}
+    """Claude Code's ~/.claude.json (read only); $CLAUDE_CONFIG_DIR/.claude.json when that variable is set."""
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~")
+    return common.read_json(os.path.join(base, ".claude.json"), {}) or {}
 
 
 _RUNTIME = {}  # credentials read from ~/.claude.json for this process only: passed to the job's env, never written
@@ -233,6 +236,8 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
         health.setdefault("mcp", {}).setdefault("offline", {})[job] = "missing env %s" % ",".join(sorted(missing))
         raise JobError("signed out: env %s not set" % ", ".join(sorted(missing)), skip=True)
     settings = os.path.join(mcp_dir(), "readonly-settings.json")
+    if not os.path.isfile(settings) or not os.path.isfile(os.path.join(mcp_dir(), "allow.json")):
+        ensure_files(cfg)  # never run a job without the read-only guard
     args = lean_args(cfg, model, common.prompt_path("mcp_job.md")) + [
         "-p", task, "--strict-mcp-config", "--mcp-config", cfg_path, "--settings", settings,
         "--max-turns", str(max_turns),
@@ -318,13 +323,65 @@ DATABASE_ALLOW_DEFAULT = {
 }
 
 
+# Roles the jobs use -> the database MCP's tool names (config mcp.database.tools overrides each one).
+DATABASE_TOOLS_DEFAULT = {"query": "run_query", "describe_table": "describe_table", "list_tables": "list_tables",
+                          "list_schemas": "list_schemas", "list_connections": "list_connections"}
+
+
+def db_tools(cfg):
+    """{role: tool name} for the database MCP: mcp.database.tools over DATABASE_TOOLS_DEFAULT."""
+    over = (((cfg or {}).get("mcp") or {}).get("database") or {}).get("tools") or {}
+    out = dict(DATABASE_TOOLS_DEFAULT)
+    for role in out:
+        v = over.get(role) if isinstance(over, dict) else None
+        if isinstance(v, str) and v.strip():
+            out[role] = v.strip()
+    return out
+
+
+def db_tool(cfg, role):
+    return db_tools(cfg)[role]
+
+
+def _database_allow_entry(cfg):
+    """DATABASE_ALLOW_DEFAULT with the configured tool names: a renamed tool replaces the default name in the read
+    list (and in query_tools for the query role)."""
+    entry = json.loads(json.dumps(DATABASE_ALLOW_DEFAULT))
+    _apply_tool_names(entry, cfg, replace=True)
+    return entry
+
+
+def _apply_tool_names(entry, cfg, replace=False):
+    """Make the configured (non-default) tool names readable; the query tool is also a query_tools entry, so the
+    guard checks its statements. Default names are left exactly as they are."""
+    for role, name in db_tools(cfg).items():
+        default = DATABASE_TOOLS_DEFAULT[role]
+        if name == default:
+            continue
+        lists = [entry.setdefault("read", [])]
+        if role == "query":
+            lists.append(entry.setdefault("query_tools", []))
+        for lst in lists:
+            if replace and default in lst:
+                lst[lst.index(default)] = name
+            elif name not in lst:
+                lst.append(name)
+    return entry
+
+
 def allow_default(cfg=None):
     """Default allowlist: the Jira server's tools, plus the database MCP's under its configured name (if any)."""
     allow = json.loads(json.dumps(ALLOW_DEFAULT))
     srv = server_name(cfg or {}, "database")
     if srv:
-        allow["servers"].setdefault(srv, json.loads(json.dumps(DATABASE_ALLOW_DEFAULT)))
+        allow["servers"].setdefault(srv, _database_allow_entry(cfg))
     return allow
+
+
+def configured(cfg):
+    """True when some MCP job can run: Jira jobs enabled, or database jobs enabled with a server name. Only then does
+    the daily housekeeping write the guard files (.worklog/mcp/allow.json, readonly-settings.json)."""
+    return enabled(cfg, "jira") or bool(enabled(cfg, "database") and server_name(cfg, "database"))
 
 
 def mcp_tool(server, tool):
@@ -348,7 +405,8 @@ def ensure_files(cfg):
             allowed |= set(((db.get("allowed") or {}).get(env)) or [])
             if (db.get("connections") or {}).get(env):
                 allowed.add(db["connections"][env])
-        entry = allow.setdefault("servers", {}).setdefault(srv, json.loads(json.dumps(DATABASE_ALLOW_DEFAULT)))
+        entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
+        _apply_tool_names(entry, cfg)
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
     allow["max_rows"] = int((cfg.get("qa_data") or {}).get("max_rows_per_query") or 20)
     common.write_json(ap, allow)
@@ -604,6 +662,7 @@ def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
     catalog queries written here (triggers with their function source; procs/functions/views whose source names the
     tables). The card is built in Python from the raw rows -> data/db-schema/<connection>/<schema>.<table>.json."""
     srv = _db_server(cfg)
+    q_tool, d_tool = db_tool(cfg, "query"), db_tool(cfg, "describe_table")
     tables = list(tables)[:10]
     conn = database_conn(cfg, env, tables[0] if tables else None)
     if not conn:
@@ -618,27 +677,27 @@ def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
     calls = []
     for sch, names in by_schema.items():
         for n in names:
-            calls.append("describe_table connectionId=%s%s table=%s" % (conn, " schema=%s" % sch if sch else "", n))
+            calls.append("%s connectionId=%s%s table=%s" % (d_tool, conn, " schema=%s" % sch if sch else "", n))
     if sqlset:
         all_names = [n for ns in by_schema.values() for n in ns]
         quoted = ", ".join("'%s'" % n.replace("'", "") for n in all_names)
         for sch, names in by_schema.items():
-            calls.append("run_query connectionId=%s limit=20 sql=%s" % (conn, json.dumps(
+            calls.append("%s connectionId=%s limit=20 sql=%s" % (q_tool, conn, json.dumps(
                 sqlset["triggers"].format(schema=sch.replace("'", ""), names=", ".join("'%s'" % n for n in names)))))
-        calls.append("run_query connectionId=%s limit=20 sql=%s" % (conn, json.dumps(
+        calls.append("%s connectionId=%s limit=20 sql=%s" % (q_tool, conn, json.dumps(
             sqlset["writers"].format(likes=" OR ".join(sqlset["like"].format(name=n.replace("'", "")) for n in all_names)))))
         del quoted
     task = ("Make ALL of these tool calls in a single turn (parallel), with exactly these arguments, then return "
             "{\"done\": true}. Do not make any other call, do not retry, do not read saved outputs.\n" +
             "\n".join("%d. %s" % (i + 1, c) for i, c in enumerate(calls)))
-    res = run("database-schema", {srv: ["describe_table", "run_query"]}, _db(srv, "describe_table", "run_query"),
+    res = run("database-schema", {srv: [d_tool, q_tool]}, _db(srv, d_tool, q_tool),
               _writes(srv, cfg), task, SCHEMA_DONE, cfg, health, max_turns=3, timeout=600)
     desc = {}
-    for inp, val in tool_results(res, "describe_table"):
+    for inp, val in tool_results(res, d_tool):
         desc[str(inp.get("table") or "").lower()] = unwrap(val)
     trig, writers = [], []
     for c in res["calls"]:
-        if not c["name"].endswith("__run_query") or c.get("is_error"):
+        if not c["name"].endswith("__" + q_tool) or c.get("is_error"):
             continue
         sql = str((c.get("input") or {}).get("sql") or "").lower()
         if "trigger_name" in sql:
@@ -759,22 +818,23 @@ def qa_trace(ticket, start_ids, flow_tables, cfg, health, before=None, env="qa")
     """Follow a real QA record through the flow's tables in ONE model turn: the SELECTs are planned here from the
     schema cards (trace_plan); the model runs them in parallel and summarises the journey with the actual values."""
     srv = _db_server(cfg)
+    q_tool = db_tool(cfg, "query")
     st, sv, plan = trace_plan(start_ids, flow_tables, cfg, env)
     if not plan:
         raise JobError("no trace plan for %s (schema cards missing or no start id)" % ticket, skip=True)
     task = (
-        "Ticket %s, QA. Make ALL of these run_query calls in a single turn (parallel), with exactly these arguments; no "
+        "Ticket %s, QA. Make ALL of these %s calls in a single turn (parallel), with exactly these arguments; no "
         "other calls, no retries:\n%s\nThen return the journey table by table with the actual values (key = the WHERE "
         "condition; values = the relevant columns of the newest row and how many rows came back)%s." % (
-            ticket, "\n".join("%d. run_query connectionId=%s limit=20 sql=%s" % (i + 1, c, json.dumps(q))
-                              for i, (t, c, q) in enumerate(plan)),
+            ticket, q_tool, "\n".join("%d. %s connectionId=%s limit=20 sql=%s" % (i + 1, q_tool, c, json.dumps(q))
+                                      for i, (t, c, q) in enumerate(plan)),
             ("; values recorded before the replay: %s - report what changed in 'changes'" % json.dumps(before)[:1500])
             if before else "; leave 'changes' empty"))
-    res = run("database-trace-" + ticket, {srv: ["run_query"]}, _db(srv, "run_query"), _writes(srv, cfg), task,
+    res = run("database-trace-" + ticket, {srv: [q_tool]}, _db(srv, q_tool), _writes(srv, cfg), task,
               TRACE_SCHEMA,
               cfg, health, max_turns=3, timeout=600)
     got = [{"sql": c["input"], "rows": rows(c["result"])[:20]} for c in res["calls"]
-           if c["name"].endswith("__run_query") and not c.get("is_error")]
+           if c["name"].endswith("__" + q_tool) and not c.get("is_error")]
     rec = {"ticket": ticket, "env": env, "connection": plan[0][1], "fetched_at": common.now_iso(), "start_ids": start_ids,
            "start": {"table": st, "value": sv}, "trace": res.get("out") or {}, "queries": got}
     common.write_json(common.hp("data", "qa-trace", ticket + ".json"),
@@ -805,6 +865,7 @@ def link_map(candidates, tables, cfg, health, env="qa"):
     distinct non-null values on the 'from' side and count how many exist on the 'to' side. Cross-database candidates
     are listed as unverified. -> data/db-schema/_linkmap.json"""
     srv = _db_server(cfg)
+    q_tool = db_tool(cfg, "query")
     jobs, links, seen = [], [], set()
     for frm, to, why in candidates:
         a, b = _split(frm), _split(to)
@@ -818,16 +879,16 @@ def link_map(candidates, tables, cfg, health, env="qa"):
         jobs.append((frm, to, why, ca, link_sql(conn_type(cfg, ca), a, b)))
     jobs = jobs[:12]
     if jobs:
-        task = ("Make ALL of these run_query calls in a single turn (parallel), with exactly these arguments, then return "
-                "{\"done\": true}. No other calls, no retries.\n" +
-                "\n".join("%d. run_query connectionId=%s limit=20 sql=%s" % (i + 1, j[3], json.dumps(j[4]))
+        task = ("Make ALL of these %s calls in a single turn (parallel), with exactly these arguments, then return "
+                "{\"done\": true}. No other calls, no retries.\n" % q_tool +
+                "\n".join("%d. %s connectionId=%s limit=20 sql=%s" % (i + 1, q_tool, j[3], json.dumps(j[4]))
                           for i, j in enumerate(jobs)))
-        res = run("database-linkmap", {srv: ["run_query"]}, _db(srv, "run_query"), _writes(srv, cfg), task, SCHEMA_DONE,
+        res = run("database-linkmap", {srv: [q_tool]}, _db(srv, q_tool), _writes(srv, cfg), task, SCHEMA_DONE,
                   cfg,
                   health, max_turns=3, timeout=600)
         got = {}
         for c in res["calls"]:
-            if c["name"].endswith("__run_query") and not c.get("is_error"):
+            if c["name"].endswith("__" + q_tool) and not c.get("is_error"):
                 r = rows(c["result"])
                 if r:
                     got[str((c.get("input") or {}).get("sql") or "").strip()] = r[0]

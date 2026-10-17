@@ -1,0 +1,67 @@
+{
+  "description": "Chitragupta: capture Claude Code session events into the worklog. Every hook fails open (exit 0).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py",
+            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "session-start"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyw",
+            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "user-prompt"],
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|Read|WebFetch|Artifact|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyw",
+            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "post-tool"],
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyw",
+            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "stop"],
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyw",
+            "args": ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "hook", "session-end"],
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

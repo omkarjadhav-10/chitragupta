@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Chitragupta</title>
+<script>
+// Theme before first paint: ?theme= (not stored) > saved choice > the OS preference.
+(function () {
+  var t = null;
+  try { var m = /[?&]theme=(light|dark)\b/.exec(location.search); if (m) t = m[1]; } catch (e) {}
+  if (!t) { try { t = localStorage.getItem('cg-theme'); } catch (e) {} }
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
+<style>
+:root {
+  --bg: #f5f1e6; --surface: #fffcf4; --surface-2: #ece6d6; --ink: #1c1a15; --ink-2: #474133; --ink-3: #655e4d;
+  --line: #d6cdb6; --line-strong: #b9ae92; --accent: #983a0f; --accent-2: #f3dccd; --on-accent: #fffaf2;
+  --ok: #2c632c; --warn: #7d5300; --bad: #a12218; --ok-bg: #e2eedc; --warn-bg: #f5e8c8; --bad-bg: #f7dcd7;
+  --code-bg: #efe9da; --bar: #c46a3c;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --radius: 2px; --maxw: 1180px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111316; --surface: #181b1f; --surface-2: #22262c; --ink: #ede7d8; --ink-2: #c9c1ad; --ink-3: #a59d89;
+    --line: #30353c; --line-strong: #4a515a; --accent: #f2955f; --accent-2: #3a2a20; --on-accent: #1a120c;
+    --ok: #86d18a; --warn: #e8bd5c; --bad: #ff8f80; --ok-bg: #1c2b1e; --warn-bg: #2e2716; --bad-bg: #331d1b;
+    --code-bg: #1e2226; --bar: #d9824f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111316; --surface: #181b1f; --surface-2: #22262c; --ink: #ede7d8; --ink-2: #c9c1ad; --ink-3: #a59d89;
+  --line: #30353c; --line-strong: #4a515a; --accent: #f2955f; --accent-2: #3a2a20; --on-accent: #1a120c;
+  --ok: #86d18a; --warn: #e8bd5c; --bad: #ff8f80; --ok-bg: #1c2b1e; --warn-bg: #2e2716; --bad-bg: #331d1b;
+  --code-bg: #1e2226; --bar: #d9824f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-body); }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.skip { position: absolute; left: var(--s4); top: -60px; background: var(--accent); color: var(--on-accent); padding: var(--s2) var(--s4); z-index: 10; text-decoration: none; }
+.skip:focus { top: var(--s2); }
+header.top { border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+.bar { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4); display: flex; align-items: center; gap: var(--s5); min-height: 56px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: var(--s2); font-family: var(--font-display); font-size: 21px; color: var(--ink); text-decoration: none; letter-spacing: .01em; }
+.brand svg { width: 22px; height: 22px; color: var(--accent); }
+nav.main { display: flex; gap: var(--s1); flex-wrap: wrap; }
+nav.main a { color: var(--ink-2); text-decoration: none; padding: var(--s3) var(--s3) calc(var(--s3) - 2px); border-bottom: 2px solid transparent; }
+nav.main a:hover { color: var(--ink); }
+nav.main a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.spacer { flex: 1; }
+.live { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+button, .btn { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 4px 10px; cursor: pointer; text-decoration: none; display: inline-block; line-height: 1.5; }
+button:hover, .btn:hover { border-color: var(--accent); }
+button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+button.copy { font-size: 12px; padding: 1px 8px; color: var(--ink-2); }
+button.copy.done { color: var(--ok); border-color: var(--ok); }
+main { max-width: var(--maxw); margin: 0 auto; padding: var(--s5) var(--s4) var(--s7); }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 30px; line-height: 1.2; margin: 0 0 var(--s2); }
+h1 .sub { font-family: var(--font-body); font-weight: 400; font-size: 16px; color: var(--ink-3); margin-left: var(--s2); }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 20px; margin: 0; }
+h3 { font-size: 16px; margin: var(--s5) 0 var(--s2); }
+h4, h5, h6 { font-size: 14px; margin: var(--s4) 0 var(--s2); }
+p { margin: 0 0 var(--s3); }
+.muted { color: var(--ink-3); }
+.small { font-size: 13px; }
+.mono, code, pre, kbd { font-family: var(--font-mono); font-size: 13px; }
+code { background: var(--code-bg); padding: 0 4px; border-radius: var(--radius); }
+pre { background: var(--code-bg); border: 1px solid var(--line); padding: var(--s3); overflow: auto; margin: 0 0 var(--s3); max-height: 420px; white-space: pre; tab-size: 2; }
+pre code { background: none; padding: 0; }
+.lede { color: var(--ink-2); max-width: 80ch; }
+.crumbs { font-size: 13px; color: var(--ink-3); margin-bottom: var(--s2); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border: 1px solid var(--line); background: var(--surface); margin: var(--s4) 0 var(--s5); }
+.kpi { padding: var(--s3) var(--s4); border-right: 1px solid var(--line); }
+.kpi:last-child { border-right: 0; }
+.kpi .k { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.kpi .v { font-family: var(--font-display); font-size: 26px; font-variant-numeric: tabular-nums; }
+.kpi .d { font-size: 13px; color: var(--ink-2); }
+section.block, details.block { background: var(--surface); border: 1px solid var(--line); margin: 0 0 var(--s4); }
+section.block > .head, details.block > summary { display: flex; align-items: baseline; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
+details.block:not([open]) > summary { border-bottom: 0; }
+details.block > summary { cursor: pointer; list-style: none; }
+details.block > summary::-webkit-details-marker { display: none; }
+details.block > summary::before { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); transition: transform 160ms; align-self: center; margin-right: 2px; }
+details.block[open] > summary::before { transform: rotate(45deg); }
+details.block > summary h2 { display: inline; }
+.count { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.body { padding: var(--s4); }
+.body.flush { padding: 0; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px var(--s3); border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); font-weight: 600; background: var(--surface-2); }
+tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+tbody tr:last-child td { border-bottom: 0; }
+tfoot td { border-top: 1px solid var(--line-strong); border-bottom: 0; font-weight: 600; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.key { white-space: nowrap; font-family: var(--font-mono); font-size: 13px; }
+.scroll { overflow-x: auto; }
+.meter { height: 6px; background: var(--surface-2); min-width: 80px; margin-top: 7px; }
+.meter > span { display: block; height: 100%; background: var(--bar); }
+.chip { display: inline-block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border: 1px solid var(--line-strong); color: var(--ink-2); white-space: nowrap; border-radius: var(--radius); }
+.state { display: inline-block; font-family: var(--font-body); font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: var(--radius); white-space: nowrap; }
+.state.ok { color: var(--ok); background: var(--ok-bg); }
+.state.warn { color: var(--warn); background: var(--warn-bg); }
+.state.bad { color: var(--bad); background: var(--bad-bg); }
+.state.off { color: var(--ink-2); background: var(--surface-2); }
+.toolbar { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; margin: var(--s4) 0; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { margin-left: 0; }
+input[type="search"] { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 6px 10px; min-width: min(420px, 100%); }
+input[type="search"]:focus-visible { border-color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s4); margin-bottom: var(--s4); }
+.card { background: var(--surface); border: 1px solid var(--line); padding: var(--s4); }
+.card h2 { font-size: 16px; margin-bottom: var(--s2); display: flex; justify-content: space-between; align-items: baseline; gap: var(--s2); }
+.card .big { font-family: var(--font-display); font-size: 22px; font-variant-numeric: tabular-nums; }
+.card p { margin: var(--s1) 0 0; color: var(--ink-2); font-size: 13px; }
+dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s4); margin: var(--s3) 0 var(--s4); font-size: 14px; }
+dl.meta dt { color: var(--ink-3); }
+dl.meta dd { margin: 0; }
+ul.plain { list-style: none; padding: 0; margin: 0; }
+ul.plain > li { padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
+ul.plain > li:last-child { border-bottom: 0; }
+.finding .t { font-weight: 600; }
+.finding .d { color: var(--ink-2); margin-top: 2px; }
+.finding .m { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.step-head { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; margin-bottom: var(--s2); }
+.method { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+.url { font-family: var(--font-mono); font-size: 13px; word-break: break-all; color: var(--ink-2); }
+.copyrow { display: flex; gap: var(--s2); align-items: center; }
+.copyrow .val { flex: 1; min-width: 0; }
+.md { max-width: 100%; }
+.md table { margin: var(--s2) 0 var(--s4); font-size: 13px; }
+.md table td, .md table th { padding: 5px var(--s2); }
+.md h3 { font-family: var(--font-display); font-size: 18px; border-top: 1px solid var(--line); padding-top: var(--s4); }
+.md h3:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.md ul, .md ol { padding-left: var(--s5); margin: 0 0 var(--s3); }
+.diagram { background: var(--surface); border: 1px solid var(--line); padding: var(--s3); margin: 0 0 var(--s4); overflow-x: auto; }
+.diagram svg { max-width: 100%; height: auto; }
+.diagram .note { font-size: 12px; color: var(--ink-3); margin-bottom: var(--s2); }
+.empty { padding: var(--s4); color: var(--ink-3); }
+.banner { border: 1px solid var(--warn); background: var(--warn-bg); color: var(--ink); padding: var(--s3) var(--s4); margin-bottom: var(--s4); }
+.error { border: 1px solid var(--bad); background: var(--bad-bg); padding: var(--s3) var(--s4); margin: var(--s4) 0; }
+.errlist li { font-family: var(--font-mono); font-size: 12px; word-break: break-word; }
+footer.foot { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--s4) var(--s5); color: var(--ink-3); font-size: 12px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.nowrap { white-space: nowrap; }
+@media (max-width: 720px) {
+  .bar { gap: var(--s2); }
+  .kpi { border-right: 0; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 24px; }
+  .hide-sm { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="#/today" aria-label="Chitragupta, today">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 3.5h11.5a2 2 0 0 1 2 2V20.5H7a2 2 0 0 1-2-2z"/><path d="M5 18.5a2 2 0 0 1 2-2h11.5"/><path d="M9 7.5h6M9 10.5h6M9 13.5h3"/></svg>
+      <span>Chitragupta</span>
+    </a>
+    <nav class="main" aria-label="Sections">
+      <a href="#/today" data-nav="today">Today</a>
+      <a href="#/tickets" data-nav="tickets">Tickets</a>
+      <a href="#/timesheet" data-nav="timesheet">Timesheet</a>
+      <a href="#/health" data-nav="health">Health</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="live" id="live" aria-live="polite"></span>
+    <button type="button" id="theme" title="Switch between automatic, light and dark">Theme: auto</button>
+  </div>
+</header>
+<main id="main" tabindex="-1"><p class="muted">Loading…</p></main>
+<footer class="foot">Read-only · this page only reads your local worklog and never sends anything.</footer>
+<script>
+(function () {
+  'use strict';
+  var root = document.getElementById('main');
+  var S = { cursor: null, copySeq: 0, mmdCache: new Map(), lastRoute: null, tickets: null };
+
+  // ------------------------------------------------------------------ helpers
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtMin(m) {
+    m = Math.round(m || 0);
+    if (m < 60) return m + 'm';
+    var h = Math.floor(m / 60), r = m % 60;
+    return h + 'h ' + (r < 10 ? '0' : '') + r + 'm';
+  }
+  function fmtHours(m) { return m ? (m / 60).toFixed(1) : ''; }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function parseTs(s) { if (!s) return null; var d = new Date(s); return isNaN(d) ? null : d; }
+  function fmtTs(s) {
+    var d = parseTs(s); if (!d) return s ? esc(s) : '—';
+    var now = new Date();
+    var t = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    if (d.toDateString() === now.toDateString()) return t;
+    return d.getDate() + ' ' + MON[d.getMonth()] + ' ' + t;
+  }
+  function fmtDay(s) {
+    if (!s) return '—';
+    var p = String(s).split('-'); if (p.length !== 3) return esc(s);
+    var d = new Date(+p[0], +p[1] - 1, +p[2]);
+    return WD[d.getDay()] + ' ' + d.getDate() + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  function ago(min) {
+    if (min == null) return 'never';
+    if (min < 1) return 'just now';
+    if (min < 60) return min + ' min ago';
+    if (min < 48 * 60) return Math.round(min / 60) + ' h ago';
+    return Math.round(min / 1440) + ' days ago';
+  }
+  function state(cls, word) { return '<span class="state ' + cls + '">' + esc(word) + '</span>'; }
+  function copyBtn(text, label, what) {
+    return '<button type="button" class="copy" data-copy="' + esc(text) + '" aria-label="' + esc((label || 'Copy') + (what ? ' ' + what : '')) + '">' + esc(label || 'Copy') + '</button>';
+  }
+  function tlink(key) { return '<a href="#/tickets/' + encodeURIComponent(key) + '">' + esc(key) + '</a>'; }
+  function block(key, title, count, inner, open) {
+    return '<details class="block" data-key="' + esc(key) + '"' + (open === false ? '' : ' open') + '><summary><h2>' + esc(title) + '</h2>' +
+      (count != null ? '<span class="count">' + esc(count) + '</span>' : '') + '</summary>' + inner + '</details>';
+  }
+  function section(title, extra, inner) {
+    return '<section class="block"><div class="head"><h2>' + esc(title) + '</h2>' + (extra || '') + '</div>' + inner + '</section>';
+  }
+  function api(path) {
+    return fetch(path, { headers: { 'Accept': 'application/json' }, cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { var e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+        return j;
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------ theme
+  var themeBtn = document.getElementById('theme');
+  function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'auto'; }
+  function effectiveDark() {
+    var t = currentTheme();
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+  function showTheme() { themeBtn.textContent = 'Theme: ' + currentTheme(); }
+  themeBtn.addEventListener('click', function () {
+    var next = { auto: 'light', light: 'dark', dark: 'auto' }[currentTheme()];
+    if (next === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', next);
+    try { if (next === 'auto') localStorage.removeItem('cg-theme'); else localStorage.setItem('cg-theme', next); } catch (e) {}
+    showTheme();
+    S.mmdCache.clear();
+    renderMermaid();
+  });
+  showTheme();
+
+  // ------------------------------------------------------------------ router
+  function parseRoute() {
+    var raw = (location.hash || '').replace(/^#\/?/, '');
+    var qi = raw.indexOf('?');
+    var path = qi >= 0 ? raw.slice(0, qi) : raw, qs = qi >= 0 ? raw.slice(qi + 1) : '';
+    var parts = path.split('/').filter(Boolean).map(function (p) { try { return decodeURIComponent(p); } catch (e) { return p; } });
+    var params = {};
+    qs.split('&').forEach(function (kv) {
+      if (!kv) return; var i = kv.indexOf('=');
+      try { params[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] = decodeURIComponent(i < 0 ? '' : kv.slice(i + 1).replace(/\+/g, ' ')); } catch (e) {}
+    });
+    var name = parts[0] || 'today';
+    if (name === 'ticket') name = 'tickets';  // short deep link #/ticket/ABC-1
+    if (['today', 'tickets', 'timesheet', 'health'].indexOf(name) < 0) name = 'today';
+    return { name: name, arg: parts[1] ? parts[1].toUpperCase() : '', params: params };
+  }
+  function routeKey(r) { return r.name + '/' + r.arg; }
+  function setNav(r) {
+    document.querySelectorAll('nav.main a').forEach(function (a) {
+      if (a.getAttribute('data-nav') === r.name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    var t = { today: 'Today', tickets: r.arg || 'Tickets', timesheet: 'Timesheet', health: 'Health' }[r.name];
+    document.title = t + ' · Chitragupta';
+  }
+
+  // ------------------------------------------------------------------ keep the reader's place on redraws
+  function captureUi() {
+    var ui = { y: window.scrollY, open: {}, focus: null, sel: null };
+    root.querySelectorAll('details[data-key]').forEach(function (d) { ui.open[d.getAttribute('data-key')] = d.open; });
+    var a = document.activeElement;
+    if (a && root.contains(a)) {
+      ui.focus = a.getAttribute('data-key') || a.id || null;
+      if (a.tagName === 'INPUT') ui.sel = [a.selectionStart, a.selectionEnd];
+    }
+    return ui;
+  }
+  function restoreUi(ui) {
+    if (!ui) return;
+    root.querySelectorAll('details[data-key]').forEach(function (d) {
+      var k = d.getAttribute('data-key');
+      if (Object.prototype.hasOwnProperty.call(ui.open, k)) d.open = ui.open[k];
+    });
+    if (ui.focus) {
+      var el = root.querySelector('[data-key="' + CSS.escape(ui.focus) + '"]') || document.getElementById(ui.focus);
+      if (el) {
+        try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+        if (ui.sel && el.setSelectionRange) { try { el.setSelectionRange(ui.sel[0], ui.sel[1]); } catch (e) {} }
+      }
+    }
+    window.scrollTo(0, ui.y);
+  }
+
+  var renderSeq = 0;
+  function render(navigation) {
+    var r = parseRoute();
+    var seq = ++renderSeq;
+    var ui = navigation ? null : captureUi();
+    setNav(r);
+    var view = { today: viewToday, tickets: r.arg ? viewTicket : viewTickets, timesheet: viewTimesheet, health: viewHealth }[r.name];
+    return view(r).then(function (html) { return html; }, function (e) {
+      return '<h1>Something went wrong</h1><div class="error" role="alert">' + esc(e.message || e) + '</div>';
+    }).then(function (html) {
+      if (seq !== renderSeq) return;  // a newer render started
+      root.innerHTML = html;
+      afterRender(r);
+      if (navigation) {
+        window.scrollTo(0, 0);
+        if (S.lastRoute !== null) { try { root.focus({ preventScroll: true }); } catch (e) {} }
+      } else {
+        restoreUi(ui);
+      }
+      S.lastRoute = routeKey(r);
+      return renderMermaid().then(function () { if (ui) window.scrollTo(0, ui.y); });
+    });
+  }
+  function afterRender(r) {
+    var input = root.querySelector('#ticket-search');
+    if (input) {
+      input.addEventListener('input', function () {
+        filterTickets(input.value);
+        var h = '#/tickets' + (input.value ? '?q=' + encodeURIComponent(input.value) : '');
+        try { history.replaceState(null, '', h); } catch (e) {}
+      });
+    }
+  }
+  window.addEventListener('hashchange', function () { render(true); });
+
+  // ------------------------------------------------------------------ copy
+  root.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-copy]');
+    if (b) { copyText(b.getAttribute('data-copy'), b); return; }
+    var p = ev.target.closest('button[data-period]');
+    if (p) { location.hash = '#/timesheet?period=' + p.getAttribute('data-period'); }
+  });
+  function copyText(text, btn) {
+    var label = btn.textContent;
+    function ok() { btn.textContent = 'Copied'; btn.classList.add('done'); flash('Copied to the clipboard'); setTimeout(function () { btn.textContent = label; btn.classList.remove('done'); }, 1500); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      var done = false;
+      try { done = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      if (done) ok(); else { flash('Copy failed: select the text and press Ctrl+C'); }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+    else fallback();
+  }
+  var live = document.getElementById('live');
+  var flashTimer = null;
+  function flash(msg) {
+    live.textContent = msg;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(showUpdated, 2500);
+  }
+  var updatedAt = null;
+  function showUpdated() { live.textContent = updatedAt ? 'Updated ' + pad(updatedAt.getHours()) + ':' + pad(updatedAt.getMinutes()) + ':' + pad(updatedAt.getSeconds()) : ''; }
+
+  // ------------------------------------------------------------------ mini markdown (db-flow.md, README parts)
+  function inline(s) {
+    var codes = [];
+    s = String(s).replace(/`([^`]+)`/g, function (_, c) { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    s = esc(s);
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, t, u) { return '<span class="ref" title="' + u + '">' + t + '</span>'; });
+    s = s.replace(/&lt;br\s*\/?&gt;/g, '<br>');
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return '<code>' + esc(codes[+i]) + '</code>'; });
+  }
+  function splitRow(line) {
+    var t = line.trim();
+    if (t[0] === '|') t = t.slice(1);
+    if (t[t.length - 1] === '|' && t[t.length - 2] !== '\\') t = t.slice(0, -1);
+    var cells = [], cur = '';
+    for (var i = 0; i < t.length; i++) {
+      if (t[i] === '\\' && t[i + 1] === '|') { cur += '|'; i++; continue; }
+      if (t[i] === '|') { cells.push(cur.trim()); cur = ''; continue; }
+      cur += t[i];
+    }
+    cells.push(cur.trim());
+    return cells;
+  }
+  function md(text) {
+    var lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    var out = [], para = [], i = 0, inComment = false;
+    function flush() { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } }
+    while (i < lines.length) {
+      var ln = lines[i];
+      if (inComment) { if (ln.indexOf('-->') >= 0) inComment = false; i++; continue; }
+      if (/^\s*<!--/.test(ln)) { flush(); if (ln.indexOf('-->') < 0) inComment = true; i++; continue; }
+      var f = /^\s*(```|~~~)\s*([\w-]*)/.exec(ln);
+      if (f) {
+        flush();
+        var fence = f[1], lang = f[2], buf = [];
+        i++;
+        while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) { buf.push(lines[i]); i++; }
+        i++;
+        var code = buf.join('\n');
+        if (lang === 'mermaid') out.push('<div class="diagram" data-mmd><pre class="mmd-src">' + esc(code) + '</pre></div>');
+        else out.push('<div class="copyrow" style="justify-content:flex-end;margin-bottom:4px">' + copyBtn(code, 'Copy', 'code') + '</div><pre><code>' + esc(code) + '</code></pre>');
+        continue;
+      }
+      var hm = /^(#{1,6})\s+(.*)$/.exec(ln);
+      if (hm) {
+        flush();
+        var lvl = Math.min(6, hm[1].length + 1);
+        if (hm[1].length === 1) { i++; continue; }  // the file's own title: the page already has one
+        out.push('<h' + lvl + '>' + inline(hm[2]) + '</h' + lvl + '>');
+        i++; continue;
+      }
+      if (/^\s*\|/.test(ln) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+        flush();
+        var head = splitRow(ln), rows = [];
+        i += 2;
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(splitRow(lines[i])); i++; }
+        out.push('<div class="scroll"><table><thead><tr>' + head.map(function (c) { return '<th>' + inline(c) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + inline(c) + '</td>'; }).join('') + '</tr>'; }).join('') +
+          '</tbody></table></div>');
+        continue;
+      }
+      var li = /^\s*([-*]|\d+\.)\s+(.*)$/.exec(ln);
+      if (li) {
+        flush();
+        var ordered = /\d/.test(li[1]), items = [];
+        while (i < lines.length) {
+          var m2 = /^\s*([-*]|\d+\.)\s+(.*)$/.exec(lines[i]);
+          if (!m2) break;
+          items.push(m2[2].replace(/^\[( |x)\]\s*/i, function (_, x) { return x.trim() ? '[x] ' : '[ ] '; }));
+          i++;
+        }
+        out.push((ordered ? '<ol>' : '<ul>') + items.map(function (t) { return '<li>' + inline(t) + '</li>'; }).join('') + (ordered ? '</ol>' : '</ul>'));
+        continue;
+      }
+      if (/^\s*(---|\*\*\*)\s*$/.test(ln)) { flush(); i++; continue; }
+      if (!ln.trim()) { flush(); i++; continue; }
+      para.push(ln.trim());
+      i++;
+    }
+    flush();
+    return out.join('\n');
+  }
+
+  // ------------------------------------------------------------------ mermaid (vendored, loaded only when needed)
+  var mmdLoad = null, mmdSeq = 0;
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (!mmdLoad) {
+      mmdLoad = new Promise(function (res, rej) {
+        var s = document.createElement('script');
+        s.src = '/vendor/mermaid.min.js';
+        s.onload = function () { window.mermaid ? res(window.mermaid) : rej(new Error('Mermaid did not load')); };
+        s.onerror = function () { mmdLoad = null; rej(new Error('Mermaid is not available')); };
+        document.head.appendChild(s);
+      });
+    }
+    return mmdLoad;
+  }
+  var mmdTheme = null;
+  function renderMermaid() {
+    var nodes = Array.prototype.slice.call(root.querySelectorAll('[data-mmd]'));
+    if (!nodes.length) return Promise.resolve();
+    var dark = effectiveDark();
+    return loadMermaid().then(function (mermaid) {
+      var theme = dark ? 'dark' : 'neutral';
+      if (mmdTheme !== theme) {
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: theme, fontFamily: 'inherit', flowchart: { htmlLabels: false } });
+        mmdTheme = theme;
+      }
+      var chain = Promise.resolve();
+      nodes.forEach(function (n) {
+        var srcEl = n.querySelector('.mmd-src');
+        var code = srcEl ? srcEl.textContent : n.getAttribute('data-code') || '';
+        if (srcEl) n.setAttribute('data-code', code);
+        var key = theme + '\u0001' + code;
+        chain = chain.then(function () {
+          if (S.mmdCache.has(key)) { n.innerHTML = S.mmdCache.get(key); return; }
+          return mermaid.render('mmd' + (++mmdSeq), code).then(function (r) {
+            S.mmdCache.set(key, r.svg);
+            n.innerHTML = r.svg;
+          }, function (e) {
+            n.innerHTML = '<div class="note">This diagram could not be drawn (' + esc((e && e.message || String(e)).split('\n')[0].slice(0, 160)) + '). Its source:</div><pre>' + esc(code) + '</pre>';
+            document.querySelectorAll('body > [id^="dmmd"], body > svg[id^="mmd"]').forEach(function (x) { x.remove(); });
+          });
+        });
+      });
+      return chain;
+    }, function (e) {
+      nodes.forEach(function (n) {
+        var code = n.getAttribute('data-code') || (n.querySelector('.mmd-src') || {}).textContent || '';
+        n.setAttribute('data-code', code);
+        n.innerHTML = '<div class="note">' + esc(e.message) + '; showing the diagram source.</div><pre>' + esc(code) + '</pre>';
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------ Today
+  function worklogTable(entries) {
+    if (!entries || !entries.length) return '';
+    return '<div class="scroll"><table><thead><tr><th>Start</th><th>Ticket</th><th>Duration</th><th>Description</th></tr></thead><tbody>' +
+      entries.map(function (e, i) {
+        var what = 'for entry ' + (i + 1) + ' (' + e.ticket + ')';
+        return '<tr><td class="nowrap"><div class="copyrow"><span class="mono">' + esc(e.start) + '</span>' + copyBtn(e.start, 'Copy', 'start ' + what) + '</div></td>' +
+          '<td class="key">' + tlink(e.ticket) + (e.manual ? ' <span class="chip">manual</span>' : '') + '</td>' +
+          '<td class="nowrap"><div class="copyrow"><span class="mono">' + esc(e.duration) + '</span>' + copyBtn(e.duration, 'Copy', 'duration ' + what) + '</div></td>' +
+          '<td><div class="copyrow"><span class="val">' + esc(e.description) + '</span>' + copyBtn(e.description, 'Copy', 'description ' + what) + '</div></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function viewToday() {
+    return api('/api/today').then(function (d) {
+      var max = Math.max.apply(null, [1].concat(d.tickets.map(function (t) { return t.minutes; }), d.other.map(function (t) { return t.minutes; })));
+      var saved = d.worklog_saved, pv = d.worklog_preview || {};
+      var wlState = 'Not composed yet', wlDetail = pv.send_at ? 'Composed and sent at ' + pv.send_at : '';
+      if (saved && saved.status) {
+        wlState = { sent: 'Sent', nudged: 'Nudge sent', failed: 'Send failed', composed: 'Composed', none: 'Nothing to send' }[saved.status] || saved.status;
+        wlDetail = saved.sent_at ? 'at ' + fmtTs(saved.sent_at) : (saved.last_error ? saved.last_error : '');
+      }
+      var h = '<h1>Today <span class="sub">' + esc(fmtDay(d.day)) + (d.closed ? ' · closed' : '') + '</span></h1>';
+      if (d.summary) h += '<p class="lede">' + esc(d.summary) + '</p>';
+      h += '<div class="kpis"><div class="kpi"><div class="k">Tracked</div><div class="v">' + fmtMin(d.total_minutes) + '</div><div class="d">' + (d.updated_at ? 'as of ' + fmtTs(d.updated_at) : 'nothing recorded yet') + '</div></div>' +
+        '<div class="kpi"><div class="k">Tickets</div><div class="v">' + d.tickets.length + '</div><div class="d">' + (d.other.length ? d.other.length + ' other group' + (d.other.length > 1 ? 's' : '') : 'no other work') + '</div></div>' +
+        '<div class="kpi"><div class="k">Commits</div><div class="v">' + d.commits + '</div><div class="d">today</div></div>' +
+        '<div class="kpi"><div class="k">Jira worklog</div><div class="v" style="font-size:20px">' + esc(wlState) + '</div><div class="d">' + esc(wlDetail) + '</div></div></div>';
+      var rows = d.tickets.map(function (t) {
+        return '<tr><td class="key">' + tlink(t.key) + '</td><td>' + esc(t.title || '—') + (t.did && t.did.length ? '<div class="muted small">' + esc(t.did[t.did.length - 1]) + '</div>' : '') + '</td>' +
+          '<td class="num">' + fmtMin(t.minutes) + '</td><td class="hide-sm" style="width:22%"><div class="meter" aria-hidden="true"><span style="width:' + Math.round(100 * t.minutes / max) + '%"></span></div></td></tr>';
+      }).join('');
+      h += section('Time per ticket', '<span class="count">so far today</span>', rows ? '<div class="scroll"><table><thead><tr><th>Ticket</th><th>Title</th><th class="num">Time</th><th class="hide-sm"><span class="sr">Share</span></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">No ticket work recorded today yet.</div>');
+      if (d.other.length) {
+        h += section('Other work', '<span class="count">no ticket</span>', '<div class="scroll"><table><thead><tr><th>Repo · branch</th><th class="num">Time</th><th class="hide-sm"><span class="sr">Share</span></th></tr></thead><tbody>' +
+          d.other.map(function (o) { return '<tr><td>' + esc(o.group) + '</td><td class="num">' + fmtMin(o.minutes) + '</td><td class="hide-sm" style="width:22%"><div class="meter" aria-hidden="true"><span style="width:' + Math.round(100 * o.minutes / max) + '%"></span></div></td></tr>'; }).join('') + '</tbody></table></div>');
+      }
+      // tonight's worklog: what was saved (sent / composed) wins; otherwise the live preview
+      var useSaved = saved && saved.entries && saved.entries.length;
+      var entries = useSaved ? saved.entries : (pv.entries || []);
+      var text = useSaved ? saved.text : (pv.text || '');
+      var note = useSaved ? 'Version ' + (saved.version || 1) + (saved.status === 'sent' ? ', sent to Slack' : ', ' + (saved.status || 'saved')) + '.'
+        : (pv.kind === 'message' ? 'Preview of what will be composed' + (pv.send_at ? ' at ' + esc(pv.send_at) : '') + ' from the activity so far. Descriptions are the recorded lines, before the evening condensing.' : '');
+      var inner = '<div class="body">';
+      if (note) inner += '<p class="muted small">' + note + ' Copy each value into Jira; nothing is sent from this page.</p>';
+      if (!entries.length) {
+        var reason = pv.kind === 'nudge' ? 'Nothing tracked yet today.' : (pv.reason ? 'No worklog: ' + esc(pv.reason) + '.' : 'No worklog yet.');
+        inner += '<p>' + reason + '</p>';
+      }
+      inner += '</div>';
+      if (entries.length) inner += worklogTable(entries);
+      if (text) inner += '<details class="block" data-key="today:message" style="margin:var(--s4)"><summary><h2 style="font-size:15px">Full message</h2></summary><div class="body"><div class="copyrow" style="justify-content:flex-end;margin-bottom:4px">' + copyBtn(text, 'Copy message') + '</div><pre>' + esc(text) + '</pre></div></details>';
+      h += section("Tonight's Jira worklog", pv.target ? '<span class="count">target ' + fmtMin(pv.target) + '</span>' : '', inner);
+      return h;
+    });
+  }
+
+  // ------------------------------------------------------------------ Tickets
+  function ticketRow(t) {
+    var c = t.counts || {};
+    return '<tr data-search="' + esc((t.key + ' ' + t.title + ' ' + t.tldr).toLowerCase()) + '"><td class="key">' + tlink(t.key) + '</td>' +
+      '<td>' + esc(t.title || '—') + (t.tldr ? '<div class="muted small">' + esc(t.tldr.length > 180 ? t.tldr.slice(0, 177) + '…' : t.tldr) + '</div>' : '') + '</td>' +
+      '<td class="hide-sm">' + (t.status ? '<span class="chip">' + esc(t.status) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td class="nowrap hide-sm">' + esc(t.last || '—') + '</td><td class="num">' + fmtMin(t.minutes) + '</td>' +
+      '<td class="num hide-sm">' + (c.findings || 0) + '</td><td class="num hide-sm">' + (c.requests || 0) + '</td><td class="hide-sm">' + (c.dbflow ? 'yes' : '<span class="muted">—</span>') + '</td></tr>';
+  }
+  function filterTickets(q) {
+    var ql = (q || '').trim().toLowerCase(), shown = 0;
+    root.querySelectorAll('#ticket-rows tr').forEach(function (tr) {
+      var hit = !ql || tr.getAttribute('data-search').indexOf(ql) >= 0;
+      tr.hidden = !hit; if (hit) shown++;
+    });
+    var c = root.querySelector('#ticket-count');
+    if (c) c.textContent = shown + ' of ' + root.querySelectorAll('#ticket-rows tr').length;
+    var none = root.querySelector('#ticket-none');
+    if (none) none.hidden = shown > 0;
+  }
+  function viewTickets(r) {
+    return api('/api/tickets').then(function (d) {
+      var q = r.params.q || '';
+      var live = root.querySelector('#ticket-search');
+      if (live && S.lastRoute === 'tickets/') q = live.value;
+      var h = '<h1>Tickets</h1><div class="toolbar"><label class="sr" for="ticket-search">Search tickets</label>' +
+        '<input type="search" id="ticket-search" data-key="ticket-search" placeholder="Search by key, title or summary" value="' + esc(q) + '" autocomplete="off">' +
+        '<span class="count" id="ticket-count" aria-live="polite"></span></div>';
+      if (!d.tickets.length) return h + '<div class="empty">No tickets recorded yet.</div>';
+      h += '<section class="block"><div class="scroll"><table><thead><tr><th>Ticket</th><th>Title</th><th class="hide-sm">Status</th><th class="hide-sm">Last</th><th class="num">≈ Time</th><th class="num hide-sm">Findings</th><th class="num hide-sm">Requests</th><th class="hide-sm">DB flow</th></tr></thead><tbody id="ticket-rows">' +
+        d.tickets.map(ticketRow).join('') + '</tbody></table></div><div class="empty" id="ticket-none" hidden>No ticket matches.</div></section>';
+      return h;
+    }).then(function (html) { setTimeout(function () { var i = root.querySelector('#ticket-search'); if (i) filterTickets(i.value); }, 0); return html; });
+  }
+  var KIND = { root_cause: 'root cause', finding: 'finding', how_it_works: 'how it works', fix: 'fix', decision: 'decision', config: 'config',
+    repro_test: 'repro / test', reference: 'reference', blocker: 'blocker', question: 'question', todo: 'todo' };
+  function viewTicket(r) {
+    var key = r.arg;
+    return api('/api/tickets/' + encodeURIComponent(key)).then(function (t) {
+      var h = '<div class="crumbs"><a href="#/tickets">Tickets</a> / ' + esc(t.key) + '</div>';
+      h += '<h1>' + esc(t.key) + (t.title ? ' <span class="sub">' + esc(t.title) + '</span>' : '') + '</h1>';
+      h += '<dl class="meta">' +
+        (t.status ? '<dt>Status</dt><dd>' + esc(t.status) + '</dd>' : '') +
+        (t.repos.length ? '<dt>Repos</dt><dd>' + esc(t.repos.join(', ')) + '</dd>' : '') +
+        (t.branches.length ? '<dt>Branches</dt><dd class="mono">' + esc(t.branches.join(', ')) + '</dd>' : '') +
+        '<dt>Active</dt><dd>' + esc(t.first || '—') + ' → ' + esc(t.last || '—') + '</dd><dt>≈ Time</dt><dd>' + fmtMin(t.minutes) + '</dd></dl>';
+      if (t.tldr) h += '<p class="lede"><strong>TL;DR</strong> ' + esc(t.tldr) + '</p>';
+      if (t.problem) h += '<p class="lede">' + esc(t.problem) + '</p>';
+      // findings
+      var f = t.findings.filter(function (i) { return i.kind !== 'todo' && i.kind !== 'question'; });
+      var open = t.findings.filter(function (i) { return i.kind === 'todo' || i.kind === 'question'; });
+      function item(i) {
+        return '<li class="finding"><div><span class="chip">' + esc(KIND[i.kind] || i.kind || 'note') + '</span> <span class="t">' + esc(i.title) + '</span></div>' +
+          (i.detail ? '<div class="d">' + esc(i.detail) + '</div>' : '') +
+          '<div class="m">' + esc(i.date || '') + (i.time ? ' ' + esc(i.time) : '') + (i.confidence ? ' · ' + esc(i.confidence) : '') + (i.evidence && i.evidence.length ? ' · ' + esc([].concat(i.evidence).slice(0, 2).join('; ')) : '') + '</div></li>';
+      }
+      h += block('t:findings', 'Findings', f.length, f.length ? '<ul class="plain">' + f.map(item).join('') + '</ul>' : '<div class="empty">Nothing recorded yet.</div>');
+      if (open.length) h += block('t:open', 'Open questions and todos', open.length, '<ul class="plain">' + open.map(item).join('') + '</ul>');
+      // requests
+      var rq = t.requests;
+      var ri = '';
+      if (rq.steps.length) {
+        if (rq.setup) ri += '<div class="body"><p class="muted small">Run these in Git Bash from the data home; the first block loads base URLs and secrets from bruno/.env.</p><div class="copyrow" style="justify-content:flex-end;margin-bottom:4px">' + copyBtn(rq.setup, 'Copy', 'setup') + '</div><pre><code>' + esc(rq.setup) + '</code></pre></div>';
+        ri += '<ul class="plain">' + rq.steps.map(function (s) {
+          return '<li><div class="step-head"><strong>' + esc(s.n) + '. ' + esc(s.name) + '</strong>' + (s.method ? '<span class="method">' + esc(s.method) + '</span>' : '') +
+            (s.url ? '<span class="url">' + esc(s.url) + '</span>' : '') + '<span class="spacer"></span>' + copyBtn(s.curl, 'Copy as curl', 'for step ' + s.n) + '</div>' +
+            '<div class="small muted" style="margin-bottom:6px">Expected: ' + esc(s.expected || '2xx') + (s.owner === 'user' ? ' · yours' : '') + (s.executed === false ? ' · not yet executed' : '') +
+            (s.critical_fields && s.critical_fields.length ? ' · critical: ' + esc(s.critical_fields.join(', ')) : '') + '</div>' +
+            '<details data-key="t:curl:' + esc(s.n) + '"><summary class="small">curl</summary><pre><code>' + esc(s.curl) + '</code></pre></details></li>';
+        }).join('') + '</ul>';
+        ri += '<div class="body small muted">' + (rq.dropped ? rq.dropped + ' other captured calls left out. ' : '') + (rq.bruno_folder ? 'Bruno folder: <span class="mono">' + esc(rq.bruno_folder) + '</span> ' + copyBtn(rq.bruno_folder, 'Copy path') : '') + '</div>';
+      } else {
+        ri = '<div class="empty">No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '') + '.</div>';
+      }
+      h += block('t:requests', 'Saved requests', rq.steps.length, ri);
+      // db flow
+      var df = t.dbflow;
+      h += block('t:dbflow', 'DB flow', df.markdown ? null : 'none', df.markdown ? '<div class="body md">' + md(df.markdown) + '</div>' : '<div class="empty">No DB flow traced yet.</div>');
+      // queries
+      h += block('t:queries', 'Queries', t.queries.length, t.queries.length ? '<ul class="plain">' + t.queries.map(function (q) {
+        return '<li><div class="step-head"><strong>' + esc(q.purpose || 'Query') + '</strong><span class="muted small">' + esc([q.date, q.time].filter(Boolean).join(' ')) + ' · ' + esc([q.dialect, q.kind].filter(Boolean).join(' · ')) + '</span><span class="spacer"></span>' + copyBtn(q.text, 'Copy', 'query') + '</div>' +
+          (q.tables && q.tables.length ? '<div class="small muted" style="margin-bottom:6px">Tables: ' + q.tables.map(function (x) { return '<code>' + esc(x) + '</code>'; }).join(', ') + '</div>' : '') +
+          (q.revealed ? '<div class="small" style="margin-bottom:6px">Revealed: ' + esc(q.revealed) + '</div>' : '') +
+          '<pre><code>' + esc(q.text) + '</code></pre></li>';
+      }).join('') + '</ul>' : '<div class="empty">No queries recorded.</div>', t.queries.length <= 6);
+      // artifacts
+      h += block('t:artifacts', 'Artifacts', t.artifacts.length, t.artifacts.length ? '<div class="scroll"><table><thead><tr><th>Date</th><th>Artifact</th><th class="hide-sm">Kind</th><th>Purpose</th><th class="num hide-sm">Versions</th></tr></thead><tbody>' +
+        t.artifacts.map(function (a) {
+          return '<tr><td class="nowrap">' + esc(a.last || a.date || '') + '</td><td>' + esc(a.name) + (a.path ? '<div>' + copyBtn(a.path, 'Copy path', a.name) + '</div>' : '') + '</td><td class="hide-sm">' + esc(a.kind || '') + '</td><td>' + esc(a.purpose || '') + '</td><td class="num hide-sm">' + esc(a.versions || 1) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<div class="empty">No artifacts filed.</div>');
+      // timeline
+      if (t.timeline.length) h += block('t:timeline', 'Timeline', t.timeline.length + ' days', '<div class="scroll"><table><thead><tr><th>Day</th><th class="num">Time</th><th>What</th></tr></thead><tbody>' +
+        t.timeline.map(function (d) { return '<tr><td class="nowrap">' + esc(d.day) + '</td><td class="num">' + fmtMin(d.minutes) + '</td><td>' + esc(d.line) + '</td></tr>'; }).join('') + '</tbody></table></div>', false);
+      var paths = Object.keys(t.paths || {});
+      if (paths.length) h += block('t:paths', 'Files', paths.length, '<ul class="plain">' + paths.map(function (k) {
+        return '<li class="copyrow"><span class="chip">' + esc(k) + '</span><span class="val mono small">' + esc(t.paths[k]) + '</span>' + copyBtn(t.paths[k], 'Copy path', k) + '</li>';
+      }).join('') + '</ul>', false);
+      return h;
+    }, function (e) {
+      if (e.status === 404) return '<div class="crumbs"><a href="#/tickets">Tickets</a> / ' + esc(key) + '</div><h1>' + esc(key) + '</h1><div class="empty">Nothing recorded for this ticket.</div>';
+      throw e;
+    });
+  }
+
+  // ------------------------------------------------------------------ Timesheet
+  function viewTimesheet(r) {
+    var period = r.params.period === 'month' ? 'month' : 'week';
+    return api('/api/timesheet?period=' + period).then(function (d) {
+      var h = '<h1>Timesheet</h1><div class="toolbar"><div class="seg" role="group" aria-label="Group by">' +
+        '<button type="button" data-period="week" aria-pressed="' + (period === 'week') + '">ISO week</button>' +
+        '<button type="button" data-period="month" aria-pressed="' + (period === 'month') + '">Month</button></div>' +
+        '<a class="btn" href="/api/timesheet.csv?period=' + period + '" download>Download CSV</a>' +
+        '<span class="muted small">Hours from recorded activity plus time logged by hand.</span></div>';
+      if (!d.periods.length) return h + '<div class="empty">No days recorded yet.</div>';
+      var ps = d.periods.slice().reverse();
+      var grand = ps.reduce(function (a, p) { return a + (d.totals[p] || 0); }, 0);
+      h += '<section class="block"><div class="scroll"><table><thead><tr><th>Ticket</th><th class="hide-sm">Title</th>' + ps.map(function (p) { return '<th class="num">' + esc(p) + '</th>'; }).join('') + '<th class="num">Total</th></tr></thead><tbody>' +
+        d.rows.map(function (row) {
+          return '<tr><td class="key">' + (row.ticket ? tlink(row.ticket) : '<span class="muted">—</span>') + '</td><td class="hide-sm">' + esc(row.title || '') + '</td>' +
+            ps.map(function (p) { var m = row.minutes[p] || 0; return '<td class="num">' + (m ? fmtMin(m) : '<span class="muted">·</span>') + '</td>'; }).join('') +
+            '<td class="num"><strong>' + fmtMin(row.total) + '</strong></td></tr>';
+        }).join('') + '</tbody><tfoot><tr><td>Total</td><td class="hide-sm"></td>' + ps.map(function (p) { return '<td class="num">' + fmtMin(d.totals[p] || 0) + '</td>'; }).join('') + '<td class="num">' + fmtMin(grand) + '</td></tr></tfoot></table></div></section>';
+      var KINDW = { leave: 'Leave', half_day: 'Half day', holiday: 'Holiday', workday: 'Extra workday' };
+      h += section('Leave and holidays', '<span class="count">' + d.calendar.length + '</span>', d.calendar.length ? '<div class="scroll"><table><thead><tr><th>Date</th><th>Kind</th><th>Note</th></tr></thead><tbody>' +
+        d.calendar.map(function (c) { return '<tr><td class="nowrap">' + esc(fmtDay(c.date)) + '</td><td>' + esc(KINDW[c.kind] || c.kind) + '</td><td>' + esc(c.name || '') + '</td></tr>'; }).join('') + '</tbody></table></div>'
+        : '<div class="empty">None in this range. Tell Claude "I was on leave on …" or add a <code>leave:</code> line to inbox.md.</div>');
+      if (d.manual.length) h += section('Time logged by hand', '<span class="count">' + d.manual.length + '</span>', '<div class="scroll"><table><thead><tr><th>Date</th><th>Ticket</th><th class="num">Time</th><th>Note</th></tr></thead><tbody>' +
+        d.manual.map(function (m) { return '<tr><td class="nowrap">' + esc(m.date) + (m.start ? ' ' + esc(m.start) : '') + '</td><td class="key">' + (m.ticket ? tlink(m.ticket) : '') + '</td><td class="num">' + fmtMin(m.minutes) + '</td><td>' + esc(m.text || '') + '</td></tr>'; }).join('') + '</tbody></table></div>');
+      return h;
+    });
+  }
+
+  // ------------------------------------------------------------------ Health
+  function card(title, st, big, lines) {
+    return '<div class="card"><h2>' + esc(title) + ' ' + st + '</h2><div class="big">' + big + '</div>' + (lines || []).filter(Boolean).map(function (l) { return '<p>' + l + '</p>'; }).join('') + '</div>';
+  }
+  function viewHealth() {
+    return api('/api/status').then(function (s) {
+      var h = '<h1>Health <span class="sub">' + esc(fmtDay(s.day)) + '</span></h1>';
+      if (s.paused) h += '<div class="banner" role="status"><strong>Paused.</strong> Capture is paused; nothing new is recorded until you resume.</div>';
+      var hk = s.hooks.minutes_ago;
+      var g = '<div class="grid">';
+      g += card('Hooks', hk == null ? state('bad', 'No events') : hk <= 24 * 60 ? state('ok', 'Firing') : state('warn', 'Quiet'),
+        hk == null ? '—' : esc(ago(hk)), [s.hooks.last_event ? 'Last captured event ' + fmtTs(s.hooks.last_event) : 'No hook event captured yet']);
+      var tk = s.tick.minutes_ago;
+      g += card('Background tick', tk == null ? state('bad', 'Never ran') : tk <= 15 ? state('ok', 'Running') : tk <= 60 ? state('warn', 'Late') : state('bad', 'Stopped'),
+        tk == null ? '—' : esc(ago(tk)), [s.tick.last_tick ? 'Last tick ' + fmtTs(s.tick.last_tick) : '', s.tick.last_tick_ok ? 'Last good tick ' + fmtTs(s.tick.last_tick_ok) : '']);
+      var pu = s.push;
+      g += card('Push', !pu.remote_set ? state('off', 'Off') : pu.error ? state('bad', 'Failing') : pu.minutes_ago == null ? state('warn', 'Not yet') : state('ok', 'OK'),
+        pu.minutes_ago == null ? '—' : esc(ago(pu.minutes_ago)), [!pu.remote_set ? 'No remote configured; everything stays on this machine.' : '', pu.error ? esc(pu.error) : '', pu.last_commit ? 'Last commit ' + fmtTs(pu.last_commit) : '']);
+      var sl = s.slack, last = (sl.recent || [])[0];
+      var slState = sl.enabled === false ? state('off', 'Off') : sl.status === 'not_connected' || (!sl.configured && !last) ? state('off', 'Not connected')
+        : sl.send_warning ? state('bad', 'Failing') : last && last.status === 'failed' ? state('warn', 'Retrying') : last && (last.status === 'sent' || last.status === 'nudged') ? state('ok', 'Sent') : state('off', 'Waiting');
+      g += card('Slack worklog', slState, last ? esc(last.day) + ' · ' + esc(last.status || '—') : '—',
+        [sl.send_at ? 'Sends at ' + esc(sl.send_at) : '', last && last.sent_at ? 'Sent ' + fmtTs(last.sent_at) : '', sl.send_warning ? esc(sl.send_warning) : '', last && last.last_error ? esc(last.last_error) : '',
+          sl.status === 'not_connected' || (!sl.configured && !last) ? "Slack isn't connected; the worklog is still composed into the daily file." : '']);
+      var mc = s.mcp;
+      g += card('MCP today', state(mc.budget && mc.calls_today >= mc.budget ? 'warn' : 'ok', mc.calls_today + (mc.budget ? ' / ' + mc.budget : '') + ' jobs'),
+        esc((mc.tokens_in_today || 0).toLocaleString()) + ' <span class="muted small">in</span> · ' + esc((mc.tokens_out_today || 0).toLocaleString()) + ' <span class="muted small">out</span>',
+        ['Tokens today across MCP jobs and the Slack send', mc.cost_today ? 'Est. cost $' + esc(mc.cost_today) : '', mc.last_skip_reason ? 'Last skip: ' + esc(mc.last_skip_reason) : '']);
+      var td = s.today || {};
+      g += card('Recorder today', (td.errors || 0) ? state('warn', td.errors + ' errors') : state('ok', 'No errors'),
+        esc(td.sessions != null ? td.sessions + ' sessions' : '—'), [td.extracted != null ? td.extracted + ' extracted' : '', td.cost_usd != null ? 'Est. usage $' + esc(td.cost_usd) : '', 'Errors all time: ' + esc(s.errors_total || 0)]);
+      g += '</div>';
+      h += g;
+      var servers = mc.servers || [];
+      var conf = (mc.configured || []).map(function (c) { return '<tr><td>' + esc(c.role === 'database' ? 'Database MCP' : 'Jira') + '</td><td class="mono">' + esc(c.server || '—') + '</td><td>' + (c.enabled ? state('ok', 'Enabled') : state('off', 'Off')) + '</td></tr>'; }).join('');
+      h += section('MCP servers', '<span class="count">from the last background jobs</span>',
+        (servers.length ? '<div class="scroll"><table><thead><tr><th>Server</th><th>Status</th><th>Last job</th><th>At</th></tr></thead><tbody>' + servers.map(function (x) {
+          var ok = x.status === 'connected';
+          return '<tr><td class="mono">' + esc(x.server) + '</td><td>' + (ok ? state('ok', 'Connected') : state('bad', x.status || 'unknown')) + '</td><td class="mono small">' + esc(x.job) + '</td><td class="nowrap">' + fmtTs(x.at) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<div class="empty">No MCP job has run yet.</div>') +
+        (conf ? '<div class="body small muted" style="padding-bottom:0">Configured for background jobs</div><div class="scroll"><table><thead><tr><th>Role</th><th>Server</th><th>Jobs</th></tr></thead><tbody>' + conf + '</tbody></table></div>' : '') +
+        (Object.keys(mc.offline || {}).length ? '<div class="body small">' + Object.keys(mc.offline).map(function (k) { return '<div><span class="chip">offline</span> ' + esc(k) + ': ' + esc(mc.offline[k]) + '</div>'; }).join('') + '</div>' : ''));
+      if ((s.warnings || []).length) h += section('Warnings', '<span class="count">' + s.warnings.length + '</span>', '<ul class="plain">' + s.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
+      h += section('Recent errors', '<span class="count">' + s.errors.length + '</span>', s.errors.length ? '<ul class="plain errlist">' + s.errors.slice().reverse().map(function (e) { return '<li><span class="chip">' + esc(e.source) + '</span> ' + esc(e.text) + '</li>'; }).join('') + '</ul>' : '<div class="empty">No recent errors.</div>');
+      var ds = s.dashboard || {};
+      h += '<p class="muted small">Dashboard ' + esc(ds.version || '') + ' · pid ' + esc(ds.pid || '') + ' · port ' + esc(ds.port || '') + ' · started ' + fmtTs(ds.started_at) + ' · data home <span class="mono">' + esc(s.home) + '</span></p>';
+      return h;
+    });
+  }
+
+  // ------------------------------------------------------------------ live updates: poll the change cursor
+  function poll() {
+    if (document.hidden) return;
+    api('/api/changes').then(function (c) {
+      var moved = S.cursor !== null && c.cursor !== S.cursor;
+      S.cursor = c.cursor;
+      if (moved) render(false).then(function () { updatedAt = new Date(); showUpdated(); });
+    }, function () { live.textContent = 'Offline: the dashboard server is not answering'; });
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+  setInterval(poll, 10000);
+
+  if (!location.hash) { try { history.replaceState(null, '', '#/today'); } catch (e) {} }
+  render(true).then(function () { updatedAt = new Date(); showUpdated(); poll(); });
+})();
+</script>
+</body>
+</html>

@@ -1,9 +1,9 @@
-"""Worklog agent. Run by the hidden scheduled task "WorklogAgent" (at logon + every 5 min).
+"""Chitragupta agent. Run by the hidden scheduled task "Chitragupta" (at logon + every 5 min) through the launcher.
 
-    agent.py tick [--force]   one pass: ingest -> extract -> sources -> close days -> render -> commit -> push
-    agent.py loop             fallback launcher: tick every 5 minutes forever (single instance via lock)
-    agent.py render [--all]   re-render markdown from data/
-    agent.py status           print health.json
+    agent tick [--force]   one pass: ingest -> extract -> sources -> close days -> render -> commit -> push
+    agent loop             fallback launcher: tick every 5 minutes forever (single instance via locks/loop.lock)
+    agent render [--all]   re-render markdown from data/
+    agent status           print health.json
 """
 import datetime as _dt
 import json
@@ -24,14 +24,17 @@ from .redact import redact  # noqa: E402
 from .store import Store  # noqa: E402
 
 LOCK_STALE_S = 30 * 60
+LOCK_WAIT_S = 300  # how long CLI commands that change state wait for a running tick
+LOCK_POLL_S = 10
+LOOP_INTERVAL_S = 300
 BLOCK_GAP_MIN = 20
 
 
 # --------------------------------------------------------------------------- lock
 
 class Lock:
-    def __init__(self):
-        self.path = common.wl("locks", "agent.lock")
+    def __init__(self, name="agent.lock"):
+        self.path = common.wl("locks", name)
         self.fd = None
 
     def acquire(self):
@@ -51,10 +54,31 @@ class Lock:
                 return False
         return False
 
+    def acquire_wait(self, wait_s=None, poll_s=None):
+        """acquire(), retrying for up to wait_s seconds (default LOCK_WAIT_S) while a tick holds the lock."""
+        wait_s = LOCK_WAIT_S if wait_s is None else wait_s
+        poll_s = LOCK_POLL_S if poll_s is None else poll_s
+        deadline = time.time() + wait_s
+        while True:
+            if self.acquire():
+                return True
+            left = deadline - time.time()
+            if left <= 0:
+                return False
+            time.sleep(max(0.01, min(poll_s, left)))
+
+    def refresh(self):
+        """Keep a long-held lock from looking stale."""
+        try:
+            os.utime(self.path)
+        except OSError:
+            pass
+
     def release(self):
         try:
             if self.fd is not None:
                 os.close(self.fd)
+                self.fd = None
             os.remove(self.path)
         except OSError:
             pass
@@ -984,20 +1008,25 @@ def cmd_worklog(cmd, args):
     if cmd != "worklog-send":
         os.environ["CHITRAGUPTA_MCP_MANUAL"] = os.environ["WORKLOG_MCP_MANUAL"] = "1"
     if cmd == "worklog-show":  # read-only preview: no Jira call unless --jira, nothing saved or sent
-        a = Agent()
-        day = pos[0] if pos else common.workday(common.now(), a.cfg)
-        res = a.jwl.compose(day, common.workday(common.now(), a.cfg), use_jira="--jira" in args,
-                            until=common.now() if day == common.workday(common.now(), a.cfg) else None)
-        print(res.get("text") or "(no message for %s: %s)" % (day, res.get("reason")))
-        if "--jira" in args:
-            save_state(a)
-        return 0
+        use_jira = "--jira" in args
+        lock = Lock() if use_jira else None  # --jira saves health/state: never alongside a tick
+        if lock and not lock.acquire_wait():
+            print("agent busy; try again")
+            return 1
+        try:
+            a = Agent()
+            day = pos[0] if pos else common.workday(common.now(), a.cfg)
+            res = a.jwl.compose(day, common.workday(common.now(), a.cfg), use_jira=use_jira,
+                                until=common.now() if day == common.workday(common.now(), a.cfg) else None)
+            print(res.get("text") or "(no message for %s: %s)" % (day, res.get("reason")))
+            if use_jira:
+                save_state(a)
+            return 0
+        finally:
+            if lock:
+                lock.release()
     lock = Lock()
-    for _ in range(30):
-        if lock.acquire():
-            break
-        time.sleep(10)
-    else:
+    if not lock.acquire_wait():
         print("agent busy; try again")
         return 1
     a = None
@@ -1029,7 +1058,7 @@ def cmd_worklog(cmd, args):
             print(a.jobs.link_map(common.workday(common.now(), a.cfg)))
         elif cmd == "mcp-ensure":
             mcpjobs.ensure_files(a.cfg)
-            slack.ensure_config()
+            slack.ensure_config(a.cfg)
             from . import envmap
             print(json.dumps(envmap.build(a.cfg), indent=1))
         a.store.save()
@@ -1044,6 +1073,26 @@ def cmd_worklog(cmd, args):
         lock.release()
 
 
+def cmd_loop(max_ticks=None, interval=None, sleep=time.sleep):
+    """Fallback launcher (Startup folder): tick every 5 minutes. Only one loop runs: a second one exits at once."""
+    loop = Lock("loop.lock")
+    if not loop.acquire():
+        print("an agent loop is already running")
+        return 0
+    interval = LOOP_INTERVAL_S if interval is None else interval
+    try:
+        n = 0
+        while max_ticks is None or n < max_ticks:
+            loop.refresh()
+            cmd_tick()  # takes the agent lock itself
+            n += 1
+            if max_ticks is None or n < max_ticks:
+                sleep(interval)
+        return 0
+    finally:
+        loop.release()
+
+
 def main(argv):
     cmd = argv[0] if argv else "tick"
     if cmd in ("worklog-show", "worklog-send", "slack-discover", "jira-card", "schema-card", "qa-trace", "link-map",
@@ -1052,9 +1101,7 @@ def main(argv):
     if cmd == "tick":
         return cmd_tick(force="--force" in argv)
     if cmd == "loop":
-        while True:
-            cmd_tick()
-            time.sleep(300)
+        return cmd_loop()
     if cmd == "render":
         cmd_render("--all" in argv)
         return 0

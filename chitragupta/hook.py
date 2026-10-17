@@ -5,6 +5,8 @@ Usage (exec form, from ~/.claude/settings.json, through the launcher):
     pythonw.exe run.py hook user-prompt|post-tool|stop|session-end   (async)
 
 Rules: never call claude, never print except SessionStart output, always exit 0.
+Until setup has run (plugin.is_set_up), SessionStart prints one "not set up" line and every other event exits
+without writing anything. Once set up, SessionStart also starts the detached maintenance process (plugin.py).
 """
 import json
 import os
@@ -124,6 +126,13 @@ def _session_start_output(cfg, common, ev, inp):
             parts.append(ctx)
     if warn:
         parts.append(warn)
+    try:
+        from . import plugin
+        reminder = plugin.mcp_reminder()
+    except Exception:
+        reminder = ""
+    if reminder:
+        parts.append(reminder)
     out = {"hookEventName": "SessionStart"}
     if parts:
         out["additionalContext"] = common.truncate("\n\n".join(parts), 9500)
@@ -150,6 +159,19 @@ def main():
     if common.internal():
         return
     event = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+    from . import plugin
+    if not plugin.is_set_up():
+        if event == "session-start":
+            plugin.write_not_set_up()
+        return
+    try:
+        _capture(event, common)
+    finally:
+        if event == "session-start":
+            plugin.after_session_start()
+
+
+def _capture(event, common):
     if os.path.exists(common.wl("PAUSED")):
         return
     inp = _read_stdin()
@@ -236,6 +258,9 @@ if __name__ == "__main__":
         try:
             import traceback
             from . import common as _common
+            from . import plugin as _plugin
+            if not _plugin.is_set_up():
+                raise SystemExit  # nothing is written before setup
             base = _common.home()
             os.makedirs(os.path.join(base, ".worklog", "logs"), exist_ok=True)
             with open(os.path.join(base, ".worklog", "logs", "hook-errors.log"), "a", encoding="utf-8") as f:
