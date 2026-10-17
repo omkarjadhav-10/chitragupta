@@ -525,7 +525,9 @@ STUB = textwrap.dedent("""
         def log_message(self, *a):
             pass
     class S(HTTPServer):
-        allow_reuse_address = False
+        # Like our server: on Linux a TIME_WAIT left by a socket WITHOUT SO_REUSEADDR blocks the next bind
+        # for 60 s even when the new socket sets it.
+        allow_reuse_address = os.name != "nt"
     S(("127.0.0.1", port), H).serve_forever()
 """)
 
