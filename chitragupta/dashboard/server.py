@@ -315,11 +315,16 @@ def make_server(port, cfg=None):
 
 def serve(port, cfg=None, ready=None):
     """Serve until /api/shutdown or Ctrl+C. Returns 0, or 3 when the port is already taken."""
-    try:
-        srv = make_server(port, cfg)
-    except OSError as e:
-        log("port %s is taken (%s); another dashboard or app holds it" % (port, e))
-        return 3
+    deadline = time.monotonic() + 3.0  # a replaced server may still be releasing the port
+    while True:
+        try:
+            srv = make_server(port, cfg)
+            break
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                log("port %s is taken (%s); another dashboard or app holds it" % (port, e))
+                return 3
+            time.sleep(0.1)
     srv.write_token()
     log("serving %s %s on http://127.0.0.1:%d/ (pid %d, home %s)" % (APP, VERSION, srv.port, os.getpid(), srv.home))
     if ready:
