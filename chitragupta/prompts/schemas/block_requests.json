@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ticket": {
+      "type": "string"
+    },
+    "scenario": {
+      "type": "string"
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "headers": {
+            "type": [
+              "object",
+              "array"
+            ]
+          },
+          "expected": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "critical_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "url"
+        ]
+      }
+    }
+  },
+  "required": [
+    "ticket",
+    "requests"
+  ]
+}

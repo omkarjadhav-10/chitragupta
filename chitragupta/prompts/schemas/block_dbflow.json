@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ticket": {
+      "type": "string"
+    },
+    "overview": {
+      "type": "string"
+    },
+    "data_flow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string"
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "select",
+              "insert",
+              "update",
+              "delete",
+              "upsert",
+              "merge",
+              "proc"
+            ]
+          },
+          "table": {
+            "type": "string"
+          },
+          "columns_read": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "columns_written": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "change": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "column"
+              ]
+            }
+          },
+          "via": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "likely",
+              "hypothesis"
+            ]
+          }
+        },
+        "required": [
+          "component",
+          "operation",
+          "table",
+          "evidence"
+        ]
+      }
+    },
+    "table_relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fk",
+              "join",
+              "logical"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ]
+      }
+    }
+  },
+  "required": [
+    "ticket",
+    "data_flow"
+  ]
+}

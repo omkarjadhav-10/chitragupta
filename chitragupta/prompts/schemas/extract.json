@@ -1,0 +1,746 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "activity_summary": {
+      "type": "string"
+    },
+    "ticket_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string"
+          },
+          "title_hint": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string",
+            "enum": [
+              "branch",
+              "prompt",
+              "commit",
+              "content"
+            ]
+          }
+        },
+        "required": [
+          "ticket",
+          "title_hint",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "finding",
+              "root_cause",
+              "how_it_works",
+              "fix",
+              "decision",
+              "config",
+              "error",
+              "repro_test",
+              "reference",
+              "todo",
+              "question",
+              "blocker"
+            ]
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "detail": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "likely",
+              "hypothesis"
+            ]
+          },
+          "time": {
+            "type": "string"
+          },
+          "updates": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "ticket",
+          "title",
+          "detail",
+          "evidence",
+          "confidence",
+          "time",
+          "updates"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "queries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dialect": {
+            "type": "string",
+            "enum": [
+              "postgresql",
+              "sqlserver",
+              "mongodb",
+              "mysql",
+              "other"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "ddl",
+              "data_fix"
+            ]
+          },
+          "revealed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "dialect",
+          "text",
+          "purpose",
+          "tables",
+          "kind",
+          "revealed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "db": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "key_columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "db",
+          "purpose",
+          "key_columns",
+          "relations",
+          "ticket"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "apis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "host_or_service": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound",
+              "third-party",
+              "internal",
+              "unknown"
+            ]
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "request_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "response_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "auth_type": {
+            "type": "string"
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "method",
+          "path",
+          "host_or_service",
+          "direction",
+          "purpose",
+          "request_fields",
+          "response_fields",
+          "auth_type",
+          "ticket"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "integrations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "enum": [
+              "integration engine",
+              "HL7",
+              "FHIR",
+              "carrier API",
+              "other"
+            ]
+          },
+          "artifact": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "system",
+          "artifact",
+          "notes",
+          "ticket"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "role",
+          "changed",
+          "ticket"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "api_calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "claude_session",
+              "bruno",
+              "http_file",
+              "inbox"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "response_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "worked",
+              "failed",
+              "unknown"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "auth",
+              "setup",
+              "trigger",
+              "verify",
+              "cleanup",
+              "exploratory"
+            ]
+          },
+          "scenario": {
+            "type": "string"
+          },
+          "critical_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expected": {
+            "type": "string"
+          },
+          "auth_mechanism": {
+            "type": "string",
+            "enum": [
+              "bearer",
+              "cookie",
+              "api_key",
+              "basic",
+              "none"
+            ]
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "at",
+          "source",
+          "method",
+          "url",
+          "headers",
+          "body",
+          "status",
+          "response_keys",
+          "outcome",
+          "role",
+          "scenario",
+          "critical_fields",
+          "expected",
+          "auth_mechanism",
+          "pinned",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "data_flow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scenario": {
+            "type": "string"
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "select",
+              "insert",
+              "update",
+              "delete",
+              "upsert",
+              "merge",
+              "proc"
+            ]
+          },
+          "table": {
+            "type": "string"
+          },
+          "columns_read": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "columns_written": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "change": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "column",
+                "change",
+                "condition"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "JPA/EF entity",
+              "repository",
+              "native SQL",
+              "stored proc",
+              "DB trigger",
+              "integration engine DB writer",
+              "other"
+            ]
+          },
+          "transaction": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "likely",
+              "hypothesis"
+            ]
+          }
+        },
+        "required": [
+          "ticket",
+          "scenario",
+          "step",
+          "trigger",
+          "component",
+          "operation",
+          "table",
+          "columns_read",
+          "columns_written",
+          "via",
+          "transaction",
+          "evidence",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "table_relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fk",
+              "join",
+              "logical"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "from",
+          "to",
+          "kind",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "doc",
+              "html",
+              "diagram",
+              "payload",
+              "query",
+              "request",
+              "script",
+              "export",
+              "screenshot",
+              "document",
+              "link"
+            ]
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "ticket",
+          "kind",
+          "purpose"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "worklog_lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "required": [
+          "ticket",
+          "line"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "time_entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "minutes": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "date",
+          "start",
+          "minutes",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "activity_summary",
+    "ticket_links",
+    "items",
+    "queries",
+    "tables",
+    "apis",
+    "integrations",
+    "files",
+    "api_calls",
+    "data_flow",
+    "table_relations",
+    "artifacts",
+    "worklog_lines",
+    "time_entries"
+  ],
+  "additionalProperties": false
+}

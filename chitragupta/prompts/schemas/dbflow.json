@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "overview": {
+      "type": "string"
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "data_flow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string"
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "select",
+              "insert",
+              "update",
+              "delete",
+              "upsert",
+              "merge",
+              "proc"
+            ]
+          },
+          "table": {
+            "type": "string"
+          },
+          "columns_read": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "columns_written": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "column": {
+                  "type": "string"
+                },
+                "change": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "column",
+                "change",
+                "condition"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "via": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "likely",
+              "hypothesis"
+            ]
+          }
+        },
+        "required": [
+          "scenario",
+          "step",
+          "trigger",
+          "component",
+          "operation",
+          "table",
+          "columns_read",
+          "columns_written",
+          "via",
+          "evidence",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "table_relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fk",
+              "join",
+              "logical"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string"
+          },
+          "column": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "change": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "change",
+                "condition",
+                "evidence",
+                "confidence"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "table",
+          "column",
+          "versions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "overview",
+    "scenarios",
+    "data_flow",
+    "table_relations",
+    "conflicts",
+    "unknowns"
+  ],
+  "additionalProperties": false
+}

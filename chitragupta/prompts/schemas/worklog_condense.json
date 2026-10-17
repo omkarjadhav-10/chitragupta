@@ -1,0 +1,1 @@
+{"type": "object", "properties": {"descriptions": {"type": "array", "items": {"type": "object", "properties": {"i": {"type": "integer"}, "text": {"type": "string"}}, "required": ["i", "text"], "additionalProperties": false}}}, "required": ["descriptions"], "additionalProperties": false}

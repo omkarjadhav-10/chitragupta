@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "day_summary": {
+      "type": "string"
+    },
+    "per_ticket": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string"
+          },
+          "what_i_did": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tldr": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "status_inferred": {
+            "type": "string",
+            "enum": [
+              "investigating",
+              "in_progress",
+              "blocked",
+              "fix_ready",
+              "done"
+            ]
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ticket",
+          "what_i_did",
+          "tldr",
+          "problem",
+          "status_inferred",
+          "next_steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "standup": {
+      "type": "object",
+      "properties": {
+        "yesterday": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "today": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "yesterday",
+        "today",
+        "blockers"
+      ],
+      "additionalProperties": false
+    },
+    "open_todos": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "day_summary",
+    "per_ticket",
+    "standup",
+    "open_todos"
+  ],
+  "additionalProperties": false
+}
