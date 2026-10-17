@@ -87,7 +87,14 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 2px; box-s
 .alert li a { display: inline-block; padding: 2px 0; min-height: 24px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-s); color: var(--ink-2); padding: 4px 8px; border-radius: var(--r-control); text-decoration: none; min-height: 30px; white-space: nowrap; }
 .pill:hover { background: var(--surface); }
-.pill.ok .ic { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); } .pill.off .ic { color: var(--ink-3); }
+.pill-ic { position: relative; display: inline-flex; color: var(--ink-2); margin-right: 5px; }
+.pill-badge { position: absolute; right: -6px; bottom: -5px; display: grid; place-items: center; width: 11px; height: 11px; border-radius: 50%;
+  color: var(--surface); box-shadow: 0 0 0 2px var(--canvas); }
+.pill-badge .ic { width: 8px; height: 8px; stroke-width: 3.6; }
+.pill.ok .pill-badge { background: var(--ok); } .pill.off .pill-badge { background: var(--ink-3); }
+.pill.warn .pill-badge { background: var(--warn); } .pill.bad .pill-badge { background: var(--bad); }
+.pill.off .pill-ic > .ic { opacity: .7; }
+.pill.warn, .pill.bad { color: var(--ink); }
 .desk { display: grid; grid-template-columns: var(--nav-w) var(--rail-w) minmax(0, 1fr); gap: var(--s3); padding: 0 var(--s4) var(--s4); min-height: calc(100vh - var(--top-h)); }
 .desk.no-rail { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
 .desk.labels { --nav-w: 172px; }

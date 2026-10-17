@@ -16,26 +16,35 @@ import { SetupPage } from './pages/setup.js';
 import { SettingsPage } from './pages/settings.js';
 
 // ------------------------------------------------------------------ top bar
+// Top-bar status: one pill per service, its own icon plus a small state badge (✓ on · – off · ! needs a look), so the
+// state never depends on colour alone. The words are the tooltip and the accessible name.
 function statusPills(s) {
   if (!s) return [];
   const pills = [];
   const hk = s.hooks && s.hooks.minutes_ago;
-  pills.push(s.paused ? { kind: 'warn', icon: 'warn', text: 'Capture paused' }
-    : hk != null && hk <= 24 * 60 ? { kind: 'ok', icon: 'ok', text: 'Capture on' } : { kind: 'warn', icon: 'warn', text: 'Capture quiet' });
+  pills.push(Object.assign({ svc: 'capture' }, s.paused ? { kind: 'warn', text: 'Capture paused' }
+    : hk != null && hk <= 24 * 60 ? { kind: 'ok', text: 'Capture on' } : { kind: 'warn', text: 'Capture quiet' }));
   const sl = s.slack || {};
-  pills.push(sl.enabled === false || sl.status === 'off' ? { kind: 'off', icon: 'off', text: 'Slack off' }
-    : sl.status === 'not_connected' || !sl.configured ? { kind: 'off', icon: 'off', text: 'Slack not connected' }
-      : sl.send_warning ? { kind: 'bad', icon: 'bad', text: 'Slack failing' } : { kind: 'ok', icon: 'ok', text: 'Slack on' });
+  pills.push(Object.assign({ svc: 'chat' }, sl.enabled === false || sl.status === 'off' ? { kind: 'off', text: 'Slack off' }
+    : sl.status === 'not_connected' || !sl.configured ? { kind: 'off', text: 'Slack not connected' }
+      : sl.send_warning ? { kind: 'bad', text: 'Slack failing' } : { kind: 'ok', text: 'Slack on' }));
   const mc = s.mcp || {};
   const live = (mc.live && (mc.live.servers || mc.live.rows)) || [];
   (mc.configured || []).forEach((c) => {
-    const name = c.role === 'database' ? 'Database' : 'Jira';
-    if (!c.enabled) { pills.push({ kind: 'off', icon: 'off', text: name + ' off' }); return; }
+    const name = c.role === 'database' ? 'Database MCP' : 'Jira MCP';
+    const svc = c.role === 'database' ? 'db' : 'tickets';
+    if (!c.enabled) { pills.push({ svc, kind: 'off', text: name + ' off' }); return; }
     const hit = live.find((x) => (x.name || x.server) === c.server) || (mc.servers || []).find((x) => x.server === c.server);
     const st = hit ? (hit.status || '') : '';
-    pills.push(st === 'connected' ? { kind: 'ok', icon: 'ok', text: name } : { kind: 'bad', icon: 'bad', text: name + (st ? ' ' + st : ' unknown') });
+    pills.push(st === 'connected' ? { svc, kind: 'ok', text: name + ' connected' } : { svc, kind: 'bad', text: name + (st ? ' ' + st : ' unknown') });
   });
   return pills;
+}
+const BADGE = { ok: 'check', off: 'dash', warn: 'alert', bad: 'alert' };
+function Pill({ p }) {
+  return html`<a class=${'pill ' + p.kind} href="#/health" title=${p.text} aria-label=${p.text}>
+    <span class="pill-ic" aria-hidden="true"><${Icon} name=${p.svc} size=${18} /><span class="pill-badge"><${Icon} name=${BADGE[p.kind] || 'alert'} size=${8} /></span></span>
+    <span class="lbl" aria-hidden="true">${p.text}</span></a>`;
 }
 function TopBar() {
   const st = useApi(EXPORT ? null : '/api/status');
@@ -48,8 +57,8 @@ function TopBar() {
     <button type="button" class="cmd" onClick=${() => paletteOpen.set(true)} aria-haspopup="dialog" aria-keyshortcuts="Control+K">
       <${Icon} name="search" size=${16} /><span>Type a ticket, a table, an API, or a command</span><kbd>Ctrl K</kbd></button>
     <div class="top-right">
-      ${conn === 'offline' ? html`<a class="pill bad" href="#/health"><${Icon} name="bad" size=${15} /><span class="lbl">Dashboard offline</span></a>` : null}
-      ${pills.map((p) => html`<a class=${'pill ' + p.kind} href="#/health" title=${p.text}><${Icon} name=${p.icon} size=${15} /><span class="lbl">${p.text}</span></a>`)}
+      ${conn === 'offline' ? html`<${Pill} p=${{ svc: 'system', kind: 'bad', text: 'Dashboard offline' }} />` : null}
+      ${pills.map((p) => html`<${Pill} key=${p.text} p=${p} />`)}
       <button type="button" class="btn quiet icon" title=${'Theme: ' + theme} onClick=${() => setTheme(next)} aria-label=${'Theme: ' + theme + '. Switch to ' + next}>
         <${Icon} name=${theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'system'} size=${16} /></button>
     </div>
