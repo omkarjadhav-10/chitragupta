@@ -842,6 +842,12 @@ def main(argv):
         res = use_database(pos[0], force="--force" in rest)
         print(json.dumps(res, indent=1) if as_json else res["detail"])
         return 0 if res["ok"] else 1
+    if cmd == "slack-test":  # one short DM to yourself; touches no worklog or timesheet state
+        from . import slack
+        text = "Chitragupta test message: Slack is connected (sent %s)." % common.now().strftime("%Y-%m-%d %H:%M")
+        res = slack.send(common.load_config(), text, {})
+        print("sent" if res.get("ok") else "not sent: %s" % res.get("error"))
+        return 0 if res.get("ok") else 1
     if cmd == "reminders":
         pos = [a for a in rest if not a.startswith("--")]
         if not pos or pos[0] not in ("on", "off"):

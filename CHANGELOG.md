@@ -28,7 +28,7 @@ The first release. It takes an existing standalone worklog engine and makes it t
   - the nightly backup
 - **Commands:** `/cg:today`, `/cg:ticket`, `/cg:timesheet`, `/cg:trace`, `/cg:log`, `/cg:pause`, `/cg:dashboard`, `/cg:setup` and `/cg:doctor`. They are explicit-only and backed by a read-only `cli` module; only `log` and `pause` write anything.
 - **The `chitragupta` recall skill.** Claude invokes it on its own. Setup installs it to `~/.claude/skills/chitragupta/`, along with a CLAUDE.md block between `<!-- chitragupta:start -->` and `<!-- chitragupta:end -->`.
-- **`/cg:setup`** (`setup check|apply|mcp-status|add-slack|slack-user|use-database|reminders`).
+- **`/cg:setup`** (`setup check|apply|mcp-status|add-slack|slack-user|slack-test|use-database|reminders`).
   - It is idempotent and never changes recorded data.
   - It checks requirements and detects ticket prefixes, repos and Bruno collections from recent sessions.
   - It merges config without dropping keys.

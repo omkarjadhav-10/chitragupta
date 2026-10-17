@@ -97,6 +97,12 @@ py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" setup slack-user [you@acme.
 
 It looks up your Slack user ID and the send tool, and stores both in config. Sends then reuse the token from that sign-in. Each send is one short `claude -p` call that is allowed to use only the send tool.
 
+To check it end to end, send yourself one short test DM (nothing else changes):
+
+```
+py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" setup slack-test
+```
+
 The claude.ai Slack connector and any Slack server in your user scope are **not** used by background jobs.
 
 ## Connecting Jira (optional)

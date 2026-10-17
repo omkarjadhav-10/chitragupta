@@ -45,7 +45,7 @@ Report what it did in a few lines. If it fails, show the error and stop.
 
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup mcp-status --json`
 
-- **Slack** (the 20:00 Jira-worklog DM). If missing, offer `setup add-slack`: it adds Slack's hosted MCP for background jobs only (not to their global config) and prints a one-time browser sign-in — walk them through it. When signed in, run `setup slack-user` to store their Slack user ID. Without Slack the evening worklog is still composed and saved in the daily note, just not sent.
+- **Slack** (the 20:00 Jira-worklog DM). If missing, offer `setup add-slack`: it adds Slack's hosted MCP for background jobs only (not to their global config) and prints a one-time browser sign-in — walk them through it. When signed in, run `setup slack-user` to store their Slack user ID, then offer `setup slack-test` (one short DM to themselves) to confirm it works. Without Slack the evening worklog is still composed and saved in the daily note, just not sent.
 - **Jira** (`mcp-atlassian`): used for ticket titles and to subtract time already logged in Jira. If it reports the official Atlassian remote server, say it is present but not supported by v0.1.0 jobs. Without Jira, titles come from branch names.
 - **Database MCP** (QA worked examples in DB flows, schema facts): if candidate servers are listed, ask which one (or none), then `setup use-database <server>`. Never pick one for them.
 
