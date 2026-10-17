@@ -9,9 +9,11 @@ import datetime as dt
 import io
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 import zipfile
 from contextlib import redirect_stdout
 
@@ -454,3 +456,48 @@ class ToolMapTests(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeLookupTests(unittest.TestCase):
+    """The scheduled task has no per-shell PATH: claude must be found in a stable place."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cg-claude-")
+        self._env = {k: os.environ.get(k) for k in ("APPDATA", "FNM_DIR", "NVM_SYMLINK", "USERPROFILE", "HOME")}
+        os.environ["APPDATA"] = os.path.join(self.tmp, "Roaming")
+        os.environ["USERPROFILE"] = os.environ["HOME"] = os.path.join(self.tmp, "user")
+        for k in ("FNM_DIR", "NVM_SYMLINK"):
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def touch(self, *parts):
+        p = os.path.join(*parts)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").close()
+        return p
+
+    def test_fnm_default_alias_found(self):
+        from chitragupta import extract
+        exe = self.touch(os.environ["APPDATA"], "fnm", "aliases", "default", *extract._CC_BIN)
+        self.assertIn(exe, extract.claude_candidates())
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(extract.resolve_claude({"paths": {}}), [exe])
+
+    def test_missing_configured_path_falls_back(self):
+        from chitragupta import extract
+        exe = self.touch(os.environ["APPDATA"], "npm", *extract._CC_BIN)
+        cfg = {"paths": {"claude": os.path.join(self.tmp, "gone", "claude.exe")}}
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(extract.resolve_claude(cfg), [exe])
+
+    def test_shell_only_path_is_flagged(self):
+        from chitragupta import extract
+        self.assertTrue(extract.unstable(r"C:\u\AppData\Local\fnm_multishells\123_456\claude.exe"))
+        self.assertFalse(extract.unstable(r"C:\u\AppData\Roaming\fnm\aliases\default\claude.exe"))

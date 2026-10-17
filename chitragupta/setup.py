@@ -79,11 +79,17 @@ def environment(cfg=None):
     rows.append({"name": "git", "ok": ok, "detail": d if ok else "git not found: %s" % d})
     rows.append({"name": "windows", "ok": os.name == "nt", "detail": "Windows" if os.name == "nt" else
                  "not Windows: the scheduled task is Windows-only"})
+    from . import extract
     exe = _claude_exe(cfg)
     if exe:
         ok, d = _version_of(exe + ["--version"])
+        d = "%s (%s)" % (d, exe[-1])
+        if extract.unstable(exe[-1]):
+            ok, d = False, d + " — this path only exists in the current shell; the scheduled task can't use it"
     else:
-        ok, d = False, "claude executable not found"
+        ok, d = False, ("claude executable not found where the scheduled task can reach it. Fix one of: "
+                        "run `claude install` (native, %%USERPROFILE%%\\.local\\bin), repair the npm global copy, "
+                        "or set paths.claude in %s" % common.wl("config.json"))
     rows.append({"name": "claude", "ok": ok, "detail": d})
     py = shutil.which("py")
     if py:
@@ -534,6 +540,13 @@ def merged_config(existing, home, prefixes=(), repos=(), bruno=(), github_remote
     for k, v in found.items():
         if not paths.get(k) and v:
             paths[k] = v.replace("\\", "/")
+    # claude: record a path the scheduled task can reach; replace one that no longer exists
+    # (an in-place Claude Code update can move it).
+    if not (paths.get("claude") and os.path.isfile(paths["claude"])):
+        from . import extract
+        exe = extract.resolve_claude({"paths": {}})
+        if exe and len(exe) == 1 and not extract.unstable(exe[0]):
+            paths["claude"] = exe[0].replace("\\", "/")
     return cfg
 
 

@@ -18,20 +18,50 @@ PER_EVENT = {"prompt": 4000, "message": 6000, "command": 600, "http": 3000, "con
 # --------------------------------------------------------------------------- claude executable
 
 
+_CC_BIN = ("node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")
+
+
+def claude_candidates():
+    """Places a claude.exe lives that don't depend on the current shell (the scheduled task has no
+    per-session PATH): the native install, then Node version managers' stable links, then npm global."""
+    appdata = os.environ.get("APPDATA", "")
+    cands = [os.path.join(os.path.expanduser("~"), ".local", "bin", "claude.exe"),
+             os.path.join(appdata, "fnm", "aliases", "default", *_CC_BIN)]  # fnm default alias
+    if os.environ.get("FNM_DIR"):
+        cands.append(os.path.join(os.environ["FNM_DIR"], "aliases", "default", *_CC_BIN))
+    if os.environ.get("NVM_SYMLINK"):  # nvm-windows' active-version link
+        cands.append(os.path.join(os.environ["NVM_SYMLINK"], *_CC_BIN))
+    cands.append(os.path.join(appdata, "npm", *_CC_BIN))
+    return cands
+
+
+def stable_path(p):
+    """fnm puts a per-shell folder on PATH (fnm_multishells\\<pid>_…) that is gone once the shell exits;
+    resolve it to the real Node version folder, which outlives the shell."""
+    if "fnm_multishells" in p.replace("/", "\\").lower():
+        real = os.path.realpath(p)
+        if os.path.isfile(real) and "fnm_multishells" not in real.lower():
+            return real
+    return p
+
+
+def unstable(p):
+    """True for a path that only exists inside one shell session."""
+    return bool(p) and "fnm_multishells" in p.replace("/", "\\").lower()
+
+
 def resolve_claude(cfg=None):
     """A real executable (never a .cmd shim): configured path, native claude.exe, or None."""
     cfg = cfg or common.load_config()
     p = (cfg.get("paths") or {}).get("claude")
     if p and os.path.isfile(p) and not p.lower().endswith((".cmd", ".bat")):
         return [p]
-    cands = [os.path.join(os.path.expanduser("~"), ".local", "bin", "claude.exe"),
-             os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")]
-    for c in cands:
+    for c in claude_candidates():
         if os.path.isfile(c):
             return [c]
     which = shutil.which("claude.exe")
     if which:
-        return [which]
+        return [stable_path(which)]
     # npm install without native binary: node + cli script
     node = shutil.which("node.exe")
     for js in glob.glob(os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules", "@anthropic-ai", "claude-code", "cli*.js")):
