@@ -88,6 +88,8 @@ class DashboardServer(ThreadingHTTPServer):
                 self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             except OSError:
                 pass
+        elif os.name != "nt":  # POSIX SO_REUSEADDR only rebinds over TIME_WAIT; it never allows two listeners
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         # TCPServer.server_bind, without HTTPServer's getfqdn() (slow on some Windows machines)
         self.socket.bind(self.server_address)
         self.server_address = self.socket.getsockname()
