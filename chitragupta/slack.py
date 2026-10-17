@@ -11,23 +11,28 @@ from . import common
 from . import mcpjobs
 
 DEFAULT_URL = "https://mcp.slack.com/mcp"  # the public Slack MCP server
+# Slack's hosted MCP has no dynamic client registration; Slack publishes this client id (and callback
+# port) for connecting Claude: https://docs.slack.dev/ai/slack-mcp-server/connect-to-claude/
+DEFAULT_CLIENT_ID = "1601185624273.8899143856786"
+DEFAULT_CALLBACK_PORT = 3118
 
 
 def server_def(cfg=None):
     """Slack server entry from jira_worklog.slack.server {url, client_id, callback_port}. Without a client_id the
-    OAuth block already in .worklog/mcp/slack.json (if any) is kept; there is no default client id."""
+    OAuth block already in .worklog/mcp/slack.json is kept, else Slack's published client id for Claude is used."""
     cfg = cfg if cfg is not None else common.load_config()
     sc = (((cfg.get("jira_worklog") or {}).get("slack") or {}).get("server")) or {}
     srv = {"type": "http", "url": sc.get("url") or DEFAULT_URL}
+    old = ((common.read_json(common.wl("mcp", "slack.json"), {}) or {}).get("mcpServers") or {}).get("slack") or {}
     if sc.get("client_id"):
         oauth = {"clientId": str(sc["client_id"])}
         if sc.get("callback_port"):
             oauth["callbackPort"] = int(sc["callback_port"])
         srv["oauth"] = oauth
+    elif isinstance(old.get("oauth"), dict):
+        srv["oauth"] = old["oauth"]
     else:
-        old = ((common.read_json(common.wl("mcp", "slack.json"), {}) or {}).get("mcpServers") or {}).get("slack") or {}
-        if isinstance(old.get("oauth"), dict):
-            srv["oauth"] = old["oauth"]
+        srv["oauth"] = {"clientId": DEFAULT_CLIENT_ID, "callbackPort": int(sc.get("callback_port") or DEFAULT_CALLBACK_PORT)}
     return srv
 
 

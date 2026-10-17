@@ -697,10 +697,9 @@ def add_slack(client_id=None, callback_port=None):
             out["error"] = "claude executable not found"
             return out
         args = exe + ["mcp", "add", "--transport", "http", "--scope", "local"]
-        if client_id:
-            args += ["--client-id", str(client_id)]
-        if callback_port:
-            args += ["--callback-port", str(callback_port)]
+        from . import slack as _slack  # Slack's MCP has no dynamic client registration: always send a client id
+        args += ["--client-id", str(client_id or _slack.DEFAULT_CLIENT_ID),
+                 "--callback-port", str(callback_port or _slack.DEFAULT_CALLBACK_PORT)]
         args += ["slack", srv.get("url") or SLACK_URL]
         rc, so, se = _run(args, cwd=sender, timeout=60)
         if rc != 0:

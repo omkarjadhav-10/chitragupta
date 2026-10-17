@@ -501,3 +501,22 @@ class ClaudeLookupTests(unittest.TestCase):
         from chitragupta import extract
         self.assertTrue(extract.unstable(r"C:\u\AppData\Local\fnm_multishells\123_456\claude.exe"))
         self.assertFalse(extract.unstable(r"C:\u\AppData\Roaming\fnm\aliases\default\claude.exe"))
+
+
+class SlackServerDefaultTests(Isolated, unittest.TestCase):
+    def setUp(self):
+        self.isolate()
+
+    def tearDown(self):
+        self.restore()
+
+    def test_published_client_id_when_nothing_configured(self):
+        from chitragupta import slack
+        srv = slack.server_def({})
+        self.assertEqual(srv["url"], "https://mcp.slack.com/mcp")
+        self.assertEqual(srv["oauth"], {"clientId": slack.DEFAULT_CLIENT_ID, "callbackPort": 3118})
+
+    def test_configured_client_id_wins(self):
+        from chitragupta import slack
+        srv = slack.server_def({"jira_worklog": {"slack": {"server": {"client_id": "1.2", "callback_port": 4000}}}})
+        self.assertEqual(srv["oauth"], {"clientId": "1.2", "callbackPort": 4000})
