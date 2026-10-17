@@ -2,6 +2,7 @@
 notes/
 # Development copy of a data home
 .dev-home/
+.dev-*/
 .dev-throwaway/
 .dev-user/
 .dev-claude/
