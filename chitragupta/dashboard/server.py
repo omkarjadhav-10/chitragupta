@@ -64,7 +64,7 @@ def token_path(port):
 def log(msg):
     """The dashboard's own log (stdout/stderr go to <home>/.worklog/logs/dashboard.log when spawned)."""
     try:
-        sys.stderr.write("%s %s\n" % (common.now_iso(), msg))
+        sys.stderr.write("%s [%d] %s\n" % (common.now_iso(), os.getpid(), msg))
         sys.stderr.flush()
     except Exception:  # noqa: BLE001
         pass

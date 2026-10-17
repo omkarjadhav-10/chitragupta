@@ -597,6 +597,11 @@ class TestDaemon(Isolated, unittest.TestCase):
                     r["log"] = f.read()[-3000:]
             except OSError as e:
                 r["log"] = repr(e)
+            if os.name != "nt":
+                ss = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True)
+                r["listeners"] = [l for l in ss.stdout.splitlines() if ":%d " % self.port in l]
+                r["stub_alive"] = old.poll() is None
+                r["stub_pid"] = old.pid
         self.assertEqual(r["status"], "replaced", r)
         old.wait(10)
         st = dashboard.probe(self.port, 1.5)
