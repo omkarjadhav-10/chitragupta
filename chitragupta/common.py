@@ -113,6 +113,7 @@ DEFAULT_CONFIG = {
     "allow_patterns": [],
     # Example ticket key shown in generated text (daily "unfiled artifacts" hint, README examples).
     "render": {"example_ticket": "ABC-1234"},
+    "reminders": {"mcp": True},  # weekly SessionStart line when Slack/Jira isn't connected
     # MCP jobs are off until configured; the database MCP's server name comes only from the user's config.
     "mcp": {"daily_call_budget": 10, "jira": {"enabled": False}, "database": {"enabled": False, "label": "database MCP"}},
 }

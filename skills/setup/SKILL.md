@@ -51,6 +51,8 @@ Report what it did in a few lines. If it fails, show the error and stop.
 
 Run each of these only after they agree.
 
+If they decline Slack or Jira for good, ask whether to stop the weekly "connect Slack/Jira" reminder; if yes, run `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup reminders off` (`on` turns it back on).
+
 ## 5. Check
 
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor`

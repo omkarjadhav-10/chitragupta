@@ -830,6 +830,20 @@ def main(argv):
         res = use_database(pos[0], force="--force" in rest)
         print(json.dumps(res, indent=1) if as_json else res["detail"])
         return 0 if res["ok"] else 1
+    if cmd == "reminders":
+        pos = [a for a in rest if not a.startswith("--")]
+        if not pos or pos[0] not in ("on", "off"):
+            print("setup reminders on|off", file=sys.stderr)
+            return 2
+        path = common.wl("config.json")
+        if not os.path.isfile(path):
+            print("Chitragupta isn't set up yet (no %s)" % path, file=sys.stderr)
+            return 1
+        cfg = common.read_json(path)
+        cfg.setdefault("reminders", {})["mcp"] = pos[0] == "on"
+        common.write_json(path, cfg)
+        print("weekly reminder to connect Slack/Jira: %s" % pos[0])
+        return 0
     print(__doc__)
     return 2
 

@@ -1,5 +1,7 @@
 """Plugin glue: set-up gating in the hooks, the maintenance spawn, the weekly MCP reminder."""
+import contextlib
 import datetime as dt
+import io
 import json
 import os
 import tempfile
@@ -115,6 +117,16 @@ class ReminderTests(PluginCase):
     def test_quiet_when_connected(self):
         self.cache("connected", "connected")
         self.assertEqual(self.plugin.mcp_reminder(), "")
+
+    def test_switched_off_in_config(self):
+        self.cache("missing", "missing")
+        from chitragupta import setup
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.main(["reminders", "off"]), 0)
+        self.assertEqual(self.plugin.mcp_reminder(), "")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(setup.main(["reminders", "on"]), 0)
+        self.assertIn("Slack and Jira", self.plugin.mcp_reminder())
 
 
 class MaintenanceTests(PluginCase):

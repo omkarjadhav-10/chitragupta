@@ -97,6 +97,8 @@ def _reminder_state():
 def mcp_reminder(now=None):
     """One line for the SessionStart context when Slack or Jira isn't connected, at most once per 7 days.
     Reads the status cache that setup / doctor / maintenance write; never probes anything itself."""
+    if (common.load_config().get("reminders") or {}).get("mcp") is False:  # turned off in /cg:setup
+        return ""
     st = common.read_json(mcp_status_cache())
     if not isinstance(st, dict) or not st:
         return ""
