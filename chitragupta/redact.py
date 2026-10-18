@@ -10,6 +10,8 @@ Secrets become fixed tokens (****, [JWT], [PRIVATE KEY]).
 Modes:
   local   (default) secrets + patient data: everything captured or written locally
   secrets secrets only: QA-environment requests, payloads, responses and query samples (QA data may stay literal)
+  team    local + QA values (known QA ids/values, long digit runs, UUIDs) + JSON payload blocks removed; SQL text,
+          hosts and service names kept: a ticket shared with the team (share.py)
   public  local + QA values (known QA ids/values, QA hosts, long digit runs, UUIDs) + SQL text and JSON payload
           blocks removed: daily files, the Slack message, anything that leaves the machine
 
@@ -265,44 +267,70 @@ def _qa_values():
     return _public_cache["vals"]
 
 
-def _public(text, stats):
-    def hit(name, n=1):
-        if stats is not None and n:
-            stats[name] = stats.get(name, 0) + n
+def _hit(stats, name, n=1):
+    if stats is not None and n:
+        stats[name] = stats.get(name, 0) + n
 
+
+def _blocks(text, stats, sql=True):
+    """Fenced payload blocks (JSON, XML, HL7, HTTP, Bruno, YAML) out; fenced SQL / Mongo too unless sql=False."""
     def fence(m):
         lang, body = (m.group(3) or "").lower(), m.group(4)
         if lang in ("sql", "tsql", "pgsql", "mysql", "mongo", "mongodb") or _SQL_BARE.search(body):
-            hit("public-sql-block")
+            if not sql:
+                return m.group(0)
+            _hit(stats, "public-sql-block")
             return "%s_(query kept in the local notes)_" % m.group(1)
         if lang in ("json", "xml", "hl7", "http", "bru", "yaml", "yml") or body.lstrip().startswith(("{", "[", "<", "MSH|")):
-            hit("public-payload-block")
+            _hit(stats, "public-payload-block")
             return "%s_(payload kept in the local notes)_" % m.group(1)
         return m.group(0)
-    text = _FENCE.sub(fence, text)
-    text, n = _SQL_INLINE.subn("`(query kept locally)`", text)
-    hit("public-sql", n)
-    text, n = _JSON_INLINE.subn("`(payload kept locally)`", text)
-    hit("public-payload", n)
-    text, n = _SQL_BARE.subn("(query kept locally)", text)
-    hit("public-sql", n)
+    return _FENCE.sub(fence, text)
+
+
+def _qa_literals(text, stats, hosts=True, digits=None):
+    """Known QA values, UUIDs and long digit runs shape-masked; QA hosts -> <qa-host> unless hosts=False."""
     for v in _qa_values():
         if v in text:
-            hit("public-qa-value")
+            _hit(stats, "public-qa-value")
             text = text.replace(v, shape(v))
-    for rx, name in ((_QA_HOST, "public-qa-host"), (_UUID, "public-uuid"), (_DIGITS, "public-digits")):
+    rxs = ((_QA_HOST, "public-qa-host"),) if hosts else ()
+    for rx, name in rxs + ((_UUID, "public-uuid"), (digits or _DIGITS, "public-digits")):
         def sub(m, _name=name):
             out = "<qa-host>" if _name == "public-qa-host" else shape(m.group(0))
             if out != m.group(0):
-                hit(_name)
+                _hit(stats, _name)
             return out
         text = rx.sub(sub, text)
     return text
 
 
+def _public(text, stats):
+    text = _blocks(text, stats)
+    text, n = _SQL_INLINE.subn("`(query kept locally)`", text)
+    _hit(stats, "public-sql", n)
+    text, n = _JSON_INLINE.subn("`(payload kept locally)`", text)
+    _hit(stats, "public-payload", n)
+    text, n = _SQL_BARE.subn("(query kept locally)", text)
+    _hit(stats, "public-sql", n)
+    return _qa_literals(text, stats)
+
+
+# Team level: PR and work-item numbers (#12345, !123) stay readable.
+_TEAM_DIGITS = re.compile(r"(?<![\w.:/#!-])\d{5,}(?![\w])")
+
+
+def _team(text, stats):
+    """For the team (share level `team`): payloads and QA values out; SQL text, hosts and service names stay."""
+    text = _blocks(text, stats, sql=False)
+    text, n = _JSON_INLINE.subn("`(payload kept locally)`", text)
+    _hit(stats, "public-payload", n)
+    return _qa_literals(text, stats, hosts=False, digits=_TEAM_DIGITS)
+
+
 def redact(text, stats=None, use_config=True, mode="local"):
-    """Mask secrets and patient data (mode local), secrets only (secrets) or everything that must not leave the
-    machine (public). `stats` (dict) collects rule-hit counts."""
+    """Mask secrets and patient data (mode local), secrets only (secrets), what the team may not see (team) or
+    everything that must not leave the machine (public). `stats` (dict) collects rule-hit counts."""
     if not text or not isinstance(text, str):
         return text
     extra, allow = _config_patterns() if use_config else ([], [])
@@ -331,6 +359,8 @@ def redact(text, stats=None, use_config=True, mode="local"):
             text = rx.sub(lambda m: shape(m.group(0)), text)
     if mode == "public":
         text = _public(text, stats)
+    elif mode == "team":
+        text = _team(text, stats)
     for k, v in protected.items():
         text = text.replace(k, v)
     return text

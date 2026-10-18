@@ -40,7 +40,8 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | Command | What it does |
 |---|---|
 | `/cg:today [YYYY-MM-DD]` | Time per ticket so far today, plus a preview of tonight's Jira-worklog message (nothing is sent) |
-| `/cg:ticket <KEY> [--export [--mode shareable]]` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, branches, file paths; `--export` saves the whole page as one HTML file |
+| `/cg:share <KEY> [sections] [--level team\|public]` | Share picked sections of a ticket with your team as a redacted bundle (preview first; written only when the scan passes); `--notes` lists your team's shared notes. See [docs/sharing.md](docs/sharing.md) |
+| `/cg:ticket <KEY> [--export [--mode team\|shareable]]` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, branches, file paths; `--export` saves the whole page as one HTML file |
 | `/cg:branches <KEY>` | The ticket's branches, PRs, delivery check per target and alerts |
 | `/cg:check [KEY]` | Fetch the watched repos and refresh branches, PRs and the delivery check now |
 | `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy |
