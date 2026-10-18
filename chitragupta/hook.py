@@ -222,7 +222,7 @@ def _capture(event, common):
     if not common.scope_allows(cwd, cfg):
         return
     repo_root = common.find_repo_root(cwd)
-    if common.repo_ignored(repo_root) or (repo_root and common.path_within(repo_root, common.home())):
+    if common.path_ignored(cwd) or (repo_root and common.path_within(repo_root, common.home())):
         return
     from .redact import redact
 

@@ -59,7 +59,7 @@ flowchart LR
 - **The other four events run asynchronously** with windowless `pyw -3`.
 - **Every hook fails open.** Any error is logged and the hook exits 0, so a hook can never break a session.
 
-Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`. The ticket comes from the branch name, else from the prompt. Sessions inside the data home only get time-only events.
+Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`. The ticket comes from the branch name, else from the prompt. Sessions inside the data home only get time-only events. A session is skipped when `.worklog-ignore` sits in its folder or any folder above it, up to the home folder (`common.path_ignored`), so a repo nested in an ignored checkout is skipped too.
 
 ### 2. The tick
 

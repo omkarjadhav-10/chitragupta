@@ -433,5 +433,34 @@ def scope_allows(cwd, cfg):
     return True
 
 
+IGNORE_FILE = ".worklog-ignore"
+_IGNORE_WALK_MAX = 40
+
+
+def path_ignored(path):
+    """True when a `.worklog-ignore` file sits in `path` or in any folder above it, up to and including the user's
+    home folder (never above it), or up to the drive root for paths outside the home folder. So a nested repo
+    inside an ignored checkout (its own git repo, a dev data home…) is ignored too. A few stat calls and no cache:
+    cheap enough for a hook, and a marker added while the tick runs counts at once."""
+    if not path:
+        return False
+    try:
+        d = os.path.abspath(path)
+    except (TypeError, ValueError):
+        return False
+    stop = norm_path(os.path.expanduser("~"))
+    for _ in range(_IGNORE_WALK_MAX):
+        if os.path.exists(os.path.join(d, IGNORE_FILE)):
+            return True
+        if norm_path(d) == stop:
+            return False
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    return False
+
+
 def repo_ignored(repo_root):
-    return bool(repo_root) and os.path.exists(os.path.join(repo_root, ".worklog-ignore"))
+    """A repo (or any folder) is ignored when it, or a folder above it, has `.worklog-ignore` (see path_ignored)."""
+    return bool(repo_root) and path_ignored(repo_root)

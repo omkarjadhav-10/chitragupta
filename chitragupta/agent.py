@@ -222,7 +222,7 @@ class Agent:
                 st["offset"] = new_off
                 continue
             repo_root = common.find_repo_root(cwd)
-            if common.repo_ignored(repo_root):
+            if common.path_ignored(cwd):
                 st["offset"] = new_off
                 continue
             st["offset"], st["captured"] = new_off, True
