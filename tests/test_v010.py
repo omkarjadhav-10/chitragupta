@@ -60,6 +60,8 @@ class Case(Isolated, unittest.TestCase):
     def tearDown(self):
         from chitragupta import agent, common, extract, jiraworklog, slack
         extract.call_claude, slack.send, jiraworklog.slack.send, common.now, agent.LOCK_WAIT_S = self._saved
+        for lk in getattr(self, "_held", []):
+            lk.release()
         self.restore()
 
     def clock(self, day, hh, mm):
@@ -90,7 +92,7 @@ class Case(Isolated, unittest.TestCase):
         from chitragupta import agent
         lk = agent.Lock()
         self.assertTrue(lk.acquire())
-        self.addCleanup(lk.release)
+        self._held = getattr(self, "_held", []) + [lk]  # released in tearDown, while the temp home is still current
         return lk
 
 
