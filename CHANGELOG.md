@@ -25,6 +25,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **`resend:` can be repeated.** Every new copy of a `resend:` line sends the day again (other inbox lines are still read once); `/cg:log resend: <day>` always adds one. Each send, resends included, is kept in the day's history. Migration `inbox-counts` converts the inbox state, backing up `state.json` first.
 
 ### Fixed
+- The date pickers (Today's "Go to a day", the Timesheet month) now show the focus ring on each part, including the browser's calendar button.
 - `agent worklog-show` could make a model call while labelled read-only.
 
 ### Security

@@ -12,7 +12,7 @@ const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/t
   ['ticket-branches', '#/tickets/ABC-1001?tab=branches'], ['ticket-dbflow', '#/tickets/ABC-1001?tab=dbflow'],
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
-  ['settings', '#/settings']];
+  ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders']];
 let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 
@@ -72,12 +72,14 @@ async function launch() {
       const e = document.activeElement;
       if (!e || e === document.body) return null;
       const cs = getComputedStyle(e), r = e.getBoundingClientRect();
-      return { label: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 30), ring: cs.outlineStyle !== 'none', w: r.width, h: r.height };
+      return { label: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 30) || '<' + e.tagName.toLowerCase() + (e.type ? ' ' + e.type : '') + (e.id ? '#' + e.id : '') + '>', ring: cs.outlineStyle !== 'none' || (/^(date|month)$/.test(e.type) && !e.matches(':focus')),  // the browser's own picker button inside the input has focus (styled in app.css)
+        w: r.width, h: r.height };
     }));
   }
   const real = stops.filter(Boolean);
   check(real.length && /Skip to content/.test(real[0].label), 'first Tab stop is the skip link');
-  check(real.every((s) => s.ring), 'focus is visible on every stop');
+  const noRing = real.filter((s) => !s.ring);
+  check(!noRing.length, 'focus is visible on every stop' + (noRing.length ? ' — not on: ' + noRing.map((s) => s.label).join(', ') : ''));
   const small = real.filter((s) => s.w < 24 || s.h < 24);
   check(!small.length, 'every stop is at least 24 × 24 px' + (small.length ? ' — ' + small.map((s) => s.label + ' ' + Math.round(s.w) + '×' + Math.round(s.h)).join(', ') : ''));
   await page.keyboard.press('Control+k');

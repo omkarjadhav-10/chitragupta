@@ -53,6 +53,8 @@ a:hover { text-decoration-thickness: 2px; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
 [tabindex="-1"]:focus { outline: none; }  /* headings and the pane take focus on navigation; no ring for that */
+input[type="date"]:focus, input[type="month"]:focus { outline: 2px solid var(--focus); outline-offset: 2px; }  /* Chrome focuses their inner fields, so :focus-visible never matches */
+input::-webkit-calendar-picker-indicator:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 3px; }
 h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -.005em; margin: 0; }
 h1 { font-size: var(--fs-2xl); line-height: 1.15; }
 h2 { font-size: var(--fs-l); line-height: 1.3; }
