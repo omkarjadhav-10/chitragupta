@@ -57,7 +57,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 | `branching.repos.<repo>.rules` | list | `[]` | `[{"jira_parent": "OPS-*", "strategy": "qa-only"}]`: a ticket whose Jira parent matches uses that strategy. |
 | `branching.repos.<repo>.suffixes` | object | `-qa`, `-uat`, `-on-uat`, `-staging`, `-stg`, `-on-staging`, `-release` | Branch-name endings that name the target (the guard checks them). |
 | `branching.repos.<repo>.remote` | string | `"origin"` | The remote to read and fetch. |
-| `branching.repos.<repo>.pr_source` | string | the host CLI if installed | `"git"` forces PR data from merge commits only. |
+| `branching.repos.<repo>.pr_source` | string | `"auto"` | `auto`: the host CLI if installed, else the host's MCP server (`mcp.git_host`), else merge commits. `"cli"` or `"mcp"`: only that source, else merge commits. `"git"`: merge commits only. |
 | `branching.guard_mode` | `"warn"` \| `"ask"` \| `"off"` | `"warn"` | What the PreToolUse guard does when a branch or PR doesn't fit. |
 | `branching.stale_pr_days` | int | `3` | An open PR older than this raises an alert. |
 | `branching.ignore_tickets` | list | `[]` | Tickets with no branch tracking at all. |
@@ -158,6 +158,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 | `mcp.jira.enabled` | bool | `false` | Run the Jira jobs: ticket cards, and the evening facts used by the worklog. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
+| `mcp.git_host.<provider>` | object | — | `{"server", "enabled"}` for `azure-devops` or `github`: the user-scope MCP server PRs are read through when the host CLI isn't installed. Set by `setup use-git-host <server>`, which allows only that provider's classified PR and branch read tools. |
 | `mcp.database.enabled` | bool | `false` | Run the database jobs: schema cards, QA trace and link map. Set by `setup use-database`. |
 | `mcp.database.server` | string | `""` | The database MCP server's name in your user scope. Nothing runs while this is empty. |
 | `mcp.database.label` | string | `"database MCP"` | How rendered headings name it, for example "Schema facts (database MCP, …)". |

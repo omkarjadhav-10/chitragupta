@@ -1,0 +1,47 @@
+[
+ {
+  "number": 41,
+  "title": "ABC-1001 add order totals",
+  "source": "feature/ABC-1001-x",
+  "target": "qa",
+  "state": "open",
+  "review": "",
+  "created_at": "2026-10-08T09:30:00Z",
+  "merged_at": null,
+  "merge_commit": null,
+  "head": "2222222222222222222222222222222222222222",
+  "head_at_merge": null,
+  "url": "https://github.com/acme-test/shop-api/pull/41",
+  "src": "mcp:github"
+ },
+ {
+  "number": 38,
+  "title": "ABC-1002 fix rounding",
+  "source": "feature/ABC-1002-y",
+  "target": "main",
+  "state": "merged",
+  "review": "",
+  "created_at": "2026-10-08T11:00:00Z",
+  "merged_at": "2026-10-09T08:15:00Z",
+  "merge_commit": "ffffffffffffffffffffffffffffffffffffffff",
+  "head": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "head_at_merge": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "url": "https://github.com/acme-test/shop-api/pull/38",
+  "src": "mcp:github"
+ },
+ {
+  "number": 37,
+  "title": "ABC-1002 first try",
+  "source": "feature/ABC-1002-y",
+  "target": "main",
+  "state": "closed",
+  "review": "",
+  "created_at": "2026-10-07T11:00:00Z",
+  "merged_at": null,
+  "merge_commit": null,
+  "head": "1111111111111111111111111111111111111111",
+  "head_at_merge": null,
+  "url": "https://github.com/acme-test/shop-api/pull/37",
+  "src": "mcp:github"
+ }
+]

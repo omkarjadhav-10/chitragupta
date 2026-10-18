@@ -1,10 +1,11 @@
 """Pull-request data for a work repo, without a model and without storing a token.
 
-Sources, best first: the host's own CLI, signed in by the user (gh / glab / az repos), then the PR merge commits
-on the base branches (git only). Nothing here writes to the repo or the host.
+Sources, best first: the host's own CLI, signed in by the user (gh / glab / az repos), then the host's read-only MCP
+server (hostmcp.py: Azure DevOps, GitHub), then the PR merge commits on the base branches (git only). Nothing here
+writes to the repo or the host.
 
-A PR record: {number, title, source, target, state (draft|open|merged|closed), review, merged_at, merge_commit,
-head (current or final head sha), head_at_merge, url, src (gh|glab|az|merge-commit)}.
+A PR record: {number, title, source, target, state (draft|open|merged|closed), review, created_at, merged_at,
+merge_commit, head (current or final head sha), head_at_merge, url, src (gh|glab|az|mcp:<provider>|merge-commit)}.
 """
 import json
 import os
@@ -54,13 +55,33 @@ def cli_path(cfg, name):
     return shutil.which(name)
 
 
+PR_SOURCES = ("auto", "cli", "mcp", "git")  # branching.repos.<repo>.pr_source ("" / absent = auto)
+
+
+def pref_of(pref):
+    """Configured pr_source -> auto | cli | mcp | git (older spellings of git-only kept)."""
+    p = str(pref or "").strip().lower()
+    if p in ("git", "merge-commit", "none"):
+        return "git"
+    return p if p in PR_SOURCES else "auto"
+
+
 def source_for(cfg, info, pref=None):
-    """Which PR source applies: the configured one, else the host CLI if installed, else merge-commit."""
-    if pref in ("git", "merge-commit", "none"):
+    """Which PR source applies -> gh | glab | az | mcp:<provider> | merge-commit.
+    auto: the host CLI if installed, else the host's MCP server if setup recorded one, else merge commits;
+    cli / mcp: only that one, else merge commits; git: merge commits."""
+    p = pref_of(pref)
+    if p == "git":
         return "merge-commit"
-    cli = {"github": "gh", "gitlab": "glab", "azure": "az"}.get(info.get("host"))
-    if cli and cli_path(cfg, cli):
-        return cli
+    if p in ("auto", "cli"):
+        cli = {"github": "gh", "gitlab": "glab", "azure": "az"}.get(info.get("host"))
+        if cli and cli_path(cfg, cli):
+            return cli
+    if p in ("auto", "mcp"):
+        from . import hostmcp
+        provider, srv = hostmcp.server_for(cfg, info)
+        if srv:
+            return "mcp:" + provider
     return "merge-commit"
 
 

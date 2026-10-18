@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **PR data through a Git host's read-only MCP server** (Azure DevOps, GitHub) when the host CLI isn't installed: `/cg:setup use-git-host <server>` records it and allows only that provider's classified PR and branch read tools; one budgeted job per repo per refresh; `branching.repos.<repo>.pr_source` takes `auto`, `cli`, `mcp` or `git`; Health and Settings show each repo's PR source and its last refresh.
+
+### Fixed
+- GitHub and GitLab repos passed the local folder to `gh` / `glab --repo` instead of `owner/repo`; the host path is now kept apart (`remote_path` in `repo.json`).
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

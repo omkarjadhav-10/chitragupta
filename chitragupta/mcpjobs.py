@@ -1,5 +1,5 @@
 """Read-only MCP harness and the worklog's MCP jobs (Jira cards / evening facts; database-MCP schema cards, QA trace,
-link map).
+link map). The Git-host PR job (hostmcp.py) runs through the same harness.
 
 Every job is one `claude -p` call (haiku, lean flags) with only the server(s) and read tools that job needs:
   --strict-mcp-config --mcp-config <per-job file>   --allowedTools <job reads>   --disallowedTools <server writes>
@@ -84,9 +84,22 @@ def job_config(server, tools, job):
         env["READ_ONLY_MODE"] = "true"
         env["ENABLED_TOOLS"] = ",".join(tools)
         s["env"] = env
+    _harden_git_host(server, s)
     path = os.path.join(common.wl("cache", "mcp"), job + ".json")
     common.write_json(path, {"mcpServers": {server: s}})
     return path, _refs(s)
+
+
+def _harden_git_host(server, s):
+    """A GitHub MCP server also runs in its own read-only mode with only the pull-request toolset (stdio: env;
+    the hosted server: headers). The guard and the allowlist decide either way; this only narrows what loads."""
+    entry = ((common.read_json(os.path.join(mcp_dir(), "allow.json"), {}) or {}).get("servers") or {}).get(server) or {}
+    if entry.get("role") != "git-host" or entry.get("provider") != "github":
+        return
+    if s.get("url"):
+        s.setdefault("headers", {}).update({"X-MCP-Readonly": "true", "X-MCP-Toolsets": "pull_requests"})
+    else:
+        s.setdefault("env", {}).update({"GITHUB_READ_ONLY": "1", "GITHUB_TOOLSETS": "pull_requests"})
 
 
 # --------------------------------------------------------------------------- the call
@@ -364,18 +377,25 @@ def _apply_tool_names(entry, cfg, replace=False):
 
 
 def allow_default(cfg=None):
-    """Default allowlist: the Jira server's tools, plus the database MCP's under its configured name (if any)."""
+    """Default allowlist: the Jira server's tools, plus the database MCP's under its configured name (if any), plus
+    each configured Git-host server with its provider's classified read tools (hostmcp)."""
+    from . import hostmcp
     allow = json.loads(json.dumps(ALLOW_DEFAULT))
     srv = server_name(cfg or {}, "database")
     if srv:
         allow["servers"].setdefault(srv, _database_allow_entry(cfg))
+    for provider, name in hostmcp.configured(cfg or {}).items():
+        allow["servers"].setdefault(name, hostmcp.allow_entry(provider))
     return allow
 
 
 def configured(cfg):
-    """True when some MCP job can run: Jira jobs enabled, or database jobs enabled with a server name. Only then does
-    the daily housekeeping write the guard files (.worklog/mcp/allow.json, readonly-settings.json)."""
-    return enabled(cfg, "jira") or bool(enabled(cfg, "database") and server_name(cfg, "database"))
+    """True when some MCP job can run: Jira jobs enabled, database jobs enabled with a server name, or a Git-host
+    server recorded by setup. Only then does the daily housekeeping write the guard files (.worklog/mcp/allow.json,
+    readonly-settings.json)."""
+    from . import hostmcp
+    return enabled(cfg, "jira") or bool(enabled(cfg, "database") and server_name(cfg, "database")) or \
+        bool(hostmcp.configured(cfg))
 
 
 def mcp_tool(server, tool):
@@ -402,6 +422,9 @@ def ensure_files(cfg):
         entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
         _apply_tool_names(entry, cfg)
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
+    from . import hostmcp
+    for provider, name in hostmcp.configured(cfg).items():  # re-classified every time: only the provider's reads
+        allow.setdefault("servers", {})[name] = hostmcp.allow_entry(provider, allow["servers"].get(name))
     allow["max_rows"] = int((cfg.get("qa_data") or {}).get("max_rows_per_query") or 20)
     common.write_json(ap, allow)
     # Kept for inspection; every job passes the same settings inline (safety.claude.guard_settings, fail-closed).

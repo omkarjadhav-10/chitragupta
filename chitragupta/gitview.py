@@ -355,6 +355,8 @@ def check(src):
 
 def pr_source_text(src):
     return {"gh": "PR info from GitHub (gh)", "glab": "PR info from GitLab (glab)", "az": "PR info from Azure DevOps (az)",
+            "mcp:github": "PR info from GitHub (read-only MCP)",
+            "mcp:azure-devops": "PR info from Azure DevOps (read-only MCP)",
             "merge-commit": "PR info from merge commits (open PRs and reviews unavailable)",
             "test": "PR info from test data"}.get(src or "", "PR info unavailable")
 

@@ -56,7 +56,7 @@ The config lives under `"branching"` in `<home>/.worklog/config.json`:
 | `repos.<repo>.rules` | Per-ticket choices, checked in order. `jira_parent` matches the ticket's Jira parent (from the Jira card job, so no extra call) against a pattern. |
 | `repos.<repo>.suffixes` | Branch-name endings that say where a branch is meant to go. Defaults: `-qa`, `-uat`, `-on-uat`, `-staging`, `-stg`, `-on-staging`, `-release`. The guard uses them. |
 | `repos.<repo>.remote` | Default `origin`. |
-| `repos.<repo>.pr_source` | `git` forces git-only PR data. Otherwise the host CLI is used when it's installed. |
+| `repos.<repo>.pr_source` | `auto` (or absent): the host CLI when it's installed, else the host's read-only MCP server when setup recorded one, else merge commits. `cli` or `mcp`: only that source, else merge commits. `git`: merge commits only. |
 | `guard_mode` | `warn` (default), `ask` or `off`. See [The guard](#the-guard). |
 | `stale_pr_days` | An open PR older than this raises an alert. Default 3. |
 | `ignore_tickets` | Tickets that get no branch tracking at all: no git or host calls, and their records are dropped. |
@@ -108,7 +108,7 @@ For each branch it also tracks: commits not pushed, own commits / how far its pa
 
 ### PRs
 
-The data comes from the host's CLI, signed in with its own login: `gh` (GitHub), `glab` (GitLab), `az repos` (Azure DevOps, with the `azure-devops` extension). No token is stored. Without a CLI, PRs are read from the PR merge commits on the base branches ("Merged PR 812: …", "Merge pull request #812 from …", "See merge request !812"). That shows merged PRs with their merge commit and the head at merge, but not open, closed or draft PRs, nor reviews. The ticket page then says *PR info from merge commits only*.
+The data comes from the host's CLI, signed in with its own login: `gh` (GitHub), `glab` (GitLab), `az repos` (Azure DevOps, with the `azure-devops` extension). No token is stored. Without a CLI, and when `/cg:setup use-git-host <server>` recorded an Azure DevOps or GitHub MCP server, PRs are read through that server: one read-only job per repo per refresh (every due branch in it), with only the read tools setup classified, within the daily MCP budget and keeping the 20:00 calls in reserve; a GitHub server also runs in its own read-only mode. A failed job waits 2 hours before the next try. The ticket page then says *PR info from GitHub (read-only MCP)*. Without either, PRs are read from the PR merge commits on the base branches ("Merged PR 812: …", "Merge pull request #812 from …", "See merge request !812"). That shows merged PRs with their merge commit and the head at merge, but not open, closed or draft PRs, nor reviews. The ticket page then says *PR info from merge commits only*.
 
 Recorded per PR: number, title, source → target, state (draft · open · merged · closed), review state, merged time, merge commit and the head at merge.
 

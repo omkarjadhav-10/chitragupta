@@ -1,4 +1,5 @@
-"""Branches, commits and PRs per ticket, from git and the Git host's CLI (no model calls).
+"""Branches, commits and PRs per ticket, from git and the Git host's CLI (no model calls), or, without a CLI, the
+host's read-only MCP server (one budgeted job per repo per refresh, hostmcp.py).
 
 Per watched repo, under <home>/data/git/<repo>/:
   events.jsonl     append-only: branch creations, checkouts, commits, cherry-picks, merges, pushes, PR links.
@@ -6,7 +7,7 @@ Per watched repo, under <home>/data/git/<repo>/:
                    Kept for good, because git expires reflog entries.
   branches.json    {branch: record}  the ticket branches: parent (and how it was found), link (and how), own commits,
                    pushed / unpushed, ahead / behind, status (active · pr_open · merged · deleted_remote · abandoned)
-  prs.json         {number: PR}  from gh / glab / az, else from the PR merge commits on the base branches
+  prs.json         {number: PR}  from gh / glab / az or the host's MCP, else from the PR merge commits on the bases
   patch-ids.json   {sha: patch-id}  never changes for a sha, so computed once
   repo.json        host, PR source, cursors, last fetch, manual links / abandons / strategy
 Each ticket record gets `git` = {strategy, branches, prs, delivery, alerts} (delivery.py), recomputed when anything moves.
@@ -356,8 +357,9 @@ class Tracker:
     """Runs inside the agent tick (the single writer)."""
 
     def __init__(self, cfg, state, store, now=None, pr_run=None, active_ticket=None, pr_fetch=None, force_fetch=False,
-                 only_tickets=None):
+                 only_tickets=None, health=None):
         self.cfg, self.state, self.store = cfg, state, store
+        self.health = health  # the agent's health.json: the MCP PR source needs it for the daily budget (None: no MCP)
         self.now = now or common.now()
         self.pr_run = pr_run or hosts._run
         self.pr_fetch = pr_fetch  # tests: (repo, branch) -> [PR], stands in for the host CLI
@@ -406,10 +408,14 @@ class Tracker:
             self.maybe_fetch(path, data)
         r = Repo(self.cfg, path, data, self.now)
         info = hosts.remote_info(self.cfg, path, r.remote)  # every refresh: the remote may change
-        if any(meta.get(k) != v for k, v in info.items()) or meta.get("path") != path.replace("\\", "/"):
-            for k in ("host", "org", "project", "repo", "path"):
+        # meta["path"] is the local folder; a GitHub / GitLab "owner/repo" path is kept apart as remote_path
+        host = {k: v for k, v in info.items() if k != "path"}
+        if info.get("path"):
+            host["remote_path"] = info["path"]
+        if any(meta.get(k) != v for k, v in host.items()) or meta.get("path") != path.replace("\\", "/"):
+            for k in ("host", "org", "project", "repo", "remote_path"):
                 meta.pop(k, None)
-            meta.update(info)
+            meta.update(host)
             meta["path"] = path.replace("\\", "/")
             data.touch("meta")
         self.read_reflogs(r)
@@ -753,9 +759,11 @@ class Tracker:
     # ---- PRs
     def refresh_prs(self, r, force=False):
         data, meta = r.data, r.data.meta
-        info = {k: meta.get(k) for k in ("host", "org", "project", "repo", "path")}
+        info = {k: meta.get(k) for k in ("host", "org", "project", "repo")}
+        info["path"] = meta.get("remote_path")  # gh / glab --repo and the GitHub MCP take "owner/repo", not the folder
         src = "test" if self.pr_fetch else hosts.source_for(self.cfg, info, r.conf.get("pr_source"))
         meta["pr_source"] = src
+        meta["pr_source_pref"] = hosts.pref_of(r.conf.get("pr_source"))
         prs = data.prs
         # merge commits on the base branches: always (cheap, git only); they fill in what the CLI can't see
         sig = "|".join("%s=%s" % (ref, r.sha(ref)) for ref in sorted(r.all_base_refs())) + "#" + \
@@ -769,12 +777,14 @@ class Tracker:
             meta["merge_scan_sig"] = sig
             data.touch("prs")
         if src == "merge-commit":
+            meta.pop("pr_error", None)
             data.touch("meta")
             return
         every = settings(self.cfg)["pr_refresh_minutes"] * 60
         active = self.active_tickets()
         checked = meta.setdefault("pr_checked", {})
         win = self.pre_send_window()
+        due = []
         for b, rec in data.branches.items():
             if not rec.get("on_remote") and not rec.get("remote_tip"):
                 continue
@@ -786,11 +796,16 @@ class Tracker:
             last = common.parse_ts(ck.get("at"))
             has_open = any(p.get("source") == b and p.get("state") in ("open", "draft") for p in prs.values())
             pre_send = bool(win and win[0] <= self.now < win[1] and last < win[0])
-            due = force or not last or ck.get("tip") != rec.get("remote_tip") or pre_send or \
-                ((has_open or not any(p.get("source") == b for p in prs.values()))
-                 and (self.now - last).total_seconds() >= every)
-            if not due:
-                continue
+            if force or not last or ck.get("tip") != rec.get("remote_tip") or pre_send or \
+                    ((has_open or not any(p.get("source") == b for p in prs.values()))
+                     and (self.now - last).total_seconds() >= every):
+                due.append(b)
+        if src.startswith("mcp:"):
+            self._prs_via_mcp(r, info, src[4:], due, force, win, every)
+            data.touch("meta")
+            return
+        for b in due:
+            rec = data.branches[b]
             try:
                 got = self.pr_fetch(r, b) if self.pr_fetch else hosts.prs_for_branch(self.cfg, info, src, b, run=self.pr_run)
             except hosts.SourceError as e:
@@ -803,8 +818,53 @@ class Tracker:
             for p in got:
                 self._merge_pr(r, prs, p)
             checked[b] = {"at": common.now_iso(), "tip": rec.get("remote_tip")}
+            meta["pr_refreshed_at"] = common.now_iso()
             data.touch("prs")
         data.touch("meta")
+
+    def _prs_via_mcp(self, r, info, provider, due, force, win, every):
+        """All due branches of this repo in ONE read-only MCP job (hostmcp.fetch_prs), at most once per
+        pr_refresh_minutes per repo (the pre-send window and /cg:check excepted); 2 h back-off after a failed job."""
+        from . import hostmcp, mcpjobs
+        from .kbjobs import OFFLINE_BACKOFF_S
+        data, meta, prs = r.data, r.data.meta, r.data.prs
+        m = meta.setdefault("pr_mcp", {})
+        if not due:
+            return
+        last = common.parse_ts(m.get("at"))
+        failed = common.parse_ts(m.get("failed_at"))
+        pre_send = bool(win and win[0] <= self.now < win[1] and (not last or last < win[0]))
+        if not force and not pre_send:
+            if last and (self.now - last).total_seconds() < every:
+                return
+            if failed and (self.now - failed).total_seconds() < OFFLINE_BACKOFF_S:
+                return
+        if self.health is None:
+            meta["pr_error"] = common.now_iso() + " PRs via MCP run only in the background tick"
+            return
+        known = sorted({int(k) for k, p in prs.items() if str(k).isdigit() and p.get("source") in due and (
+            p.get("state") in ("open", "draft") or (p.get("state") == "merged" and not p.get("merge_commit")))})
+        try:
+            got = hostmcp.fetch_prs(self.cfg, info, provider, due, known, self.health)
+        except hostmcp.Deferred as e:
+            meta["pr_error"] = common.now_iso() + " " + str(e)[:200]
+            return
+        except mcpjobs.JobError as e:
+            meta["pr_error"] = common.now_iso() + " " + str(e)[:200]
+            m["failed_at"] = common.now_iso()
+            common.log("agent", "PRs via MCP for %s: %s" % (r.name, e))
+            return
+        now = common.now_iso()
+        meta.pop("pr_error", None)
+        m.pop("failed_at", None)
+        m.update(at=now, server=got["server"], branches=len(got["branches"]), calls=got["calls"], tools=got["tools"])
+        for b in got["branches"]:
+            for p in got["prs"].get(b) or []:
+                self._merge_pr(r, prs, p)
+            checked = meta.setdefault("pr_checked", {})
+            checked[b] = {"at": now, "tip": (data.branches.get(b) or {}).get("remote_tip")}
+        meta["pr_refreshed_at"] = now
+        data.touch("prs")
 
     def _merge_pr(self, r, prs, p):
         key = str(p["number"])
@@ -844,6 +904,24 @@ class Tracker:
                     and not r.is_ancestor(tip, p["merge_commit"] + "^1"):
                 return b
         return None
+
+
+def pr_source_rows(cfg, repos=None):
+    """Per watched repo: which PR source is in use and when PRs were last refreshed -> [{repo, host, pref, source,
+    label, refreshed_at, error, mcp}] (health.json "pr_sources", for Health and Settings). `repos`: {name: Repo}."""
+    from .gitview import pr_source_text
+    out = []
+    names = sorted(repos) if repos is not None else all_repo_names()
+    for name in names:
+        meta = (repos[name].data if repos is not None else RepoData(name)).meta
+        src = meta.get("pr_source")
+        m = meta.get("pr_mcp") or {}
+        out.append({"repo": name, "host": meta.get("host"), "pref": meta.get("pr_source_pref") or hosts.pref_of(
+            repo_conf(cfg, name).get("pr_source")), "source": src, "label": pr_source_text(src),
+            "refreshed_at": meta.get("pr_refreshed_at") or (meta.get("pr_mcp") or {}).get("at"),
+            "error": meta.get("pr_error"),
+            "mcp": {k: m.get(k) for k in ("server", "at", "calls", "branches", "failed_at") if m.get(k)} or None})
+    return out
 
 
 def _neg(s):
