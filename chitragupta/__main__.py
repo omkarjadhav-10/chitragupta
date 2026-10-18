@@ -9,14 +9,16 @@ import sys
 ENTRY_MODULES = {
     "agent", "hook", "redact", "mcpguard", "bruenv", "install", "uninstall", "migrate",
     "setup", "doctor", "dashboard", "timesheet", "upgrade01", "mermaid_check", "cli", "plugin", "runtime", "safety",
+    "mcp",
 }
+ALIASES = {"mcp": "mcpserver"}  # bin/cg-mcp -> hooks/run.py mcp: the read-only MCP server
 
 
 def run(argv):
     if not argv or argv[0] not in ENTRY_MODULES:
         print("usage: chitragupta <%s> [args…]" % "|".join(sorted(ENTRY_MODULES)), file=sys.stderr)
         return 2
-    mod, rest = argv[0], argv[1:]
+    mod, rest = ALIASES.get(argv[0], argv[0]), argv[1:]
     sys.argv = ["chitragupta." + mod, *rest]
     try:
         runpy.run_module("chitragupta." + mod, run_name="__main__", alter_sys=True)

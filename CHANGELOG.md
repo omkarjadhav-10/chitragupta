@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **Read-only MCP server** (`chitragupta`, started from `bin/cg-mcp`): 8 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`) answer in compact Markdown with file paths, at most 8,000 characters per page. The recall skill uses them before reading files. Chitragupta's own background calls switch the plugin off. See [docs/mcp.md](docs/mcp.md).
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

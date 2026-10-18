@@ -2,6 +2,7 @@
 name: chitragupta
 description: Answer questions from the user's automatic worklog (Chitragupta) at {{HOME}} — what they did on a day or week, everything known about a ticket (findings, root cause, how it works, DB queries, tables, APIs, integrations, files, decisions), standups, timesheets and handover notes; the daily Jira worklog sent to Slack at 20:00 (log extra time or a meeting, leave, half days, holidays, working weekend days, resend or show a day's worklog); replay or run a ticket's saved requests, save requests to the worklog, show or map a ticket's DB flow (which tables and columns change, from what to what), find a ticket's artifacts, and a ticket's branches, PRs and delivery check (did every commit reach release / qa / uat / staging, which PRs are open). Use whenever they mention a ticket ID, ask what they did or found, what we know about something, which tables, APIs or queries were involved, want to replay / save / pin a request, map a DB flow, find an analysis doc or export, ask whether a ticket reached release / qa or which PRs are open, or want a standup, timesheet, weekly summary or handover, say they were on leave / took a half day / worked extra time, or ask a read-only Jira or database question about a ticket — even if they don't say "worklog".
 allowed-tools:
+  - mcp__plugin_cg_chitragupta
   - Read
   - Grep
   - Glob
@@ -41,8 +42,18 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
   in `.worklog/config.json`.
 - `data/` — canonical JSON behind the markdown (useful for exact lookups)
 
+## Ask the worklog's MCP tools first
+When the Chitragupta plugin is loaded, its read-only MCP server (`mcp__plugin_cg_chitragupta__*`) answers most
+questions in one call, in compact Markdown with the file paths to open for detail:
+`search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: findings, requests, queries,
+dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
+`get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name)` ·
+`list_tickets(q?, status?, repo?, since?)` · `get_alerts()`. Long answers end with "more: page=N" — pass `page`.
+Use them before reading files; read the files below only for detail they don't show, or when the tools aren't
+available.
+
 ## How to answer
-1. Search in this order: ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
+1. Search in this order: the MCP tools above → ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
    daily files by date → grep across the folder (ticket keys look like ABC-1234; the prefixes are `ticket_prefixes`
    in `.worklog/config.json`).
 2. Cite the file and date for every fact, e.g. "(tickets/ABC-1234/README.md, 2026-10-14)". Quote queries in

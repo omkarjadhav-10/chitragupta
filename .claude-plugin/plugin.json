@@ -16,5 +16,11 @@
     "jira",
     "journal",
     "dashboard"
-  ]
+  ],
+  "mcpServers": {
+    "chitragupta": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cg-mcp",
+      "args": []
+    }
+  }
 }

@@ -13,6 +13,10 @@ from .. import common
 from .commands import BUILTIN_WRITES
 
 PROFILES = ("none", "mcp", "slack-send", "slack-discover")
+# This plugin (name `cg`, marketplace `chitragupta`) is switched off inside every internal call, so its read-only
+# MCP server never starts there even when a call runs without --strict-mcp-config (which already leaves plugin
+# servers out). The server itself also lists no tools when CHITRAGUPTA_INTERNAL=1.
+OWN_PLUGIN = "cg@chitragupta"
 
 
 def guard_settings(profile, cfg=None):
@@ -25,7 +29,8 @@ def guard_settings(profile, cfg=None):
     py = common.python_exe(cfg)
     hook = {"type": "command", "command": py, "args": [plugin.own_launcher(), "safety", "internal", profile],
             "timeout": 15, "onFailure": "block"}
-    return json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}}, separators=(",", ":"))
+    return json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}, "enabledPlugins": {OWN_PLUGIN: False}},
+                      separators=(",", ":"))
 
 
 def build(exe, prompt, profile, model, system_prompt_file=None, allowed=(), disallowed=(), mcp_config=None,
