@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 - **Settings page with a single config write path.** Every setting the dashboard may change, with validation shared by page and server, a review (now → after saving), history in `settings-history.jsonl` and undo; locked items are shown only. `configstore.py` is now the one way config changes (setup, the engine and the dashboard), with a lock, a backup and history; the engine saves only the keys it changed.
+- **Past days:** `#/day/<date>` shows the message as sent with its send history, the day's branch and PR events and its tickets' alerts, with a date picker; `/cg:dashboard day today|yesterday|-N|YYYY-MM-DD`.
 - **Dashboard write protection:** an allowlist of write routes, each checked for Host, Origin, a per-start page token, JSON, size and rate. First actions: pause/resume capture and the live MCP check.
 
 ### Added

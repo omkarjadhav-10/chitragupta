@@ -22,6 +22,25 @@ def _arg(argv, name, default=None):
     return default
 
 
+def day_arg(s):
+    """(YYYY-MM-DD, None) for YYYY-MM-DD, today, yesterday or -N (days back), else (None, a message saying what works).
+    Days follow the work-day boundary (day_starts_at)."""
+    import datetime as _dt
+    from .. import common
+    s = (s or "").strip().lower()
+    today = _dt.date.fromisoformat(common.workday(common.now(), common.load_config()))
+    if s in ("", "today"):
+        return today.isoformat(), None
+    if s == "yesterday":
+        return (today - _dt.timedelta(days=1)).isoformat(), None
+    if s.startswith("-") and s[1:].isdigit() and int(s[1:]) <= 3650:
+        return (today - _dt.timedelta(days=int(s[1:]))).isoformat(), None
+    try:
+        return _dt.date.fromisoformat(s).isoformat(), None
+    except ValueError:
+        return None, "Not a day: %r. Use YYYY-MM-DD, today, yesterday or -N (for example -3)." % s
+
+
 def main(argv):
     cmd = argv[0] if argv else "status"
     as_json = "--json" in argv
@@ -62,7 +81,16 @@ def main(argv):
             print("port %d is held by another app: %s" % (r["port"], r.get("detail", "")))
         return 0
     if cmd == "open":
-        route = next((a for a in argv[1:] if not a.startswith("--")), "")
+        pos = [a for a in argv[1:] if not a.startswith("--") or (a[1:].isdigit())]  # "-3" is a day, not a flag
+        route = "/".join(pos[:2]) if pos[:1] in (["day"], ["ticket"], ["tickets"]) else (pos[0] if pos else "")
+        if route == "ticket" or route.startswith("ticket/"):
+            route = "tickets" + route[len("ticket"):]
+        if route.startswith("day"):
+            day, err = day_arg(route[3:].lstrip("/ ") or "today")
+            if err:
+                print(err)
+                return 2
+            route = "day/" + day
         r = ensure(timeout=1.5, wait=6.0)
         if r.get("status") not in ("started", "running", "replaced"):
             print("Dashboard not available: %s%s" % (r.get("status"), (" (%s)" % r["detail"]) if r.get("detail") else ""))

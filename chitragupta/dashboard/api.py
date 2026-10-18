@@ -381,7 +381,10 @@ def saved_worklog(day):
     v = vs[-1] if vs else {}
     return {"status": sh.get("status"), "sent_at": sh.get("sent_at"), "attempts": sh.get("attempts"),
             "last_error": sh.get("last_error"), "version": v.get("v"), "text": v.get("text") or "",
-            "target": sh.get("target"), "entries": [_entry(e) for e in sh.get("entries") or []]}
+            "target": sh.get("target"), "entries": [_entry(e) for e in sh.get("entries") or []],
+            "history": [{"v": x.get("v"), "at": x.get("at"), "kind": x.get("kind"), "why": x.get("why") or "",
+                         "sent": bool((x.get("slack") or {}).get("ok")), "error": (x.get("slack") or {}).get("error") or ""}
+                        for x in vs]}
 
 
 def _entry(e):
@@ -518,7 +521,33 @@ def _day_view(day, cfg, preview=True):
         except (TypeError, ValueError, AttributeError):
             kind = None
     out["day_kind"] = kind
+    out["branch_events"], out["alerts"] = _day_git(day, dd, [r["key"] for r in rows])
     return out
+
+
+def _day_git(day, dd, keys):
+    """What happened in git that day (branch events from the day file, PRs opened or merged that day on the day's
+    tickets) and the current delivery alerts of the day's tickets."""
+    events = []
+    for a in dd.get("branch_activity") or []:
+        if isinstance(a, dict):
+            events.append({"time": str(a.get("ts") or "")[11:16], "repo": a.get("repo_name") or "", "kind": "branch",
+                           "ticket": a.get("ticket") or "", "text": a.get("text") or ""})
+    alerts = []
+    for k in keys:
+        tk = read_json_cached(common.hp("data", "tickets", k + ".json")) or {}
+        g = tk.get("git") if isinstance(tk.get("git"), dict) else {}
+        for name, e in (g.get("repos") or {}).items():
+            for p in (e or {}).get("prs") or []:
+                for field, verb in (("created_at", "opened"), ("merged_at", "merged")):
+                    ts = str(p.get(field) or "")
+                    if ts[:10] == day:
+                        events.append({"time": ts[11:16], "repo": name, "kind": "pr", "ticket": k,
+                                       "text": "PR #%s %s: %s → %s" % (p.get("number"), verb, p.get("source") or "?", p.get("target") or "?")})
+        for a in g.get("alerts") or []:
+            alerts.append({"ticket": k, "kind": a.get("kind"), "text": a.get("text") or "", "repo": a.get("repo") or ""})
+    events.sort(key=lambda x: (x["time"], x["kind"]))
+    return events, alerts
 
 
 # --------------------------------------------------------------------------- timesheet
