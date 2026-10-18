@@ -1,5 +1,5 @@
 {
-  "description": "Chitragupta: capture Claude Code session events into the worklog, and warn when a branch or PR doesn't fit the repo's strategy. Every hook fails open (exit 0).",
+  "description": "Chitragupta: capture Claude Code session events into the worklog, warn when a branch or PR doesn't fit the repo's strategy, and record which prompt is a /cg: command (UserPromptExpansion, for the session guard). Every hook fails open (exit 0).",
   "hooks": {
     "SessionStart": [
       {
@@ -207,6 +207,24 @@
               "user-prompt"
             ],
             "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "^(cg:)?(branch|branches|check|dashboard|doctor|log|pause|search|setup|share|ticket|timesheet|today|trace)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py",
+            "args": [
+              "-3",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/run.py",
+              "hook",
+              "cg-expand"
+            ],
+            "timeout": 5
           }
         ]
       }

@@ -16,7 +16,7 @@ The hooks record five Claude Code events into `<home>\.worklog\raw\<work day>\<s
 
 All of it passes through redaction (see [Redaction](#redaction)) before it is written.
 
-The hooks never call a model and never touch the network. Only the SessionStart hook waits for its result, and it has a 10-second budget.
+The hooks never call a model and never touch the network. Only two hooks are waited for: SessionStart (a 10-second budget) and, when you type a `/cg:` command, a UserPromptExpansion hook that stores only that prompt's ID and the session ID in `<home>\.worklog\cache\cg-active\<session>` for the safety guard ([safety.md](safety.md)); it records no prompt text.
 
 ### What is not captured
 

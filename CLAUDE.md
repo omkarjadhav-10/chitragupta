@@ -16,7 +16,7 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
 | Kept for compatibility | `Worklog note:` lines, `worklog-requests` / `worklog-dbflow` blocks, data-home file formats |
 
 ## Rules
-1. **Hooks fail open.** `hooks/run.py` and every hook path catch everything, log to the data home, and exit 0. Hooks never call a model, never touch the network, never block (only SessionStart is synchronous, and it has a 10 s budget; aim < 500 ms).
+1. **Hooks fail open.** `hooks/run.py` and every hook path catch everything, log to the data home, and exit 0. Hooks never call a model, never touch the network, never block. Only two hooks are synchronous: SessionStart (10 s budget; aim < 500 ms) and the one approved exception, a UserPromptExpansion hook whose matcher names only the `/cg:` commands (`hook cg-expand`: records that prompt's `prompt_id` for the session guard, prints nothing; 5 s budget, aim < 100 ms).
 2. **Standard library only** at runtime. Dev tools are fine, but nothing the plugin imports may come from pip.
 3. **No data, no company specifics in the repo** — code, tests, docs, examples, commit messages. No company names or domains, real ticket prefixes, internal system/service/tool/host/DB-connection names, Slack/Jira IDs, people's names, or real examples. They belong in the user's local config (`<home>/.worklog/config.json`). The internal database tool is only ever "the database MCP" (`mcp.database` in config).
 4. **Synthetic test data only** (`ABC-1001`, `acme.test`, `shop` schema…). Real examples live in git-ignored `notes/local-tests/`.

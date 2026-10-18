@@ -2,6 +2,7 @@
 
 Usage (exec form, from ~/.claude/settings.json, through the launcher):
     python.exe  run.py hook session-start      (sync; may print SessionStart context)
+    python.exe  run.py hook cg-expand          (sync UserPromptExpansion for /cg: commands; prints nothing)
     pythonw.exe run.py hook user-prompt|post-tool|stop|session-end   (async)
 
 Rules: never call claude, never print except SessionStart output, always exit 0.
@@ -39,15 +40,16 @@ def _read_stdin():
 
 
 def _cg_mark(event):
-    """Safety: mark the session while a /cg: command runs (UserPromptSubmit), clear it at Stop. Independent of
-    pause and capture scope; the in-session guard (chitragupta.safety.hook) reads it."""
+    """Safety: `cg-expand` (synchronous UserPromptExpansion, matched to the /cg: command names) records which prompt is
+    a /cg: command; Stop tidies that prompt's mark. Independent of pause and capture scope; the in-session guard
+    (chitragupta.safety.hook) reads it."""
     try:
         from .safety import hook as safety_hook
         inp = _read_stdin()
-        if event == "user-prompt":
-            safety_hook.mark(inp.get("session_id"), str(inp.get("prompt") or inp.get("user_prompt") or ""))
+        if event == "cg-expand":
+            safety_hook.expand(inp)
         elif event == "stop":
-            safety_hook.clear(inp.get("session_id"))
+            safety_hook.clear(inp.get("session_id"), inp.get("prompt_id"))
     except Exception:  # noqa: BLE001 — a hook must never fail
         pass
 
@@ -201,7 +203,10 @@ def main():
         if common.env("HOOK_TIMING"):
             common.log("hook-timing", "%s %.1fms" % (event, (time.perf_counter() - _T0) * 1000))
         return
-    if event in ("user-prompt", "stop"):
+    if event == "cg-expand":  # the /cg: prompt mark: never records anything else, prints nothing
+        _cg_mark(event)
+        return
+    if event == "stop":
         _cg_mark(event)
     try:
         _capture(event, common)

@@ -2,9 +2,13 @@
 
 internal  inside Chitragupta's own `claude -p` calls. Fails closed: any error, unreadable input or unknown profile
           denies the call (and the hook is registered with onFailure: block, so a crash or timeout denies too).
-session   registered by the /cg: skills. Does nothing unless a /cg: command is running in this session (the
-          session's last prompt is a /cg: command, or UserPromptSubmit marked it); then the same checks apply and an
-          error denies. Outside a /cg: command it returns at once: my own work is never blocked.
+session   registered by the /cg: skills (skill hooks stay registered for the rest of the session). It acts only for
+          the prompt a /cg: command expanded: the synchronous UserPromptExpansion hook (`hook cg-expand`, matched to
+          the /cg: command names) records that prompt's `prompt_id` in a per-session mark, and every PreToolUse input
+          carries the `prompt_id` of the prompt being processed. Same id → the /cg: command is running: the session
+          checks apply and an error denies. Any other prompt, no mark, or no `prompt_id` in the input → it returns at
+          once, so my own work is never blocked. A missing `prompt_id` fails toward not guarding; the skill's
+          `allowed-tools` stays the second fence.
 """
 import json
 import os
@@ -13,8 +17,9 @@ import sys
 
 from .. import common
 
-CG = re.compile(r"^\s*/cg:|<command-name>\s*/cg:")
-TAIL_BYTES = 256 * 1024
+# /cg: command names as UserPromptExpansion reports them ("cg:today"), or the typed prompt ("/cg:today …").
+CG_NAME = re.compile(r"^/?cg:[A-Za-z0-9_-]+$")
+CG_PROMPT = re.compile(r"^\s*/cg:[A-Za-z0-9_-]+(?:\s|$)")
 
 
 def _deny(why, profile, data):
@@ -47,89 +52,82 @@ def internal(profile):
     return _deny(why, profile, data) if why else 0
 
 
-# --------------------------------------------------------------------------- /cg: activity
+# --------------------------------------------------------------------------- /cg: activity (keyed on prompt_id)
 
 def mark_path(session_id):
     sid = re.sub(r"[^A-Za-z0-9_-]", "_", str(session_id or ""))[:80]
     return common.wl("cache", "cg-active", sid) if sid else None
 
 
-def mark(session_id, prompt):
-    """UserPromptSubmit: mark the session while a /cg: command runs; any other prompt clears it."""
-    p = mark_path(session_id)
-    if not p:
-        return
-    from . import paths
+def is_cg_command(data):
+    """True for a UserPromptExpansion input of one of this plugin's /cg: commands."""
+    name = str(data.get("command_name") or "").strip()
+    return bool(CG_NAME.match(name) or CG_PROMPT.match(str(data.get("prompt") or "")))
+
+
+def _read_mark(p):
+    m = common.read_json(p, {}) if p else {}
+    return m if isinstance(m, dict) else {}
+
+
+def expand(data):
+    """UserPromptExpansion (synchronous, before the prompt reaches Claude): record which prompt is a /cg: command.
+    Never raises. Without a prompt_id there is nothing to key on, so any earlier mark is removed instead."""
     try:
-        if CG.search(prompt or ""):
-            paths.write_text(p, common.now_iso() + "\n", caller="safety.mark")
+        if not isinstance(data, dict) or not is_cg_command(data):
+            return
+        p = mark_path(data.get("session_id"))
+        if not p:
+            return
+        from . import paths
+        pid = str(data.get("prompt_id") or "")
+        if pid:
+            paths.write_text(p, json.dumps({"prompt_id": pid, "session_id": str(data.get("session_id")),
+                                            "at": common.now_iso()}) + "\n", caller="safety.expand")
         elif os.path.exists(p):
-            paths.delete(p, caller="safety.mark")
+            paths.delete(p, caller="safety.expand")
+    except Exception:  # noqa: BLE001 — a hook must never fail
+        pass
+
+
+def clear(session_id, prompt_id=None):
+    """Stop: tidy up the mark of the prompt that just finished. Only that prompt's mark: a late (async) Stop of an
+    earlier turn must not remove the mark of a /cg: command that started since. Harmless cleanup — a stale mark never
+    matches another prompt anyway."""
+    p = mark_path(session_id)
+    if not (p and os.path.exists(p)):
+        return
+    try:
+        if not prompt_id or _read_mark(p).get("prompt_id") != str(prompt_id):
+            return
+        from . import paths
+        paths.delete(p, caller="safety.clear")
     except Exception:  # noqa: BLE001
         pass
 
 
-def clear(session_id):
-    """Stop: the /cg: command is over."""
-    p = mark_path(session_id)
-    if p and os.path.exists(p):
-        from . import paths
-        try:
-            paths.delete(p, caller="safety.clear")
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def _text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        if any(isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
-            return None
-        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
-    return None
-
-
-def last_prompt(transcript_path):
-    """Text of the last real user prompt in a transcript (tool results and meta entries skipped), or None."""
-    try:
-        with open(transcript_path, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - TAIL_BYTES))
-            lines = f.read().decode("utf-8", "replace").splitlines()
-    except (OSError, TypeError, ValueError):
-        return None
-    for line in reversed(lines):
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if d.get("type") != "user" or d.get("isMeta") or d.get("isSidechain"):
-            continue
-        t = _text((d.get("message") or {}).get("content"))
-        if t is not None:
-            return t
-    return None
-
-
 def cg_active(data):
+    """True only while the prompt being processed is the /cg: command the expansion hook recorded."""
+    pid = data.get("prompt_id")
+    if not pid:
+        return False  # no prompt_id: fail toward not guarding (allowed-tools is the second fence)
     p = mark_path(data.get("session_id"))
-    if p and os.path.exists(p):
-        return True
-    t = last_prompt(data.get("transcript_path"))
-    return bool(t and CG.search(t))
+    if not (p and os.path.exists(p)):
+        return False
+    return _read_mark(p).get("prompt_id") == str(pid)
 
 
 def session():
-    data = {}
     try:
         data = _read_input()
         if not cg_active(data):
             return 0
+    except Exception:  # noqa: BLE001 — not confirmed as a /cg: command: never block my own work
+        return 0
+    try:
         from . import mcp
         why = mcp.reason("session", data.get("tool_name"), data.get("tool_input"))
-    except Exception as e:  # noqa: BLE001 — fail closed once a /cg: command may be running
+    except Exception as e:  # noqa: BLE001 — fail closed once a /cg: command is confirmed running
         why = "guard error (%s: %s)" % (type(e).__name__, str(e)[:200])
     return _deny(why, "session", data) if why else 0
 

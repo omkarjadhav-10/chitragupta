@@ -460,22 +460,37 @@ class QueryAndMcpTests(SafetyCase):
 # ---------------------------------------------------------------------------------------------- /cg: commands in my sessions
 
 class SessionGuardTests(SafetyCase):
+    """The session guard acts only for the prompt a /cg: command expanded (UserPromptExpansion records its prompt_id);
+    every PreToolUse input carries the prompt_id of the prompt being processed."""
+
+    def expand(self, prompt_id, sid="s-1", name="cg:today", prompt=None, **extra):
+        """What the synchronous UserPromptExpansion hook (`hook cg-expand`) does for a typed /cg: command."""
+        from chitragupta.safety import hook
+        d = {"session_id": sid, "hook_event_name": "UserPromptExpansion", "expansion_type": "slash_command",
+             "command_name": name, "command_args": "", "command_source": "plugin", "prompt": prompt or "/" + name}
+        if prompt_id:
+            d["prompt_id"] = prompt_id
+        d.update(extra)
+        hook.expand(d)
+
+    def data(self, tool, inp, prompt_id="P1", sid="s-1", transcript=None):
+        d = {"session_id": sid, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": inp}
+        if prompt_id:
+            d["prompt_id"] = prompt_id
+        if transcript:
+            d["transcript_path"] = transcript
+        return d
+
     def transcript(self, prompt):
         p = os.path.join(self.scratch, "t-%d.jsonl" % (len(os.listdir(self.scratch))))
         lines = [{"type": "user", "message": {"role": "user", "content": "earlier work"}},
-                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
-                 {"type": "user", "message": {"role": "user", "content": prompt}},
-                 {"type": "user", "isMeta": True, "message": {"content": [{"type": "text", "text": "skill body"}]}},
-                 {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}}]
+                 {"type": "user", "message": {"role": "user", "content": prompt}}]
         with open(p, "w", encoding="utf-8") as f:
             f.write("\n".join(json.dumps(l) for l in lines) + "\n")
         return p
 
-    def data(self, prompt, tool, inp, sid="s-1"):
-        return {"session_id": sid, "transcript_path": self.transcript(prompt), "tool_name": tool, "tool_input": inp}
-
     def test_writes_blocked_during_a_cg_command(self):
-        cg = "<command-message>cg:today</command-message>\n<command-name>/cg:today</command-name>"
+        self.expand("P1")
         for tool, inp in (("Bash", {"command": "git commit -am x"}), ("PowerShell", {"command": "git push"}),
                           ("Bash", {"command": 'py -3 "%s" cli today; git commit -am x' % RUN_PY}),
                           ("Edit", {"file_path": os.path.join(self.repo, "a.txt"), "old_string": "one", "new_string": "x"}),
@@ -485,42 +500,132 @@ class SessionGuardTests(SafetyCase):
                           (SEND, {"channel_id": ME, "message": "x"}), ("Agent", {"prompt": "x"}),
                           ("WebFetch", {"url": "https://acme.test"})):
             with self.subTest(tool=tool, inp=str(inp)[:50]):
-                self.assertHookDenies("session", self.data(cg, tool, inp))
-        self.assertHookDenies("session", self.data("/cg:check ABC-1001", "Bash", {"command": "git merge x"}))
+                self.assertHookDenies("session", self.data(tool, inp))
+        self.expand("P2", name="cg:check", prompt="/cg:check ABC-1001")
+        self.assertHookDenies("session", self.data("Bash", {"command": "git merge x"}, prompt_id="P2"))
 
     def test_reads_and_the_helper_pass_during_a_cg_command(self):
-        cg = "<command-name>/cg:ticket</command-name>"
+        self.expand("P1", name="cg:ticket")
         for tool, inp in (("Read", {"file_path": os.path.join(self.home, "inbox.md")}), ("Grep", {"pattern": "x"}),
                           ("Bash", {"command": 'py -3 "%s" cli ticket ABC-1001' % RUN_PY}),
                           ("mcp__%s__run_query" % DB, {"connection_id": "qa-main", "sql": "SELECT TOP 5 * FROM shop.orders"})):
             with self.subTest(tool=tool):
-                self.assertHookAllows("session", self.data(cg, tool, inp))
+                self.assertHookAllows("session", self.data(tool, inp))
 
     def test_my_own_work_is_untouched_outside_cg_commands(self):
-        for prompt in ("commit and push this", "please run /cg:today later", "fix the bug in a.txt"):
-            for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Bash", {"command": "git push --force"}),
-                              ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
-                              ("mcp__%s__run_query" % DB, {"sql": "UPDATE t SET a = 1"})):
-                with self.subTest(prompt=prompt, tool=tool):
-                    n = self.log_count()
-                    self.assertHookAllows("session", self.data(prompt, tool, inp))
-                    self.assertEqual(self.log_count(), n)
+        for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Bash", {"command": "git push --force"}),
+                          ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
+                          ("mcp__%s__run_query" % DB, {"sql": "UPDATE t SET a = 1"})):
+            with self.subTest(tool=tool):
+                n = self.log_count()
+                self.assertHookAllows("session", self.data(tool, inp))
+                self.assertEqual(self.log_count(), n)
 
-    def test_user_prompt_submit_mark_and_stop_clear(self):
+    def test_a_after_a_cg_prompt_the_next_prompt_is_not_guarded(self):
+        """Audit scenario: /cg: prompt P1 marked; the next normal prompt P2 (mark still there, transcript lagging)."""
+        self.expand("P1")
+        lag = self.transcript("<command-name>/cg:today</command-name>")  # the transcript still ends with the /cg: prompt
+        for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
+                          ("mcp__plugin_other_tool__panel_sync", {"x": 1})):
+            with self.subTest(tool=tool):
+                n = self.log_count()
+                self.assertHookAllows("session", self.data(tool, inp, prompt_id="P2", transcript=lag))
+                self.assertEqual(self.log_count(), n)
+
+    def test_b_same_prompt_is_guarded(self):
+        self.expand("P1")
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P1"))
+        self.assertHookAllows("session", self.data("Grep", {"pattern": "x"}, prompt_id="P1"))
+
+    def test_c_interrupted_cg_command_then_a_new_prompt(self):
+        """Esc during a /cg: command: no Stop, the mark stays; the next prompt has a new prompt_id."""
+        self.expand("P1")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+
+    def test_d_resumed_session(self):
+        self.expand("P1", sid="s-r")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git push"}, prompt_id="P7", sid="s-r"))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git push"}, prompt_id="P1", sid="s-other"))
+
+    def test_e_no_prompt_id_is_not_guarded(self):
         from chitragupta.safety import hook
-        hook.mark("s-9", "/cg:today")
-        d = self.data("normal prompt", "Bash", {"command": "git commit -am x"}, sid="s-9")
-        self.assertHookDenies("session", d)  # the mark alone is enough (transcript not flushed yet)
-        hook.clear("s-9")
-        self.assertHookAllows("session", self.data("normal prompt", "Bash", {"command": "git commit -am x"}, sid="s-9"))
-        hook.mark("s-9", "/cg:today")
-        hook.mark("s-9", "now something else")  # the next normal prompt clears it too
-        self.assertHookAllows("session", self.data("normal prompt", "Bash", {"command": "git commit"}, sid="s-9"))
+        self.expand("P1")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id=None))
+        # an expansion without a prompt_id leaves nothing that could match later
+        self.expand(None, sid="s-2")
+        self.assertFalse(os.path.exists(hook.mark_path("s-2")))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id=None, sid="s-2"))
+
+    def test_transcript_alone_no_longer_activates(self):
+        t = self.transcript("<command-name>/cg:today</command-name>")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, transcript=t))
+
+    def test_only_cg_commands_mark(self):
+        from chitragupta.safety import hook
+        for name, prompt in (("other:today", "/other:today"), ("today", "/today"), ("review", "/review")):
+            with self.subTest(name=name):
+                self.expand("P1", name=name, prompt=prompt)
+                self.assertFalse(os.path.exists(hook.mark_path("s-1")))
+        self.expand("P1", name="today", prompt="/cg:today")  # a plain command name with the plugin prefix in the prompt
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}))
+
+    def test_stop_clears_only_its_own_prompt(self):
+        from chitragupta.safety import hook
+        self.expand("P2")
+        hook.clear("s-1", "P1")  # a late Stop of the previous turn must not lift the guard of this one
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+        hook.clear("s-1", "P2")
+        self.assertFalse(os.path.exists(hook.mark_path("s-1")))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+
+    def test_hooks_json_registers_a_synchronous_expansion_hook_for_cg_commands_only(self):
+        import re
+        from tests.support import ROOT
+        with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
+            hooks = json.load(f)["hooks"]
+        groups = hooks["UserPromptExpansion"]
+        self.assertEqual(len(groups), 1)
+        m = re.compile(groups[0]["matcher"])
+        for name in os.listdir(os.path.join(ROOT, "skills")):
+            with self.subTest(skill=name):
+                self.assertTrue(m.search("cg:" + name))
+        for other in ("other:today", "deploy", "cg:unknown", "xcg:today", "today-extra"):
+            self.assertFalse(m.search(other), other)
+        h = groups[0]["hooks"]
+        self.assertEqual(len(h), 1)
+        self.assertNotIn("async", h[0])
+        self.assertEqual(h[0]["args"][-2:], ["hook", "cg-expand"])
+        self.assertLessEqual(h[0]["timeout"], 5)
+        # nothing marks /cg: activity on UserPromptSubmit any more
+        self.assertNotIn("safety", json.dumps(hooks["UserPromptSubmit"]))
+
+    def test_through_the_launcher_and_fast(self):
+        """As Claude Code runs it: `hook cg-expand` records the prompt, then `safety session` guards only that prompt."""
+        from tests.support import run_hook
+        env = self.child_env()
+        exp = {"session_id": "s-l", "prompt_id": "P1", "hook_event_name": "UserPromptExpansion",
+               "expansion_type": "slash_command", "command_name": "cg:today", "command_source": "plugin",
+               "prompt": "/cg:today"}
+        times = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            p = run_hook("cg-expand", exp, env)
+            times.append((time.perf_counter() - t0) * 1000)
+            self.assertEqual((p.returncode, p.stdout), (0, b""))
+        times.sort()
+        print("\ncg-expand hook median = %.0f ms" % times[len(times) // 2])
+        self.assertLess(times[len(times) // 2], 400)
+        bad = json.dumps(self.data("Bash", {"command": "git commit -am x"}, prompt_id="P1", sid="s-l")).encode()
+        p = subprocess.run([PY, "-B", RUN_PY, "safety", "session"], input=bad, capture_output=True, env=env, timeout=30)
+        self.assertEqual(p.returncode, 2)
+        nxt = json.dumps(self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2", sid="s-l")).encode()
+        p = subprocess.run([PY, "-B", RUN_PY, "safety", "session"], input=nxt, capture_output=True, env=env, timeout=30)
+        self.assertEqual((p.returncode, p.stdout), (0, b""))
 
     def test_session_guard_is_fast_when_idle(self):
-        """Outside /cg: commands the hook process returns at once (spawn + import + one transcript tail)."""
+        """Outside /cg: commands the hook process returns at once (spawn + import + one small file check)."""
         env = self.child_env()
-        data = json.dumps(self.data("ordinary work", "Bash", {"command": "git status"})).encode()
+        data = json.dumps(self.data("Bash", {"command": "git status"})).encode()
         times = []
         for _ in range(7):
             t0 = time.perf_counter()
