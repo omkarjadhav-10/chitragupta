@@ -197,15 +197,14 @@ def scan_sql(cfg, state):
 # --------------------------------------------------------------------------- inbox.md
 
 _INBOX_TICKET = re.compile(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?([A-Z][A-Z0-9]{1,9}-\d+)\s*:\s*(.+)$")
+# action lines: every copy of an identical line is one more request (data lines are read once however often they appear)
+INBOX_ACTION = re.compile(r"^\s*(?:[-*]\s*)?resend\s*:", re.I)
 
 
-def scan_inbox(cfg, state):
-    """New non-template lines of inbox.md, tracked by hash. The file itself is never rewritten."""
-    path = common.hp("inbox.md")
-    seen = set(state.get("inbox_hashes") or [])
-    out = []
+def _inbox_lines(text):
+    """(stripped line, hash) for every non-template line of inbox.md, in file order."""
     in_comment = False
-    for line in common.read_text(path).splitlines():
+    for line in text.splitlines():
         s = line.strip()
         if in_comment:
             if "-->" in s:
@@ -216,14 +215,40 @@ def scan_inbox(cfg, state):
             continue
         if not s or s.startswith("#"):
             continue
-        h = hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
-        if h in seen:
+        yield s, hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]
+
+
+def inbox_counts_from_legacy(hashes, text):
+    """The old state (a list of line hashes seen) -> {hash: copies already read}. The old scan read a line once and
+    ignored its copies, so every copy in the file today counts as read: nothing is replayed after the change."""
+    occ = {}
+    for _, h in _inbox_lines(text or ""):
+        occ[h] = occ.get(h, 0) + 1
+    return {h: max(1, occ.get(h, 0)) for h in hashes if isinstance(h, str)}
+
+
+def scan_inbox(cfg, state):
+    """New non-template lines of inbox.md. state["inbox_hashes"] = {line hash: copies read}. A data line (a note,
+    time:, leave:, half-day:, holiday:, workday: ...) is read once however often it appears; an action line
+    (resend:) is counted, so each new copy of an identical line is read once more. Counts never go down (a file
+    caught mid-save can't replay old lines). The file itself is never rewritten."""
+    path = common.hp("inbox.md")
+    text = common.read_text(path)
+    seen = state.get("inbox_hashes")
+    if isinstance(seen, list):  # not migrated yet (migrate.py "inbox-counts" does this with a backup)
+        seen = inbox_counts_from_legacy(seen, text)
+    seen = {h: int(n) for h, n in (seen or {}).items() if isinstance(n, (int, float))}
+    now_counts = {}
+    out = []
+    for s, h in _inbox_lines(text):
+        n = now_counts[h] = now_counts.get(h, 0) + 1
+        if n <= seen.get(h, 0) or (n > 1 and not INBOX_ACTION.match(s)):
             continue
-        seen.add(h)
+        seen[h] = n
         m = _INBOX_TICKET.match(s)
-        ticket, text = (m.group(1).upper(), m.group(2)) if m else (None, re.sub(r"^[-*]\s*", "", s))
-        out.append({"hash": h, "ts": common.now_iso(), "ticket": ticket, "text": redact(text)[:1000]})
-    state["inbox_hashes"] = sorted(seen)
+        ticket, text_ = (m.group(1).upper(), m.group(2)) if m else (None, re.sub(r"^[-*]\s*", "", s))
+        out.append({"hash": h, "ts": common.now_iso(), "ticket": ticket, "text": redact(text_)[:1000]})
+    state["inbox_hashes"] = seen
     return out
 
 

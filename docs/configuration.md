@@ -136,6 +136,17 @@ These settings control the 20:00 message: your day laid out as Jira worklog entr
 | `jira_worklog.correction_debounce_minutes` | int | `15` | Wait this long after a change to an already-sent day before sending one "Corrected update". |
 | `jira_worklog.example_ticket` | string | `"ABC-1234"` | Ticket key in the "nothing tracked today" nudge. |
 
+### The message and its preview
+
+One builder makes the 20:00 message: blocks of activity (plus your Jira comments of the day), the allocation to your target, time already logged in Jira subtracted, condensed descriptions, the closing note, the delivery check and, for a changed day, the "Corrected update" header. The sender and every preview (`/cg:today`, `agent worklog-show`) call it, so a preview made from the same inputs is the message, character for character.
+
+- **Jira data.** At 20:00 the sender reads Jira once (one read-only job). A preview uses the latest copy of that data (`data\jira\_evening\<day>.json`) and says "Jira data as of HH:MM". It never calls Jira by itself; *Refresh from Jira* (`agent worklog-show --jira`) runs the one read job within `mcp.daily_call_budget`, keeping the 20:00 calls in reserve.
+- **Condensed descriptions.** Lines that need condensing go to one batched model call, and each result is cached (`.worklog\cache\condense\<day>.json`, kept 14 days, keyed by a hash of that entry's notes and Jira facts). A preview uses the cached lines and marks the others "condensed at 20:00". *Preview exactly* (`agent worklog-show --exact`) condenses them now, within the same budget; the sender then reuses them.
+
+### Inbox lines for the worklog
+
+`time:`, `leave:`, `half-day:`, `holiday:` and `workday:` lines are data: each distinct line is read once, however often it appears in `inbox.md`. `resend:` is an action: every new copy of the same line sends the day again, and `/cg:log resend: <day>` always adds one. Requests that arrive before the next tick go out as one send. Each send, resends included, is kept in the day's history in `data\timesheets\<day>.json` (`versions`: time, why, Slack's answer).
+
 ### `jira_worklog.slack`
 
 Setup and `setup slack-user` fill in most of these.

@@ -11,6 +11,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Dashboard write protection:** an allowlist of write routes, each checked for Host, Origin, a per-start page token, JSON, size and rate. First actions: pause/resume capture and the live MCP check.
 - **More settings:** on/off switches for Jira ticket cards and evening facts, the QA trace, the weekly link map, the daily push, request curation and artifacts (all on unless switched off, so existing setups don't change); per repo, the base branch names, the base relations (with *Detect from the repo*) and the PR source.
 - **DB map page** (`#/db`): databases → schemas → tables in the side list, with search; per table its columns (type, keys, personal-data flag), its links with how well each was verified in QA (verified, likely or not verified, with the sampled-row counts), who reads and writes it, its tickets and saved queries, and a direct or two-hop neighbourhood diagram with a table version. The whole map is drawn only on request.
+### Changed
+- **The worklog preview is the 20:00 message.** One builder makes the message for the sender and every preview (`/cg:today`, `agent worklog-show`): Jira comments, time already in Jira subtracted, condensed descriptions, closing note, delivery check, correction header. A preview uses the last Jira data ("Jira data as of HH:MM") and cached condensed lines, marks lines still "condensed at 20:00", and calls neither Jira nor the model. `worklog-show --jira` refreshes the Jira data (one read job) and `--exact` condenses now, both within the daily MCP budget ([docs/configuration.md](docs/configuration.md)).
+- **`resend:` can be repeated.** Every new copy of a `resend:` line sends the day again (other inbox lines are still read once); `/cg:log resend: <day>` always adds one. Each send, resends included, is kept in the day's history. Migration `inbox-counts` converts the inbox state, backing up `state.json` first.
+
+### Fixed
+- `agent worklog-show` could make a model call while labelled read-only.
 
 ## [0.3.0] - 2026-10-18
 

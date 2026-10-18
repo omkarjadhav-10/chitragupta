@@ -128,6 +128,8 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
     config.json  state.json  health.json  README.md
     raw\<day>\<session>.jsonl  raw\<day>\time\<session>.jsonl
     cache\  logs\  locks\  backups\  sandbox\  prompts\ (optional overrides)
+    cache\condense\YYYY-MM-DD.json           condensed worklog lines (14 days), shared by the sender and the preview
+    resend_requests.json                     ids of recent Resend requests (2-minute double-click window)
     mcp\allow.json  mcp\readonly-settings.json (for inspection)  mcp\slack.json  tmp\ (replay request bodies, 2 days)
     slack-sender\                            Slack's local-scope folder
     PAUSED                                   present while capture is paused

@@ -896,6 +896,8 @@ class Agent:
             if not s.get("files") and (s.get("last_event") or "") < cutoff:
                 del sessions[sid]
         self.prune_tmp()
+        from . import jiraworklog
+        jiraworklog.prune_condense_cache(common.workday(common.now(), self.cfg))  # condensed lines keep 14 days
 
     @staticmethod
     def prune_tmp(max_age_s=2 * 86400):
@@ -1081,7 +1083,7 @@ def slack_email(cfg):
 
 
 def cmd_worklog(cmd, args):
-    """worklog-show [day] [--jira] | worklog-send <day> [--correction] | slack-discover | jira-card KEY... |
+    """worklog-show [day] [--jira] [--exact] | worklog-send <day> [--correction] | slack-discover | jira-card KEY... |
     schema-card TABLE... | qa-trace KEY | link-map | mcp-ensure"""
     from . import jiraworklog
     from . import kbjobs
@@ -1090,24 +1092,27 @@ def cmd_worklog(cmd, args):
     pos = [a for a in args if not a.startswith("--")]
     if cmd != "worklog-send":
         os.environ["CHITRAGUPTA_MCP_MANUAL"] = os.environ["WORKLOG_MCP_MANUAL"] = "1"
-    if cmd == "worklog-show":  # read-only preview: no Jira call unless --jira, nothing saved or sent
-        use_jira = "--jira" in args
-        lock = Lock() if use_jira else None  # --jira saves health/state: never alongside a tick
-        if lock and not lock.acquire_wait():
-            print("agent busy; try again")
-            return 1
-        try:
-            a = Agent()
-            day = pos[0] if pos else common.workday(common.now(), a.cfg)
-            res = a.jwl.compose(day, common.workday(common.now(), a.cfg), use_jira=use_jira,
-                                until=common.now() if day == common.workday(common.now(), a.cfg) else None)
-            print(res.get("text") or "(no message for %s: %s)" % (day, res.get("reason")))
-            if use_jira:
-                save_state(a)
-            return 0
-        finally:
-            if lock:
-                lock.release()
+    if cmd == "worklog-show":  # the sender's builder: cached Jira facts and condensed lines, nothing saved or sent
+        cfg = common.load_config()
+        day = pos[0] if pos else common.workday(common.now(), cfg)
+        if "--jira" in args or "--exact" in args:  # the two asked-for calls: under the agent lock, never beside a tick
+            r = jiraworklog.refresh_facts(day) if "--jira" in args else {"ok": True}
+            if r.get("ok") and "--exact" in args:
+                r = jiraworklog.preview_exact(day)
+            if r.get("skipped") == "the agent is busy; try again in a minute":
+                print("agent busy; try again")
+                return 1
+            if r.get("skipped"):
+                print("(%s)" % r["skipped"])
+        pv = jiraworklog.preview(day)
+        print(pv["text"] or "(no message for %s: %s)" % (day, pv.get("reason")))
+        notes = [pv["facts_as_of"]] if pv.get("facts_as_of") else []
+        n = sum(1 for e in pv["entries"] if e.get("pending_condense"))
+        if n:
+            notes.append("%d description(s) condensed at %s (--exact condenses now)" % (n, pv.get("send_at") or "20:00"))
+        if notes:
+            print("\n(" + "; ".join(notes) + ")")
+        return 0
     lock = Lock()
     if not lock.acquire_wait():
         print("agent busy; try again")
