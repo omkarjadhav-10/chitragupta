@@ -13,6 +13,8 @@ branch it is on after the first, tagged "cherry-pick of <sha>". Commits that mis
 import datetime as _dt
 import re
 
+from . import relations
+
 SYMBOL = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "✗", "reverted": "↩", "check": "?"}
 LABEL = {"in": "in target", "same": "same change in target", "squash": "via squash PR", "open": "PR open",
          "missing": "missing", "reverted": "reverted", "check": "check by hand"}
@@ -143,6 +145,21 @@ def graph(repo_entry, max_commits=MAX_COMMITS, max_branches=MAX_BRANCHES):
             bases.append(t)
     if not bases:
         bases = ["base"]
+    # with relations: each base also brings the base it was cut from, and lanes are ordered parents first
+    rels = e.get("relations") or []
+    if rels:
+        for _ in range(4):
+            extra = [p for x in bases for p in [relations.cut_from(x, rels)]
+                     if p and p not in bases and p not in tnames and not any(c in p for c in "*?[")]
+            if not extra:
+                break
+            bases.extend(dict.fromkeys(extra))
+        # targets this change reached through a base it flowed out of get a lane too (to draw that merge)
+        for t in e.get("targets") or []:
+            nm = t.get("name")
+            if nm and nm not in bases and nm not in tnames and not t.get("any") and                     any(((row.get("cells") or {}).get(t.get("role")) or {}).get("s") in GOOD for row in e.get("rows") or []) and                     any(relations.matches(x, nm) for b in bases for x in relations.merges_into(b, rels)):
+                bases.append(nm)
+        bases = relations.order(bases, rels)
     names = _Names()
     for x in bases:
         names(x)
@@ -186,14 +203,16 @@ def graph(repo_entry, max_commits=MAX_COMMITS, max_branches=MAX_BRANCHES):
         ids.add(s)
         return s
 
-    # base lanes: the first is Mermaid's main branch (renamed by the init directive), the others fork from its marker
+    # base lanes: the first is Mermaid's main branch (renamed by the init directive); the others fork from the base
+    # they were cut from (relations), else from the first one's marker
     main = names(bases[0])
     lines.insert(0, '%%%%{init: {"gitGraph": {"mainBranchName": %s, "showCommitLabel": true}} }%%%%' % _q(main))
     cur[0] = main
     for i, x in enumerate(bases):
         nm = names(x)
         if i:
-            checkout(main)
+            par = relations.cut_from(x, rels) if rels else None
+            checkout(names(par) if par in bases and names(par) in created else main)
             lines.append("  branch %s" % _q(nm))
             cur[0] = nm
         cid = uid(_label(x + " (base)"))
@@ -245,6 +264,27 @@ def graph(repo_entry, max_commits=MAX_COMMITS, max_branches=MAX_BRANCHES):
             lines.append("  merge %s id: %s tag: %s" % (_q(src), _q(mid), _q(_label("PR #%s" % p.get("number")))))
             heads[tgt] = (mid, tgt)
             merged[(src, tgt)] = sh[0]
+    # merge flows between bases (relations "merges_into"), drawn when the ticket's change reached the target that way
+    if rels:
+        good_targets = set()
+        for row in e.get("rows") or []:
+            for t in e.get("targets") or []:
+                if ((row.get("cells") or {}).get(t.get("role")) or {}).get("s") in GOOD:
+                    good_targets.add(t.get("name"))
+        for x in bases:
+            for y in bases:
+                if x == y or y not in good_targets or \
+                        not any(relations.matches(t, y) for t in relations.merges_into(x, rels)):
+                    continue
+                xs, ys = names(x), names(y)
+                sh, th = heads.get(xs), heads.get(ys)
+                if not sh or not th or sh[0] == th[0] or th[1] == xs or sh[1] != xs or merged.get((xs, ys)) == sh[0]:
+                    continue
+                checkout(ys)
+                mid = uid(_label("%s into %s" % (x, y)))
+                lines.append("  merge %s id: %s tag: %s" % (_q(xs), _q(mid), _q(_label("%s into %s" % (x, y), 40))))
+                heads[ys] = (mid, ys)
+                merged[(xs, ys)] = sh[0]
     src = "\n".join(lines) + "\n"
     problems = check(src)
     if problems:

@@ -8,6 +8,8 @@ import os
 import re
 import shlex
 
+from . import relations as _rel
+
 DEFAULT_STRATEGIES = {
     "release-then-qa": {"targets": ["release", "qa"], "steps": [
         {"from": "release", "pr_into": "release"},
@@ -67,9 +69,11 @@ def repo_conf(cfg, name):
     bases.update(rc.get("bases") or {})
     suffixes = dict(DEFAULT_SUFFIXES)
     suffixes.update(rc.get("suffixes") or {})
+    rels, rel_warnings = _rel.normalize(rc.get("relations"))
     return {"configured": configured, "strategy": rc.get("strategy") if configured else None,
             "remote": rc.get("remote") or "origin", "bases": bases, "rules": rc.get("rules") or [],
-            "pr_source": rc.get("pr_source"), "suffixes": suffixes, "fetch": rc.get("fetch", True)}
+            "pr_source": rc.get("pr_source"), "suffixes": suffixes, "fetch": rc.get("fetch", True),
+            "relations": rels, "relation_warnings": rel_warnings}
 
 
 def role_of(name, bases):

@@ -348,6 +348,62 @@ def cmd_branches(a):
     return 0
 
 
+def cmd_relations(a):
+    """`relations detect [REPO]` proposes base relations from local refs (read-only git, no fetch);
+    `relations set REPO --json '[...]'` stores them through the config write path; `relations show [REPO]`."""
+    from . import gitcmd, relations, setup
+    cfg = common.load_config()
+    repos = {os.path.basename(str(r).rstrip("/\\")): r for r in cfg.get("watched_repos") or [] if r}
+    if a.action == "set":
+        if not a.repo or a.repo not in repos and a.repo not in (gitcmd.settings(cfg)["repos"] or {}):
+            out("Name a watched repo: %s" % ", ".join(sorted(repos)) or "(none)")
+            return 2
+        try:
+            raw = json.loads(a.json_value or "")
+        except ValueError as e:
+            out("--json isn't valid JSON: %s" % e)
+            return 2
+        rels, warnings = relations.normalize(raw)
+        if warnings:
+            out("Not saved: " + "; ".join(warnings))
+            return 2
+        raw, err = setup.read_raw_config()
+        if raw is None:
+            out(err)
+            return 1
+        new = json.loads(json.dumps(raw))
+        rc = new.setdefault("branching", {}).setdefault("repos", {}).setdefault(a.repo, {})
+        if rels:
+            rc["relations"] = rels
+        else:
+            rc.pop("relations", None)
+        res = setup.write_raw_config(new, raw)  # the one config write path (backup, history)
+        out("Saved %d relation(s) for %s." % (len(rels), a.repo) if res else "No change.")
+        return 0
+    names = [a.repo] if a.repo else sorted(repos)
+    report = []
+    for n in names:
+        conf = gitcmd.repo_conf(cfg, n)
+        if a.action == "show":
+            report.append({"repo": n, "relations": conf["relations"], "warnings": conf["relation_warnings"]})
+        elif n in repos:
+            res = relations.detect(cfg, repos[n], conf["bases"], conf["remote"])
+            res["repo"] = n
+            res["configured"] = conf["relations"]
+            report.append(res)
+    if a.json_value is not None:  # detect/show: --json is a flag
+        out(json.dumps(report, indent=1, ensure_ascii=False))
+        return 0
+    for r in report:
+        out("%s" % r["repo"])
+        for p in r.get("proposals", r.get("relations") or []):
+            to = p["to"] if isinstance(p["to"], str) else ", ".join(p["to"])
+            out("  %s %s %s%s" % (p["from"], p["rel"].replace("_", " "), to, "   (%s)" % p["evidence"] if p.get("evidence") else ""))
+        for w in r.get("warnings") or []:
+            out("  ! " + w)
+    return 0
+
+
 def cmd_check(a):
     from . import agent
     key = norm_key(a.key) if a.key else None
@@ -629,6 +685,11 @@ def parser():
     s.add_argument("key", nargs="?", default="")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_branches)
+    s = sub.add_parser("relations", help="base-branch relations: detect (read-only), show, set")
+    s.add_argument("action", choices=["detect", "show", "set"])
+    s.add_argument("repo", nargs="?", default="")
+    s.add_argument("--json", dest="json_value", nargs="?", const="", default=None)
+    s.set_defaults(fn=cmd_relations, json=False)
     s = sub.add_parser("check")
     s.add_argument("key", nargs="?", default="")
     s.set_defaults(fn=cmd_check)

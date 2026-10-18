@@ -65,6 +65,26 @@ The config lives under `"branching"` in `<home>/.worklog/config.json`:
 
 For one ticket, the strategy is chosen in this order: a manual choice (`/cg:branch strategy ABC-1001 qa-only`), a rule, the repo's setting from the inbox, then the repo default.
 
+## Base relations
+
+How a repo's base branches relate, in `branching.repos.<repo>.relations`:
+
+```json
+"relations": [
+  {"from": "release/*", "rel": "cut_from",    "to": "main"},
+  {"from": "release/*", "rel": "merges_into", "to": ["qa", "staging", "main"]},
+  {"from": "uat",       "rel": "syncs_from",  "to": "main"}
+]
+```
+
+- `cut_from`: where new branches matching `from` start. The graph draws each base lane from its real parent instead of the first base, and adds that parent as a lane.
+- `merges_into`: where `from` is merged next. When the ticket's change reached a target that way, the graph draws that merge between the base lanes; a missing delivery cell explains how the change will arrive, for example *in release/1.0; reaches qa when release/1.0 is merged into qa*.
+- `syncs_from`: the base is refreshed from another one now and then (*reaches uat at its next sync from main*).
+
+Relations change only the drawing and the wording. The delivery check itself still asks git whether each commit is really in each target.
+
+`… cli relations detect [REPO] [--json]` proposes relations from your local remote-tracking refs, with the evidence (how many merges went which way, where recent release branches start). It is read-only and fetches nothing. `… cli relations set REPO --json '[…]'` saves a list through the config write path (backup and history); `… cli relations show [REPO]` prints what is set, with a warning for any entry that was dropped as invalid.
+
 ## How it is worked out
 
 ### Events
