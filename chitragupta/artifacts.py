@@ -21,7 +21,7 @@ import zipfile
 from . import common
 from . import gitro
 from .redact import redact
-from .safety import paths
+from .safety import commands, paths
 
 TEXT_EXT = {".md": "doc", ".markdown": "doc", ".txt": "doc", ".html": "html", ".htm": "html", ".mmd": "diagram",
             ".mermaid": "diagram", ".puml": "diagram", ".plantuml": "diagram", ".svg": "diagram", ".drawio": "diagram",
@@ -334,7 +334,7 @@ class Collector:
 
 def tracked_before(cfg, repo, path, since_iso):
     """True when the file was already committed before the session started (then it's a code change)."""
-    if not repo:
+    if not repo or not commands.observed(cfg, repo):  # only repos we watch or capture (never an ignored one)
         return False
     rc, so, _ = gitro.run(cfg, repo, ["log", "--diff-filter=A", "--format=%aI", "--", path], timeout=20)
     if rc != 0 or not so.strip():
@@ -345,6 +345,8 @@ def tracked_before(cfg, repo, path, since_iso):
 
 
 def untracked(cfg, repo):
+    if not repo or not commands.observed(cfg, repo):
+        return []
     rc, so, _ = gitro.run(cfg, repo, ["ls-files", "--others", "--exclude-standard", "-z"], timeout=30)
     if rc != 0:
         return []

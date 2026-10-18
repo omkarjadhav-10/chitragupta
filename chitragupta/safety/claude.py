@@ -19,9 +19,12 @@ def guard_settings(profile, cfg=None):
     """Inline --settings JSON: the fail-closed PreToolUse guard for this profile."""
     if profile not in PROFILES:
         raise ValueError("unknown guard profile %r" % profile)
-    py, launcher = common.self_command("safety", cfg=cfg)[:2]
-    hook = {"type": "command", "command": py, "args": [launcher, "safety", "internal", profile], "timeout": 15,
-            "onFailure": "block"}
+    # The launcher of *this* package (plugin hooks/run.py, or the runtime copy's run.py), never the stable launcher:
+    # the settings are inline and per call, and an older runtime copy may not know this guard yet.
+    from .. import plugin
+    py = common.python_exe(cfg)
+    hook = {"type": "command", "command": py, "args": [plugin.own_launcher(), "safety", "internal", profile],
+            "timeout": 15, "onFailure": "block"}
     return json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [hook]}]}}, separators=(",", ":"))
 
 

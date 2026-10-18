@@ -396,6 +396,26 @@ class QueryAndMcpTests(SafetyCase):
         self.assertHookDenies("internal", b"not json", "mcp")
         self.assertHookDenies("internal", {"tool_name": "StructuredOutput"}, "made-up-profile")
 
+    def test_guard_runs_this_package_not_the_stable_launcher(self):
+        """An older runtime copy behind the stable launcher may not know the guard: every call would fail closed."""
+        from chitragupta import plugin
+        from chitragupta.safety import claude as builder
+        hook = json.loads(builder.guard_settings("none"))["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertEqual(hook["args"][:3], [plugin.own_launcher(), "safety", "internal"])
+        self.assertEqual(hook["onFailure"], "block")
+        p = subprocess.run([hook["command"]] + hook["args"], capture_output=True, timeout=30, env=self.child_env(),
+                           input=json.dumps({"tool_name": "StructuredOutput", "tool_input": {}}).encode())
+        self.assertEqual((p.returncode, p.stdout), (0, b""))
+
+    def test_ignored_repos_are_skipped_not_blocked(self):
+        from chitragupta import artifacts
+        other = _init_repo(os.path.join(self.scratch, "ignored"))
+        open(os.path.join(other, ".worklog-ignore"), "w").close()
+        n = self.log_count()
+        self.assertEqual(artifacts.untracked(self.cfg(), other), [])
+        self.assertFalse(artifacts.tracked_before(self.cfg(), other, "a.txt", "2026-10-16T10:00:00+00:00"))
+        self.assertEqual(self.log_count(), n)
+
     def test_hook_process_through_the_launcher(self):
         """As Claude Code runs it: exit 2 + deny JSON, and the block lands in security.log."""
         p = subprocess.run([PY, "-B", RUN_PY, "safety", "internal", "none"], capture_output=True, timeout=30,
