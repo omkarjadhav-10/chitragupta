@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Live MCP status** on Health and Settings: Check now, an automatic check when the page opens (at most every 5 minutes), the same code as `/cg:doctor`, shown next to the last background job's view.
 - **Past days:** `#/day/<date>` shows the message as sent with its send history, the day's branch and PR events and its tickets' alerts, with a date picker; `/cg:dashboard day today|yesterday|-N|YYYY-MM-DD`.
 - **Dashboard write protection:** an allowlist of write routes, each checked for Host, Origin, a per-start page token, JSON, size and rate. First actions: pause/resume capture and the live MCP check.
+- **More settings:** on/off switches for Jira ticket cards and evening facts, the QA trace, the weekly link map, the daily push, request curation and artifacts (all on unless switched off, so existing setups don't change); per repo, the base branch names, the base relations (with *Detect from the repo*) and the PR source.
 - **DB map page** (`#/db`): databases → schemas → tables in the side list, with search; per table its columns (type, keys, personal-data flag), its links with how well each was verified in QA (verified, likely or not verified, with the sampled-row counts), who reads and writes it, its tickets and saved queries, and a direct or two-hop neighbourhood diagram with a table version. The whole map is drawn only on request.
 
 ## [0.3.0] - 2026-10-18

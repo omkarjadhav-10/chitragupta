@@ -3,7 +3,7 @@
 // Appearance is per browser. Locked items (safety rules, MCP tools, secrets, data folder, GitHub repo) are only shown.
 import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useStore, useApi, write, toast, fmtTs } from '../lib/core.js';
+import { useStore, useApi, write, runAction, toast, fmtTs } from '../lib/core.js';
 import { Icon, Status, PageHead, Dialog, Load, Empty, themeMode, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys, appearance } from '../lib/shell.js';
 import { McpStatusPanel } from '../lib/mcpstatus.js';
@@ -11,6 +11,9 @@ import { McpStatusPanel } from '../lib/mcpstatus.js';
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const PREFIX = /^[A-Z][A-Z0-9]{1,9}$/;
+const BRANCH = /^[A-Za-z0-9*][A-Za-z0-9._\/*-]{0,99}$/;
+const REL = { cut_from: 'is cut from', merges_into: 'merges into', syncs_from: 'syncs from' };
+function words(s) { return String(s || '').split(',').map((x) => x.trim()).filter(Boolean); }
 
 // The same rules the server applies (chitragupta/settings.py check); the server stays the judge.
 function problem(it, v) {
@@ -27,16 +30,76 @@ function problem(it, v) {
     case 'prefixes': return (v || []).every((p) => PREFIX.test(p)) ? null : 'Use uppercase project keys of 2 to 10 letters or digits, starting with a letter.';
     case 'paths': return (v || []).every((p) => /^([A-Za-z]:[\\/]|\/)/.test(p)) ? null : 'Use full paths, one per line.';
     case 'envs_narrow': return (v || []).length ? null : 'Keep at least one environment.';
+    case 'bases': {
+      const bad = Object.keys(v || {}).find((r) => !(v[r] || []).length || v[r].some((p) => !BRANCH.test(p)));
+      return bad ? bad + ': use branch names or patterns (letters, digits, . _ / * -), separated by commas.' : null;
+    }
+    case 'relations': {
+      if ((v || []).length > 30) return 'Use at most 30 relations.';
+      for (let i = 0; i < (v || []).length; i++) {
+        const r = v[i];
+        if (!r.from || !BRANCH.test(r.from)) return 'Relation ' + (i + 1) + ': give the branch or pattern it starts from.';
+        if (!(r.to || []).length || r.to.some((t) => !BRANCH.test(t))) return 'Relation ' + (i + 1) + ': give the branch or branches it relates to.';
+        if (r.to.indexOf(r.from) >= 0) return 'Relation ' + (i + 1) + ': ' + r.from + " can't relate to itself.";
+      }
+      return null;
+    }
     default: return null;
   }
 }
 function show(v) {
   if (v === null || v === undefined || v === '') return '(not set)';
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
+  if (Array.isArray(v) && v.length && typeof v[0] === 'object') return v.map((r) => r.from + ' ' + (REL[r.rel] || r.rel) + ' ' + (r.to || []).join(', ')).join('; ');
   if (Array.isArray(v)) return v.length ? v.join(', ') : '(none)';
+  if (typeof v === 'object') return Object.keys(v).map((k) => k + ': ' + [].concat(v[k]).join(', ')).join('; ');
   return String(v);
 }
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+// A comma-separated list in a text field that keeps what you type (a trailing comma, spaces) while it reports the list.
+function ListInput({ value, onChange, ...rest }) {
+  const [txt, setTxt] = useState((value || []).join(', '));
+  useEffect(() => { if (!same(words(txt), value || [])) setTxt((value || []).join(', ')); }, [JSON.stringify(value || [])]);
+  return html`<input type="text" spellcheck="false" autocomplete="off" ...${rest} value=${txt}
+    onInput=${(e) => { setTxt(e.currentTarget.value); onChange(words(e.currentTarget.value)); }} />`;
+}
+
+function BasesEditor({ it, value, onChange, common }) {
+  const v = value || {};
+  return html`<fieldset class="baseedit" ...${common}><legend class="sr">${it.label}</legend>
+    ${it.roles.map((r) => html`<label key=${r} class="baserow"><span class="small">${r}</span>
+      <${ListInput} class="mono" value=${[].concat(v[r] || [])} aria-label=${it.repo + ' ' + r + ' branch names'}
+        onChange=${(list) => onChange(Object.assign({}, v, { [r]: list }))} /></label>`)}</fieldset>`;
+}
+
+function RelationsEditor({ it, value, onChange, common }) {
+  const rows = value || [];
+  const [found, setFound] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const put = (i, patch) => onChange(rows.map((r, j) => (j === i ? Object.assign({}, r, patch) : r)));
+  const detect = () => {
+    setBusy(true);
+    runAction('relations-detect', { repo: it.repo }).then((r) => setFound(r.proposals), (e) => toast(e.message, 'bad')).finally(() => setBusy(false));
+  };
+  const n = (i) => it.repo + ' relation ' + (i + 1);
+  return html`<fieldset class="reledit" ...${common}><legend class="sr">${it.label}</legend>
+    ${rows.length ? html`<ol class="rellist">${rows.map((r, i) => html`<li key=${i}>
+      <${ListInput} class="mono" value=${r.from ? [r.from] : []} aria-label=${n(i) + ': from'} onChange=${(l) => put(i, { from: l.join(',') })} />
+      <select aria-label=${n(i) + ': kind'} value=${r.rel} onChange=${(e) => put(i, { rel: e.currentTarget.value })}>
+        ${it.kinds.map((k) => html`<option key=${k[0]} value=${k[0]}>${k[1]}</option>`)}</select>
+      <${ListInput} class="mono" value=${r.to || []} aria-label=${n(i) + ': to'} onChange=${(l) => put(i, { to: l })} />
+      <button type="button" class="btn quiet icon" aria-label=${'Remove ' + n(i)} onClick=${() => onChange(rows.filter((_, j) => j !== i))}><${Icon} name="close" size=${15} /></button></li>`)}</ol>`
+      : html`<p class="muted small">None: the graph forks every base from the first one.</p>`}
+    <div class="btnline"><button type="button" class="btn" onClick=${() => onChange(rows.concat([{ from: '', rel: 'merges_into', to: [] }]))}><${Icon} name="plus" size=${15} />Add a relation</button>
+      <button type="button" class="btn" disabled=${busy} onClick=${detect}><${Icon} name="search" size=${15} />${busy ? 'Reading the repo…' : 'Detect from the repo'}</button></div>
+    ${found ? html`<div class="note" role="status"><p><strong>${found.length ? 'Detected from local branches (read-only, no fetch):' : 'Nothing could be detected from the local branches.'}</strong></p>
+      ${found.length ? html`<ul>${found.map((p, i) => html`<li key=${i}><span class="mono">${p.from}</span> ${REL[p.rel] || p.rel} <span class="mono">${[].concat(p.to).join(', ')}</span>
+        <span class="muted small"> · ${p.evidence}</span></li>`)}</ul>
+        <button type="button" class="btn" onClick=${() => { onChange(found.map((p) => ({ from: p.from, rel: p.rel, to: [].concat(p.to) }))); setFound(null); }}>Use these (review before saving)</button>` : null}</div>` : null}
+  </fieldset>`;
+}
 
 function Control({ it, value, onChange, err }) {
   const id = 'set-' + it.key.replace(/[^a-z0-9]/gi, '-');
@@ -64,6 +127,8 @@ function Control({ it, value, onChange, err }) {
     case 'envs_narrow':
       return html`<fieldset class="daypick" ...${common}><legend class="sr">${it.label}</legend>${(it.value || []).map((env) => html`<label key=${env} class="check">
         <input type="checkbox" checked=${(value || []).indexOf(env) >= 0} onChange=${(e) => onChange((it.value || []).filter((x) => (x === env ? e.currentTarget.checked : (value || []).indexOf(x) >= 0)))} />${env}</label>`)}</fieldset>`;
+    case 'bases': return html`<${BasesEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
+    case 'relations': return html`<${RelationsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
     case 'prefixes': case 'paths':
       return html`<textarea ...${common} rows=${Math.min(6, Math.max(2, (value || []).length + 1))} spellcheck="false"
         onInput=${(e) => onChange(e.currentTarget.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))}>${(value || []).join('\n')}</textarea>`;
@@ -75,8 +140,8 @@ function Control({ it, value, onChange, err }) {
 function Item({ it, value, onChange, err }) {
   const id = 'set-' + it.key.replace(/[^a-z0-9]/gi, '-');
   const changed = !same(value, it.value);
-  return html`<div class=${'setrow' + (changed ? ' changed' : '')}>
-    <div class="setlab"><label for=${it.type === 'days' || it.type === 'envs_narrow' || !it.editable ? null : id} id=${id + '-lab'}>${it.label}</label>
+  return html`<div class=${'setrow' + (changed ? ' changed' : '') + (it.type === 'relations' ? ' stack' : '')}>
+    <div class="setlab"><label for=${['days', 'envs_narrow', 'bases', 'relations'].indexOf(it.type) >= 0 || !it.editable ? null : id} id=${id + '-lab'}>${it.repo ? cap(it.label.slice(it.repo.length + 2)) : it.label}</label>
       ${it.help ? html`<p class="muted small" id=${id + '-help'}>${it.help}</p>` : null}
       ${it.available === false ? html`<p class="small"><${Status} kind="off" quiet>Set this up with /cg:setup first</${Status}></p>` : null}
       ${!it.editable ? html`<p class="small muted">Change with /cg:setup.</p>` : null}</div>
@@ -178,8 +243,12 @@ export function SettingsPage() {
     <${Load} res=${res} lines=${12}>${(d) => html`
       ${d.groups.map((g) => html`<section class="sec setgroup" key=${g.id} id=${'g-' + g.id} aria-labelledby=${'h-' + g.id}>
         <h2 id=${'h-' + g.id} tabindex="-1">${g.label}</h2>
-        ${g.items.map((it) => html`<${Item} key=${it.key} it=${it} value=${it.key in pending ? pending[it.key] : it.value}
-          onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}</section>`)}
+        ${g.items.filter((it) => !it.repo).map((it) => html`<${Item} key=${it.key} it=${it} value=${it.key in pending ? pending[it.key] : it.value}
+          onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}
+        ${[...new Set(g.items.filter((it) => it.repo).map((it) => it.repo))].map((repo) => html`<div class="repobox" key=${repo} role="group" aria-labelledby=${'repo-' + repo}>
+          <h3 id=${'repo-' + repo} class="mono">${repo}</h3>
+          ${g.items.filter((it) => it.repo === repo).map((it) => html`<${Item} key=${it.key} it=${it} value=${it.key in pending ? pending[it.key] : it.value}
+            onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}</div>`)}</section>`)}
       <section class="sec setgroup" id="g-mcp" aria-labelledby="h-mcp"><h2 id="h-mcp" tabindex="-1">MCP status</h2>
         ${st.data ? html`<${McpStatusPanel} mc=${st.data.mcp || {}} onChecked=${st.reload} headingLevel=${3} />` : null}</section>
       <${Appearance} />

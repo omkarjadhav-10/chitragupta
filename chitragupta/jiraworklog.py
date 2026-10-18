@@ -11,6 +11,7 @@ import re
 import traceback
 
 from . import common
+from . import configstore
 from . import extract
 from . import mcpjobs
 from . import slack
@@ -372,7 +373,7 @@ class JiraWorklog:
         bl = self.blocks(day, until)
         manual = self.manual_for(day, cal)
         facts = None
-        if use_jira and mcpjobs.enabled(self.cfg, "jira"):
+        if use_jira and mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.evening"):
             tickets = sorted({b["ticket"] for b in bl if b.get("ticket")} | {m["ticket"] for m in manual})
             if tickets:
                 try:

@@ -37,6 +37,7 @@ A minimal config after setup:
 | `env_branches` | list of strings | `["qa","uat","staging","master","main","develop"]` | Base branches of watched repos that have no `branching.repos` entry. |
 | `branch_fetch` | bool | — | Retired in v0.2.0 (it pruned). Fetching is `branching.fetch`. |
 | `day_starts_at` | `"HH:MM"` | `"04:00"` | Work-day boundary. Work before this time counts as the previous day. |
+| `push_enabled` | bool | `true` | `false` keeps the daily commits on this machine; they are pushed once it's `true` again. |
 | `push_interval_minutes` | int | `30` | Minimum gap between pushes. A push also happens when a session ends or a day closes. |
 | `raw_retention_days` | int | `30` | Raw event files older than this are pruned, but only after they have been processed. |
 | `extract_triggers.min_new_chars` | int | `1500` | A session is extracted once it has at least this much new text, **and** one of the next two triggers fires or the session has ended. |
@@ -57,6 +58,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 | `branching.repos.<repo>.rules` | list | `[]` | `[{"jira_parent": "OPS-*", "strategy": "qa-only"}]`: a ticket whose Jira parent matches uses that strategy. |
 | `branching.repos.<repo>.suffixes` | object | `-qa`, `-uat`, `-on-uat`, `-staging`, `-stg`, `-on-staging`, `-release` | Branch-name endings that name the target (the guard checks them). |
 | `branching.repos.<repo>.remote` | string | `"origin"` | The remote to read and fetch. |
+| `branching.repos.<repo>.relations` | list | `[]` | How the bases relate, each `{"from", "rel": "cut_from" \| "merges_into" \| "syncs_from", "to"}`; see [branch-tracking.md](branch-tracking.md#base-relations). |
 | `branching.repos.<repo>.pr_source` | string | the host CLI if installed | `"git"` forces PR data from merge commits only. |
 | `branching.guard_mode` | `"warn"` \| `"ask"` \| `"off"` | `"warn"` | What the PreToolUse guard does when a branch or PR doesn't fit. |
 | `branching.stale_pr_days` | int | `3` | An open PR older than this raises an alert. |
@@ -102,6 +104,8 @@ Files you produce (Write/Edit output, untracked repo files, published links, pla
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `artifacts.enabled` | bool | `true` | `false` stops copying files into tickets; files already queued wait until it's `true` again. |
+| `requests.enabled` | bool | `true` | `false` stops curating API calls into Bruno requests (no model call, nothing written to the Bruno folder). The DB flow map is not affected. |
 | `artifacts.watch_dirs` | list of paths | `[]` | Extra folders whose new files are copied in. Files dropped into `<home>\_drop\` are moved, not copied. |
 | `artifacts.push_binary_types` | list of extensions | `[]` | Binary types, for example `["pdf"]`, that are also copied next to the ticket's artifacts. Other binaries stay in `artifacts\local\` with 3 versions. |
 | `artifacts.text_max_bytes` | int | `2000000` | Text files above this size are recorded as metadata only. |
@@ -156,9 +160,13 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 |---|---|---|---|
 | `mcp.daily_call_budget` | int | `10` | Maximum background MCP jobs per day. Runs you ask for are counted separately. |
 | `mcp.jira.enabled` | bool | `false` | Run the Jira jobs: ticket cards, and the evening facts used by the worklog. |
+| `mcp.jira.cards` | bool | `true` | With Jira on, read the day's tickets (title, status, summary) for the ticket pages. |
+| `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
 | `mcp.database.enabled` | bool | `false` | Run the database jobs: schema cards, QA trace and link map. Set by `setup use-database`. |
+| `mcp.database.trace` | bool | `true` | With the database MCP on, run the QA trace of a ticket's records. |
+| `mcp.database.linkmap` | bool | `true` | With the database MCP on, rebuild the QA link map once a week. |
 | `mcp.database.server` | string | `""` | The database MCP server's name in your user scope. Nothing runs while this is empty. |
 | `mcp.database.label` | string | `"database MCP"` | How rendered headings name it, for example "Schema facts (database MCP, …)". |
 | `mcp.database.connections` | object env → connection | `{}` | Default connection per environment, for example `{"qa": "qa-main"}`. |

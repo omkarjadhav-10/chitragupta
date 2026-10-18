@@ -17,6 +17,7 @@ from . import apicalls
 from . import artifacts as artmod
 from . import blocks
 from . import common
+from . import configstore
 from . import dbflow
 from . import extract
 from . import replay
@@ -361,7 +362,8 @@ class Features:
         return out
 
     def curate_and_generate(self, force=False):
-        todo = set(self.bruno_changes())
+        requests_on = configstore.on(self.cfg, "requests.enabled")  # off: no curation and no Bruno files; DB flow still runs
+        todo = set(self.bruno_changes()) if requests_on else set()
         last_seen = {}
         for iso, t in self.state.get("recent_tickets", []):
             if iso and (t not in last_seen or iso > last_seen[t]):
@@ -369,7 +371,7 @@ class Features:
         for t in storemod.Store.all_ticket_ids() + list(self.store.tickets):
             tk = self.store.ticket(t)
             rp = tk.get("replay") or {}
-            if rp.get("dirty") and replay.curation_due(tk, self.cfg, last_seen.get(t), force or rp.get("force")):
+            if requests_on and rp.get("dirty") and replay.curation_due(tk, self.cfg, last_seen.get(t), force or rp.get("force")):
                 try:
                     cost = replay.curate(self.store, t, self.cfg)
                     self.a._add_cost(common.workday(common.now(), self.cfg), cost)

@@ -57,6 +57,8 @@ The installed app window and the shortcuts only work on this machine: the server
 - **One write path.** A save goes through `chitragupta/configstore.py`, the same code `/cg:setup` and the engine use: a lock (so two writers can't interleave), a backup of `config.json` under `.worklogackups\`, an atomic write, and one history line per changed key in `%USERPROFILE%\.chitragupta\settings-history.jsonl` (values of secret-looking keys are written as "(hidden)"). The engine saves only the keys it changed itself, onto the current file, so it never overwrites a change you just made.
 - **One rulebook.** `chitragupta/settings.py` holds each setting's label, help, type and limits. The page checks as you type with the same rules, and the server checks again; anything not in the schema, or locked, is refused.
 - **Locked, shown only:** the safety rules, MCP tools and their read/write class, secrets, the data folder, the GitHub repo, the backup folder and the MCP server names. `/cg:setup` changes those.
+- **On/off switches** for the background work, each on unless you turn it off: Jira ticket cards and evening facts, the QA trace and the weekly link map, the daily push, request curation and artifacts.
+- **Per repo** (Branches & PRs): the strategy, the branch names for each base role, how the bases relate (add, change or remove relations, or **Detect from the repo**: read-only git on local refs, no fetch, nothing saved until you review and save) and where PR information comes from.
 - **Undo** reverts the newest change made from this page, and refuses when any of its settings changed again since.
 
 ## Command palette
@@ -125,7 +127,7 @@ The page uses these endpoints. Every one is GET/HEAD and returns JSON unless not
 | `/api/settings` | The settings schema with current values, grouped, plus the last 20 history lines |
 | `PATCH /api/settings` | `{"changes": {"dotted.key": value}}` → 200 `{"id", "changes"}`, or 422 `{"error", "fields": {key: message}}` with nothing saved |
 | `POST /api/settings/undo` | Reverts the newest change from the dashboard; 409 when there is none or it would overwrite a newer change |
-| `POST /api/actions/<name>` | `capture-pause`, `capture-resume`, `mcp-check` (the live `claude mcp list` check `/cg:doctor` runs; no model call) |
+| `POST /api/actions/<name>` | `capture-pause`, `capture-resume`, `mcp-check` (the live `claude mcp list` check `/cg:doctor` runs; no model call), `relations-detect` (`{"repo"}` → proposed base relations from local refs; read-only, saves nothing) |
 
 ## Security model
 

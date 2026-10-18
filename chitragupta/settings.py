@@ -19,6 +19,7 @@ DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MODELS = ["haiku", "sonnet", "opus"]
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PREFIX = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
+BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9*][A-Za-z0-9._/*-]{0,99}$")  # a branch name or an fnmatch pattern
 
 
 def _defaults():
@@ -32,7 +33,7 @@ def _defaults():
 
 
 # --------------------------------------------------------------------------- schema
-# type: bool | int | number | time | choice | days | prefixes | paths | envs_narrow | text
+# type: bool | int | number | time | choice | days | prefixes | paths | envs_narrow | bases | relations | text
 def _i(key, label, help_, type_, group, **kw):
     return dict(key=key, label=label, help=help_, type=type_, group=group, editable=kw.pop("editable", True), **kw)
 
@@ -64,8 +65,16 @@ STATIC = [
        min=1, max=12),
     _i("mcp.jira.enabled", "Use the Jira MCP", "Ticket cards and the evening facts the worklog subtracts.", "bool", "jira",
        affects="Background Jira reads (within the daily budget)"),
+    _i("mcp.jira.cards", "Ticket cards", "Read each day's tickets from Jira (title, status, summary) for the ticket "
+       "pages.", "bool", "jira", default_value=True),
+    _i("mcp.jira.evening", "Evening facts", "Before the 8 PM message, read what's already logged in Jira that day so it "
+       "isn't logged twice.", "bool", "jira", default_value=True),
     _i("mcp.database.enabled", "Use the database MCP", "Schema cards, the QA trace and the link map.", "bool", "database",
        needs="database"),
+    _i("mcp.database.trace", "QA trace", "Follow a ticket's records through QA with read-only queries.", "bool",
+       "database", default_value=True),
+    _i("mcp.database.linkmap", "Link map", "Once a week, sample QA rows to check which table links hold.", "bool",
+       "database", default_value=True),
     _i("qa_data.allowed_envs", "Environments it may read", "Only narrowing is possible here; adding an environment "
        "takes /cg:setup, which checks it isn't production.", "envs_narrow", "database"),
     _i("branching.guard_mode", "Branch guard", "What happens when a new branch or PR doesn't fit the repo's strategy.",
@@ -74,8 +83,14 @@ STATIC = [
        "updates remote-tracking refs.", "bool", "branching"),
     _i("branching.stale_pr_days", "Stale PR after (days)", "An open PR older than this raises an alert.", "int",
        "branching", min=1, max=60),
+    _i("requests.enabled", "Requests", "Curate the API calls you make into Bruno requests per ticket. Off: nothing is "
+       "curated or written to the Bruno folder.", "bool", "artifacts", default_value=True),
+    _i("artifacts.enabled", "Artifacts", "Copy files that name a ticket into its folder. Off: they wait until it's on "
+       "again.", "bool", "artifacts", default_value=True),
     _i("artifacts.watch_dirs", "Watched folders", "New files here are copied in when they name a ticket.", "paths",
        "artifacts", must_exist=True),
+    _i("push_enabled", "Push the daily files", "Off keeps the commits on this machine until you switch it on.", "bool",
+       "push", default_value=True),
     _i("push_interval_minutes", "Push at most every (minutes)", "Minimum gap between pushes of the daily files.", "int",
        "push", min=5, max=1440),
     _i("models.extract", "Model: session extraction", "", "choice", "models", choices=[[m, m] for m in MODELS]),
@@ -120,7 +135,29 @@ def _repo_items(cfg):
         out.append(_i("branching.repos.%s.strategy" % n, "%s: strategy" % n, "How this repo's changes reach their targets.",
                       "choice", "branching", choices=[["", "None (no delivery check)"]] + [[s, s] for s in strategies],
                       repo=n))
+        out.append(_i("branching.repos.%s.bases" % n, "%s: base branches" % n, "The branch names (or patterns such as "
+                      "release/*) that play each role.", "bases", "branching", repo=n, roles=list(gitcmd.repo_conf(cfg, n)["bases"])))
+        out.append(_i("branching.repos.%s.relations" % n, "%s: how the bases relate" % n, "Which base is cut from, merges "
+                      "into or syncs from which. Shapes the branch graph and the delivery wording; the check itself "
+                      "always uses real merges.", "relations", "branching", repo=n,
+                      kinds=[["cut_from", "is cut from"], ["merges_into", "merges into"], ["syncs_from", "syncs from"]]))
+        out.append(_i("branching.repos.%s.pr_source" % n, "%s: PR information from" % n, "Where open and merged PRs are "
+                      "read.", "choice", "branching", repo=n,
+                      choices=[["", "Automatic (host CLI, else merge commits)"],
+                               ["git", "Merge commits only"]]))
     return out
+
+
+def _effective_repo(cfg, it):
+    """Per-repo values as the engine sees them (defaults filled in), so the page shows what is in effect."""
+    from . import gitcmd
+    rc = gitcmd.repo_conf(cfg, it["repo"])
+    field = it["key"].rsplit(".", 1)[1]
+    if field == "bases":
+        return {r: (v if isinstance(v, list) else [v]) for r, v in rc["bases"].items()}
+    if field == "relations":
+        return rc["relations"]
+    return configstore.get(cfg, it["key"], "")
 
 
 def schema(cfg=None):
@@ -179,6 +216,29 @@ def check(it, value, current):
             if os.path.normcase(os.path.realpath(p)).startswith(cd):
                 return "Claude Code's own folder can't be used here."
         return None
+    if t == "bases":
+        if not isinstance(value, dict) or not value:
+            return "Give at least one base branch."
+        for role, pats in value.items():
+            if role not in it["roles"]:
+                return "Unknown role %s." % role
+            if not isinstance(pats, list) or not pats or any(not isinstance(p, str) or not BRANCH_PATTERN.match(p) for p in pats):
+                return "%s: use branch names or patterns (letters, digits, . _ / * -), separated by commas." % role
+        return None
+    if t == "relations":
+        from . import relations
+        if not isinstance(value, list) or len(value) > 30:
+            return "Use a list of at most 30 relations."
+        clean, warnings = relations.normalize(value)
+        if warnings:
+            return warnings[0][0].upper() + warnings[0][1:] + "."
+        for r in clean:
+            for p in [r["from"]] + r["to"]:
+                if not BRANCH_PATTERN.match(p):
+                    return "%s isn't a branch name or pattern." % p
+            if r["from"] in r["to"]:
+                return "%s can't relate to itself." % r["from"]
+        return None
     if t == "envs_narrow":
         cur = current if isinstance(current, list) else []
         if not isinstance(value, list) or not value:
@@ -197,6 +257,9 @@ def describe(cfg=None):
         row = {k: v for k, v in it.items() if k != "default_value"}
         if "fixed" in it:
             row["value"] = it["fixed"]
+        elif it.get("repo"):
+            row["value"] = _effective_repo(eff, it)
+            row["set"] = configstore.get(raw or {}, it["key"]) is not None
         else:
             row["value"] = configstore.get(eff, it["key"], it.get("default_value"))
             row["set"] = configstore.get(raw or {}, it["key"]) is not None  # changed from the default
@@ -236,6 +299,10 @@ def apply(changes, source="dashboard"):
     clean, errors = validate(changes)
     if errors:
         raise ValueError(errors)
+    from . import relations
+    for k in clean:
+        if k.endswith(".relations"):
+            clean[k] = relations.normalize(clean[k])[0]  # stored as the engine reads it: "to" always a list
     return configstore.update(clean, source)
 
 

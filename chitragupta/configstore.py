@@ -63,6 +63,11 @@ def get(cfg, key, default=None):
     return cur
 
 
+def on(cfg, key):
+    """An optional on/off switch: absent means on, only an explicit false turns it off."""
+    return get(cfg, key, True) is not False
+
+
 def set_key(cfg, key, value):
     """Set (or with value None, delete) a dotted key in a nested dict, creating objects on the way."""
     parts = key.split(".")
@@ -106,6 +111,7 @@ class _Lock:
 
     def __enter__(self):
         end = time.monotonic() + LOCK_WAIT_S
+        common.ensure_dir(os.path.dirname(self.path))  # a fresh data home has no .worklog folder yet
         while True:
             try:
                 os.close(paths.create_exclusive(self.path, ("%d %s" % (os.getpid(), common.now_iso())).encode(),

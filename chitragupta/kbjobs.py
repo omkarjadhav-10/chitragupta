@@ -10,6 +10,7 @@ import re
 import traceback
 
 from . import common
+from . import configstore
 from . import envmap
 from . import mcpjobs
 from .redact import redact
@@ -50,15 +51,15 @@ class KBJobs:
         if common.env("NO_MCP_JOBS"):
             return
         left = mcpjobs.budget_left(self.a.health, self.cfg, today)
-        if mcpjobs.enabled(self.cfg, "jira") and not self._offline("jira") and left > EVENING_RESERVE:
+        if mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.cards") and not self._offline("jira")                 and left > EVENING_RESERVE:
             left -= self.jira_cards(today, limit=min(2, left - EVENING_RESERVE))
         if mcpjobs.enabled(self.cfg, "database") and mcpjobs.server_name(self.cfg, "database") \
                 and mcpjobs.database_conn(self.cfg) and not self._offline("database"):
             if left > EVENING_RESERVE:
                 left -= self.schema_cards(today)
-            if left > EVENING_RESERVE:
+            if left > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.trace"):
                 left -= self.qa_traces(today)
-            if left > EVENING_RESERVE and st.get("linkmap_day", "") < (_dt.date.fromisoformat(today) - _dt.timedelta(days=7)).isoformat():
+            if left > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.linkmap") and st.get("linkmap_day", "") < (_dt.date.fromisoformat(today) - _dt.timedelta(days=7)).isoformat():
                 if self.link_map(today):
                     st["linkmap_day"] = today
                     left -= 1

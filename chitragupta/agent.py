@@ -15,6 +15,7 @@ import traceback
 
 from . import branches  # noqa: E402
 from . import common  # noqa: E402
+from . import configstore  # noqa: E402
 from . import delivery  # noqa: E402
 from . import gittrack  # noqa: E402
 from . import extract  # noqa: E402
@@ -921,7 +922,8 @@ class Agent:
             self.refresh_fallbacks()
             self.run_sources()
             try:
-                self.features.process_artifacts()
+                if configstore.on(self.cfg, "artifacts.enabled"):  # off: queued files wait until it's back on
+                    self.features.process_artifacts()
             except Exception:
                 common.log("agent", "artifacts failed: " + traceback.format_exc())
             try:
@@ -951,7 +953,9 @@ class Agent:
         lp = common.parse_ts(h.get("last_push"))
         interval = int(self.cfg.get("push_interval_minutes") or 30) * 60
         due = self.force or self.session_ended or self.day_closed or not lp or (common.now() - lp).total_seconds() >= interval
-        if due and gitsync.unpushed(self.cfg) > 0:
+        if not configstore.on(self.cfg, "push_enabled"):
+            pass  # commits stay local until the push is switched back on
+        elif due and gitsync.unpushed(self.cfg) > 0:
             if gitsync.push(self.cfg, h):
                 common.log("agent", "pushed")
         else:
