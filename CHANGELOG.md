@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18
+
 ### Added
 - **Settings page with a single config write path.** Every setting the dashboard may change, with validation shared by page and server, a review (now → after saving), history in `settings-history.jsonl` and undo; locked items are shown only. `configstore.py` is now the one way config changes (setup, the engine and the dashboard), with a lock, a backup and history; the engine saves only the keys it changed.
 - **Live MCP status** on Health and Settings: Check now, an automatic check when the page opens (at most every 5 minutes), the same code as `/cg:doctor`, shown next to the last background job's view.

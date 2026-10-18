@@ -9,10 +9,10 @@ Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks reco
 - a local **knowledge base** of tables, APIs, integrations and branches
 - **branch tracking** per ticket: its branches and their parents, the PRs, and whether every commit reached every branch your branching strategy requires, with warnings on the ticket page, at session start, while you work and at 20:00 (see [docs/branch-tracking.md](docs/branch-tracking.md))
 - an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
-- a **dashboard** on `127.0.0.1`: today, tickets, timesheet, knowledge and search, with a command palette, live updates and keyboard shortcuts
+- a **dashboard** on `127.0.0.1`: today (with the exact 20:00 message), any past day, tickets, timesheet, the DB map, knowledge, search, team notes and settings, with a command palette, live updates and keyboard shortcuts
 - a read-only **MCP server**, so Claude asks the worklog through 8 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`) instead of reading files; about 140 tokens per session with tool search (see [docs/mcp.md](docs/mcp.md))
 
-It runs on Windows and uses only the Python standard library. Slack, Jira and a database MCP are optional. Everything stays on your machine unless you configure a private GitHub remote for the daily notes.
+It runs on Windows (the background job also has macOS and Linux backends; see [scheduling](docs/scheduling.md)) and uses only the Python standard library. Slack, Jira and a database MCP are optional. Everything stays on your machine unless you configure a private GitHub remote for the daily notes.
 
 ## Install
 
@@ -101,7 +101,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [MCP server](docs/mcp.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

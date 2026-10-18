@@ -3,12 +3,22 @@
 Chitragupta has five parts:
 
 1. **Hooks** record events while you work. They are fast, never call a model and never touch the network.
-2. **The tick** is a background job that turns those events into notes. It runs from a scheduled task and uses a stable copy of the engine.
+2. **The tick** is a background job that turns those events into notes. It runs from the OS's scheduler (`chitragupta/scheduler.py`: Task Scheduler, launchd, a systemd user timer or cron; see [scheduling.md](scheduling.md)) and uses a stable copy of the engine.
 3. **The data home** holds what the tick writes: plain Markdown and JSON.
-4. **The dashboard** is a read-only local server over the data home.
+4. **The dashboard** is a local server over the data home. It reads with GET, and writes only through a short allowlist of protected routes (settings and a few actions).
 5. **The MCP server** (`chitragupta/mcpserver.py`) lets Claude Code sessions query the data home through 8 read-only tools. Claude Code starts it over stdio from `bin/cg-mcp`. See [mcp.md](mcp.md).
 
-Everything is Python standard library code in one package, `chitragupta`.
+Everything is Python standard library code in one package, `chitragupta`. A few modules every part shares:
+
+| Module | Does |
+|---|---|
+| `safety/` | the only code that starts a process, changes a file or opens a connection ([safety.md](safety.md)) |
+| `configstore.py` | the one way `config.json` changes (setup, the engine, the dashboard): lock, backup, history, undo |
+| `settings.py` | the schema and validation of every setting the dashboard may change |
+| `searchidx.py` | the persistent search index (`.worklog/cache/search.sqlite`) for the dashboard, `/cg:search` and the MCP server ([search.md](search.md)) |
+| `relations.py` | how a repo's base branches relate, and their read-only detection |
+| `hostmcp.py` | PR data through a Git host's read-only MCP server |
+| `share.py`, `scanlib.py` | team sharing and the deny-list / secret scan it gates on ([sharing.md](sharing.md)) |
 
 ## Data flow
 
@@ -76,7 +86,7 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 
 ### 4. Dashboard
 
-`chitragupta/dashboard/` is a threaded `http.server` on `127.0.0.1`. It reads `data/`, the rendered files and `health.json`, and writes nothing. See [dashboard.md](dashboard.md).
+`chitragupta/dashboard/` is a threaded `http.server` on `127.0.0.1`. It reads `data/`, the rendered files and `health.json`. Its only writes are the allowlisted routes in `dashboard/writes.py` (Origin and a per-start token checked, JSON only, size and rate limits): settings through `configstore`, and the actions in `dashboard/actions.py`. `dashboard/dbmap.py` builds the DB map. See [dashboard.md](dashboard.md).
 
 ## Runtime layout
 
@@ -142,7 +152,8 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
 |---|---|
 | `~/.claude/skills/chitragupta/SKILL.md` | setup: the model-invoked recall skill |
 | `~/.claude/CLAUDE.md` (block between `<!-- chitragupta:start -->` and `<!-- chitragupta:end -->`) | setup |
-| Task Scheduler `\Chitragupta`, or the Startup-folder `Chitragupta.vbs` fallback | setup |
+| Task Scheduler `\Chitragupta`, or the Startup-folder `Chitragupta.vbs` fallback (Windows); `~/Library/LaunchAgents/dev.chitragupta.tick.plist` (macOS); `~/.config/systemd/user/chitragupta.service` + `.timer`, or one crontab line marked `# chitragupta` (Linux) | setup |
+| `<path>/shares/` of a folder share target; `<home>/share/<name>` clone of a team Git repo (commits and pushes of `shares/` only) | `/cg:share`, the dashboard's Share |
 | `<home>\.git\hooks\pre-commit` | the tick: allowlist and redaction check |
 
 `uninstall` removes everything in this table, including the data home's pre-commit hook when it calls the runtime. It also removes the runtime and the pointer.
