@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Search index** ([docs/search.md](docs/search.md)): one persistent SQLite index (`.worklog\cache\search.sqlite`) for the dashboard, `/cg:search` and the MCP server. It now also covers saved and captured requests, branches, PRs and DB links; each result names the data-home file to read. Updated incrementally after every render (by content hash), rebuilt on a schema change or with `/cg:search --rebuild`. Filters by type, ticket, repo and date range (`/api/search?q=&type=&ticket=&repo=&from=&to=&limit=`).
 - **`/cg:search <words> [--rebuild]`**: the top results with the file to read for each.
 - **Read-only MCP server** (`chitragupta`, started from `bin/cg-mcp`): 8 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`) answer in compact Markdown with file paths, at most 8,000 characters per page. The recall skill uses them before reading files. Chitragupta's own background calls switch the plugin off. See [docs/mcp.md](docs/mcp.md).
+- **PR data through a Git host's read-only MCP server** (Azure DevOps, GitHub) when the host CLI isn't installed: `/cg:setup use-git-host <server>` records it and allows only that provider's classified PR and branch read tools; one budgeted job per repo per refresh; `branching.repos.<repo>.pr_source` takes `auto`, `cli`, `mcp` or `git`; Health and Settings show each repo's PR source and its last refresh.
 
 ### Changed
 - **The worklog preview is the 20:00 message.** One builder makes the message for the sender and every preview (`/cg:today`, `agent worklog-show`): Jira comments, time already in Jira subtracted, condensed descriptions, closing note, delivery check, correction header. A preview uses the last Jira data ("Jira data as of HH:MM") and cached condensed lines, marks lines still "condensed at 20:00", and calls neither Jira nor the model. `worklog-show --jira` refreshes the Jira data (one read job) and `--exact` condenses now, both within the daily MCP budget ([docs/configuration.md](docs/configuration.md)).
@@ -27,6 +28,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 - The date pickers (Today's "Go to a day", the Timesheet month) now show the focus ring on each part, including the browser's calendar button.
 - `agent worklog-show` could make a model call while labelled read-only.
+- GitHub and GitLab repos passed the local folder to `gh` / `glab --repo` instead of `owner/repo`; the host path is now kept apart (`remote_path` in `repo.json`).
 
 ### Security
 - The path guard opens SQLite files only through `paths.sqlite_connect` (write roots checked, `ATTACH` and `VACUUM INTO` refused); the static check rejects any other `sqlite3.connect` of a file.

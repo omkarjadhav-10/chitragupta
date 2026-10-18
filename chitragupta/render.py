@@ -171,7 +171,8 @@ def render_branches(store):
 ALERT_ORDER = ["lost", "only-copy", "gap", "unpushed", "pr-base", "wrong-parent", "check", "pr-stale"]
 DELIVERY_SYMBOL = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "✗", "reverted": "↩", "check": "?"}
 PR_SOURCE = {"merge-commit": "PR info from merge commits only", "gh": "PRs from gh", "glab": "PRs from glab",
-             "az": "PRs from az"}
+             "az": "PRs from az", "mcp:github": "PRs from the GitHub MCP",
+             "mcp:azure-devops": "PRs from the Azure DevOps MCP"}
 
 
 def git_alerts(tk):

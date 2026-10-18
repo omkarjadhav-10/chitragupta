@@ -11,10 +11,12 @@
     python -m chitragupta setup add-slack [--client-id ID] [--callback-port N]
     python -m chitragupta setup slack-user [email]
     python -m chitragupta setup use-database <server>
+    python -m chitragupta setup use-git-host <server> [--provider azure-devops|github]
 
 Slack runs only for background jobs: the server is added in *local* scope of <home>/.worklog/slack-sender/ (its own
 git root), never user scope. Jira jobs are written for the `mcp-atlassian` server. The database MCP is whichever
-configured server you pick with `use-database`.
+configured server you pick with `use-database`. A Git host's MCP server (Azure DevOps, GitHub) you pick with
+`use-git-host` becomes the read-only PR source for repos on that host when its CLI isn't installed.
 """
 import json
 import os
@@ -343,7 +345,10 @@ def mcp_status(cfg=None, probe=True, listing=None):
 
     # Database: whichever configured server the user picked (mcp.database.server).
     dcfg = ((cfg.get("mcp") or {}).get("database") or {})
-    skip = {sl, jname} | {n for n, s in user.items() if _is_slack(n, s) or _is_atlassian_remote(n, s)}
+    from . import hostmcp
+    hosts_found = hostmcp.candidates(user)
+    skip = {sl, jname} | {n for n, s in user.items() if _is_slack(n, s) or _is_atlassian_remote(n, s)} | \
+        {c["server"] for c in hosts_found}
     candidates = sorted(n for n in user if n not in skip)
     dname = dcfg.get("server") or ""
     if dname and dname in user:
@@ -357,9 +362,30 @@ def mcp_status(cfg=None, probe=True, listing=None):
                   if candidates else "no candidate server configured"}
     db_row.update(enabled=bool(dcfg.get("enabled")), candidates=candidates)
 
+    # Git host: a read-only PR source when no host CLI is installed (Azure DevOps / GitHub MCP, user scope).
+    chosen = hostmcp.configured(cfg)
+    rows = []
+    for c in hosts_found:
+        rows.append(dict(c, status=live(c["server"]), configured=chosen.get(c["provider"]) == c["server"]))
+    for p, n in chosen.items():
+        if not any(r["server"] == n for r in rows):
+            rows.append({"server": n, "provider": p, "status": "missing", "configured": True})
+    use = [r for r in rows if r["configured"]]
+    if use:
+        st = "connected" if any(r["status"] == "connected" for r in use) else use[0]["status"]
+        detail = "; ".join("%s server %r (%s read tools)" % (hostmcp.LABEL[r["provider"]], r["server"],
+                                                           len(hostmcp.read_tools(r["provider"]))) for r in use)
+    elif rows:
+        st, detail = "detected", "not chosen; to read PRs through it when no host CLI is installed: %s" % ", ".join(
+            "`setup use-git-host %s`" % r["server"] for r in rows)
+    else:
+        st, detail = "missing", "no Azure DevOps or GitHub MCP server in user scope (optional: PRs come from the host " \
+                                "CLI or merge commits)"
+    host_row = {"status": st, "server": use[0]["server"] if use else None, "detail": detail, "servers": rows}
+
     slack_row["state"] = slack.state(cfg)  # ready | off | not_connected (user id + send tool stored?)
     res = {"checked": common.now_iso(), "probed": probed, "slack": slack_row, "jira": jira_row, "database": db_row,
-           "jobs_configured": mcpjobs.configured(cfg)}
+           "git_host": host_row, "jobs_configured": mcpjobs.configured(cfg)}
     if plugin.is_set_up():
         try:
             common.write_json(plugin.mcp_status_cache(), res)
@@ -737,6 +763,33 @@ def use_database(server, force=False):
     return {"ok": True, "detail": "mcp.database.server = %s (enabled)" % server}
 
 
+def use_git_host(server, provider=None, force=False):
+    """Record a Git host's MCP server as the read-only PR source for repos on that host without a CLI:
+    mcp.git_host.<provider> = {server, enabled}, and its allow.json entry (role git-host, the provider's classified
+    read tools; everything else on that server stays blocked)."""
+    from . import hostmcp, mcpjobs
+    cj = common.read_json(plugin.claude_json_path(), {}) or {}
+    sdef = _servers(cj).get(server)
+    if sdef is None and not force:
+        return {"ok": False, "detail": "%r is not a user-scope MCP server in %s (use --force to set it anyway)"
+                                       % (server, plugin.claude_json_path())}
+    provider = provider or hostmcp.detect_provider(server, sdef)
+    if provider not in hostmcp.PROVIDERS:
+        return {"ok": False, "detail": "can't tell which Git host %r serves; pass --provider %s"
+                                       % (server, "|".join(hostmcp.PROVIDERS))}
+    raw, err = read_raw_config()
+    if raw is None:
+        return {"ok": False, "detail": err}
+    before = json.loads(json.dumps(raw))
+    raw.setdefault("mcp", {}).setdefault("git_host", {})[provider] = {"server": server, "enabled": True}
+    write_raw_config(raw, before)
+    mcpjobs.ensure_files(common.load_config())
+    reads = hostmcp.read_tools(provider)
+    return {"ok": True, "provider": provider, "server": server, "read": reads,
+            "detail": "mcp.git_host.%s.server = %s (enabled); read tools: %s; every other tool of that server is "
+                      "blocked" % (provider, server, ", ".join(reads))}
+
+
 # --------------------------------------------------------------------------- CLI
 
 def check(probe_mcp=True):
@@ -810,8 +863,9 @@ def main(argv):
         if as_json or not st:
             print(json.dumps(st, indent=1))
         else:
-            for k in ("slack", "jira", "database"):
-                print("%-8s %s: %s" % (k, st[k]["status"], st[k]["detail"]))
+            for k in ("slack", "jira", "database", "git_host"):
+                if k in st:
+                    print("%-8s %s: %s" % (k, st[k]["status"], st[k]["detail"]))
         return 0
     if cmd == "add-slack":
         res = add_slack(_opt(rest, "--client-id"), _opt(rest, "--callback-port"))
@@ -831,6 +885,16 @@ def main(argv):
             print("setup use-database <server>", file=sys.stderr)
             return 2
         res = use_database(pos[0], force="--force" in rest)
+        print(json.dumps(res, indent=1) if as_json else res["detail"])
+        return 0 if res["ok"] else 1
+    if cmd == "use-git-host":
+        pos = [a for a in rest if not a.startswith("--")]
+        prov = _opt(rest, "--provider")
+        pos = [a for a in pos if a != prov]
+        if not pos:
+            print("setup use-git-host <server> [--provider azure-devops|github]", file=sys.stderr)
+            return 2
+        res = use_git_host(pos[0], provider=prov, force="--force" in rest)
         print(json.dumps(res, indent=1) if as_json else res["detail"])
         return 0 if res["ok"] else 1
     if cmd == "slack-test":  # one short DM to yourself; touches no worklog or timesheet state

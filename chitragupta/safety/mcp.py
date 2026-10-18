@@ -2,7 +2,8 @@
 
 Profiles
   none            extraction / consolidation: no tool at all (only the structured answer)
-  mcp             Jira / database MCP jobs: read tools on .worklog/mcp/allow.json, every statement through the query guard
+  mcp             Jira / database / Git-host MCP jobs: read tools on .worklog/mcp/allow.json, every statement through the
+                  query guard
   slack-send      only the configured send tool, only to my own Slack user ID (or my DM channel), plain text, capped
   slack-discover  only reading my own profile / looking up a user
   session         a /cg: command in my session: read tools, Chitragupta's own helper, MCP reads as for `mcp`
@@ -10,6 +11,12 @@ Profiles
 A floor that allow.json can't lift: an MCP tool whose name says it writes (create, update, delete, send, comment,
 transition, upload, …) is never a read, whatever the allowlist says. The Slack send tool is the one exception, and
 only under slack-send.
+
+Git-host MCP servers (allow.json entries with "role": "git-host"): "PR data may be read through a Git host's MCP server
+only with the read tools `/cg:setup` classified as read, through the same read-only harness and budget as the other
+MCP jobs." A second floor holds here: the tool must also be one of the provider's classified PR / branch reads below
+(GIT_HOST_READ), and a tool that takes an action / method argument only with a read action. An unknown provider has
+no read tools at all.
 """
 import json
 import os
@@ -28,6 +35,30 @@ WRITE_VERB = re.compile(r"(?:^|_)(?:create|update|delete|remove|add|edit|set|tra
 MAX_SLACK_CHARS = 8000
 SLACK_KEYS = {"channel_id", "channel", "message", "text", "unfurl_app_links", "unfurl_links", "unfurl_media"}
 SQL_KEYS = ("query", "sql", "statement", "text", "command", "q")
+# Git-host MCP read tools per provider, as /cg:setup classifies them (everything else on such a server is a write or
+# unknown, and blocked). tool -> None, or the read values of its `action` / `method` argument.
+# Azure DevOps (microsoft/azure-devops-mcp): v2.4+ names (one tool per area, with an action) and the older names.
+# GitHub (github/github-mcp-server, and the older reference server): pull-request and branch reads.
+GIT_HOST_READ = {
+    "azure-devops": {
+        "repo_pull_request": {"get", "list", "list_by_commits"},
+        "repo_branch": {"get", "list", "list_mine"},
+        "repo_repository": {"get", "list"},
+        "repo_list_pull_requests_by_repo_or_project": None, "repo_list_pull_requests_by_repo": None,
+        "repo_list_pull_requests_by_project": None, "repo_get_pull_request_by_id": None,
+        "repo_list_pull_requests_by_commits": None, "repo_list_branches_by_repo": None,
+        "repo_list_my_branches_by_repo": None, "repo_get_branch_by_name": None, "repo_list_repos_by_project": None,
+        "repo_get_repo_by_name_or_id": None,
+    },
+    "github": {
+        "list_pull_requests": None, "search_pull_requests": None, "list_branches": None,
+        "pull_request_read": {"get", "get_status", "get_files", "get_commits", "get_reviews", "get_review_comments",
+                              "get_comments", "get_check_runs", "get_diff"},
+        "get_pull_request": None, "get_pull_request_status": None, "get_pull_request_reviews": None,
+        "get_pull_request_files": None, "get_pull_request_comments": None,
+    },
+}
+ACTION_KEYS = ("action", "method")
 SESSION_READ = {"Read", "Grep", "Glob", "LS", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
                 "ToolSearch", "AskUserQuestion", "StructuredOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
 
@@ -62,6 +93,8 @@ def mcp_reason(tool_name, tool_input, allow=None):
     if tool in (srv.get("write") or []) or tool not in (srv.get("read") or []):
         return "tool %s is not on the read allowlist" % tool
     inp = tool_input if isinstance(tool_input, dict) else {}
+    if srv.get("role") == "git-host":
+        return git_host_reason(srv.get("provider"), tool, inp)
     max_rows = int(allow.get("max_rows") or 20)
     conns = srv.get("connections")
     if conns is not None:
@@ -81,6 +114,21 @@ def mcp_reason(tool_name, tool_input, allow=None):
         if sql is None:
             return "query tool called without a recognisable statement field"
         return query.sql_reason(sql, max_rows)
+    return None
+
+
+def git_host_reason(provider, tool, inp):
+    """A Git-host server's tool call: a classified PR / branch read of its provider, with a read action."""
+    reads = GIT_HOST_READ.get(str(provider or ""))
+    if not reads or tool not in reads:
+        return "tool %s is not a classified %s read" % (tool, provider or "Git-host")
+    acts = reads[tool]
+    given = [k for k in ACTION_KEYS if k in inp]
+    if acts is None:
+        return "tool %s with an action argument" % tool if given else None
+    if len(given) != 1 or str(inp[given[0]]) not in acts:
+        return "tool %s with action %s (only %s)" % (tool, inp.get(given[0]) if given else "none",
+                                                     ", ".join(sorted(acts)))
     return None
 
 

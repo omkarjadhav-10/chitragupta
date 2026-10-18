@@ -671,13 +671,15 @@ class Agent:
         cfg, st = self.cfg, self.state
         since_map = st.setdefault("branch_activity_since", {})
         baseline = st.setdefault("branch_baseline", {})
-        tr = gittrack.Tracker(cfg, st, self.store, active_ticket=lambda ts: self.active_ticket_within(ts, 2 * 3600))
+        tr = gittrack.Tracker(cfg, st, self.store, active_ticket=lambda ts: self.active_ticket_within(ts, 2 * 3600),
+                              health=self.health)
         for ev in self.git_events:
             tr.add_session_event(ev)
         self.git_events = []
         before = {n: {b: dict(r) for b, r in gittrack.RepoData(n).branches.items()} for n in gittrack.all_repo_names()}
         rx = tr.refresh()
         self.store.reload_branches()
+        self.health["pr_sources"] = gittrack.pr_source_rows(cfg, rx)  # Health / Settings: which PR source, last refresh
         for name, r in rx.items():
             key = common.norm_path(r.path)
             # first sight of a repo: record current branches, but only log activity from the start of today
@@ -1017,7 +1019,8 @@ def cmd_branch_check(key=None, wait_s=None):
         if key:
             names = set(agent.store.ticket(key).get("repos") or [])
             repos = [p for p in repos if gittrack.repo_key(p) in names] or repos
-        tr = gittrack.Tracker(cfg, agent.state, agent.store, force_fetch=True, only_tickets=[key] if key else None)
+        tr = gittrack.Tracker(cfg, agent.state, agent.store, force_fetch=True, only_tickets=[key] if key else None,
+                              health=agent.health)
         rx = tr.refresh(repos, fetch=True, force_pr=True)
         agent.store.reload_branches()
         if key:

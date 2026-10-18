@@ -38,6 +38,7 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
    - `gh`, `glab`, `az` and any Git-host MCP may list and view PRs, branches and work items.
    - Never create, edit, approve, comment on, merge, close or complete a PR.
    - Never create, delete or lock a branch or ref, run a pipeline, or call a raw API with anything but GET.
+   - PR data may be read through a Git host's MCP server only with the read tools `/cg:setup` classified as read, through the same read-only harness and budget as the other MCP jobs.
 4. **Azure CLI: an allowlist, nothing else.** Only `az repos pr list|show`, `az repos ref list`, `az repos list|show`, `az boards work-item show` and `az account show`. Every other `az` command group is blocked, because it can change cloud resources.
 5. **Databases are read-only.**
    - Allowed: one `SELECT` or `WITH … SELECT`, catalog reads, `EXPLAIN` without `ANALYZE`, and read-only metadata procedures.

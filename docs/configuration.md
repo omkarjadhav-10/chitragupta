@@ -59,7 +59,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 | `branching.repos.<repo>.suffixes` | object | `-qa`, `-uat`, `-on-uat`, `-staging`, `-stg`, `-on-staging`, `-release` | Branch-name endings that name the target (the guard checks them). |
 | `branching.repos.<repo>.remote` | string | `"origin"` | The remote to read and fetch. |
 | `branching.repos.<repo>.relations` | list | `[]` | How the bases relate, each `{"from", "rel": "cut_from" \| "merges_into" \| "syncs_from", "to"}`; see [branch-tracking.md](branch-tracking.md#base-relations). |
-| `branching.repos.<repo>.pr_source` | string | the host CLI if installed | `"git"` forces PR data from merge commits only. |
+| `branching.repos.<repo>.pr_source` | string | `"auto"` | `auto`: the host CLI if installed, else the host's MCP server (`mcp.git_host`), else merge commits. `"cli"` or `"mcp"`: only that source, else merge commits. `"git"`: merge commits only. |
 | `branching.guard_mode` | `"warn"` \| `"ask"` \| `"off"` | `"warn"` | What the PreToolUse guard does when a branch or PR doesn't fit. |
 | `branching.stale_pr_days` | int | `3` | An open PR older than this raises an alert. |
 | `branching.ignore_tickets` | list | `[]` | Tickets with no branch tracking at all. |
@@ -175,6 +175,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 | `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
+| `mcp.git_host.<provider>` | object | — | `{"server", "enabled"}` for `azure-devops` or `github`: the user-scope MCP server PRs are read through when the host CLI isn't installed. Set by `setup use-git-host <server>`, which allows only that provider's classified PR and branch read tools. |
 | `mcp.database.enabled` | bool | `false` | Run the database jobs: schema cards, QA trace and link map. Set by `setup use-database`. |
 | `mcp.database.trace` | bool | `true` | With the database MCP on, run the QA trace of a ticket's records. |
 | `mcp.database.linkmap` | bool | `true` | With the database MCP on, rebuild the QA link map once a week. |

@@ -1,0 +1,32 @@
+[
+ {
+  "number": 812,
+  "title": "ABC-1001 add order totals",
+  "source": "feature/ABC-1001-x",
+  "target": "qa",
+  "state": "open",
+  "review": "changes_requested",
+  "created_at": "2026-10-08T09:30:00Z",
+  "merged_at": null,
+  "merge_commit": null,
+  "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "head_at_merge": null,
+  "url": "https://dev.azure.com/acme/Shop/_git/shop-api/pullrequest/812",
+  "src": "mcp:azure-devops"
+ },
+ {
+  "number": 815,
+  "title": "ABC-1002 fix rounding",
+  "source": "feature/ABC-1002-y",
+  "target": "release/1.0",
+  "state": "merged",
+  "review": "approved",
+  "created_at": "2026-10-08T11:00:00Z",
+  "merged_at": "2026-10-09T08:15:00Z",
+  "merge_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "head": "cccccccccccccccccccccccccccccccccccccccc",
+  "head_at_merge": "cccccccccccccccccccccccccccccccccccccccc",
+  "url": "https://dev.azure.com/acme/Shop/_git/shop-api/pullrequest/815",
+  "src": "mcp:azure-devops"
+ }
+]
