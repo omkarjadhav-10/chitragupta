@@ -980,4 +980,18 @@ def render_all(store, cfg, health, days=None, tickets=None, everything=False):
     if common.write_text(os.path.join(h, "README.md"), PUBLIC_README):
         changed.append("README.md")
     common.write_text(common.wl("README.md"), render_readme(cfg))
+    update_search_index()
     return changed
+
+
+def update_search_index():
+    """Bring the search index (.worklog/cache/search.sqlite) up to date with what was just rendered. Fail-open: the
+    index is a rebuildable cache, so an error is logged and the tick carries on."""
+    try:
+        from . import searchidx
+        res = searchidx.update()
+        if res["changed"] or res["removed"]:
+            common.log("search", "index updated: %(changed)d changed, %(removed)d removed, %(units)d units, %(ms)d ms" % res)
+    except Exception:  # noqa: BLE001
+        import traceback
+        common.log("search", "index update failed: " + traceback.format_exc())

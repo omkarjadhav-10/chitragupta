@@ -226,7 +226,8 @@ class TestKnowledgeStatusSetup(V2Base):
         self.assertEqual([(x["role"], x["server"], x["status"]) for x in live["servers"]],
                          [("slack", "", "missing"), ("jira", "jira-test", "connected"), ("database", "db-test", "signed out")])
         self.assertNotIn("status", s["mcp"])
-        self.assertEqual(set(s["search"]), {"engine", "docs", "built_at", "build_ms"})
+        self.assertEqual(set(s["search"]), {"engine", "docs", "built_at", "build_ms", "updated_at", "update_ms", "sources",
+                                            "file", "view"})
         os.remove(os.path.join(self.home, ".worklog", "cache", "mcp-status.json"))
         self.assertIsNone(api.status()["mcp"]["live"])
 
@@ -321,7 +322,8 @@ class TestSearch(V2Base):
                 self.assertEqual(set(g), {"type", "label", "count", "results"})
                 self.assertLessEqual(len(g["results"]), search.PER_GROUP)
                 for r in g["results"]:
-                    self.assertEqual(set(r), {"type", "ref", "title", "ticket", "date", "href", "snippet", "hits"})
+                    self.assertEqual(set(r), {"type", "ref", "title", "ticket", "repo", "date", "href", "path", "snippet",
+                                              "hits"})
                     self.assertLessEqual(len(r["snippet"]), search.SNIPPET + 2)
                     self.assertNotIn("<", r["snippet"].replace("<br", ""))
                     for start, n in r["hits"]:
@@ -368,7 +370,7 @@ class TestSearch(V2Base):
         self.assertEqual(first["engine"], engine)
         self.assertGreater(first["docs"], 10)
         _w(os.path.join(self.home, "data", "tickets", "ABC-1004.json"), {"id": "ABC-1004", "title": "Quokka export", "last": self.days["day"]})
-        api._cursor_cache.update(at=0.0)
+        search.invalidate()  # readers re-check the data home at most every 2 s
         res = search.search("quokka", engine=engine)
         self.assertEqual(res["groups"][0]["results"][0]["ref"], "ABC-1004")
         self.assertEqual(search.stats()["docs"], first["docs"] + 1)
@@ -458,6 +460,14 @@ class V2Http(V2Base):
         s = json.loads(self.get("/api/search?q=refun&type=ticket,api&limit=5")[1])
         self.assertEqual([g["type"] for g in s["groups"]], ["ticket", "api"])
         self.assertEqual(json.loads(self.get("/api/search?q=")[1])["total"], 0)
+        y = self.days["yday"]
+        f = json.loads(self.get("/api/search?q=order&ticket=abc-1001&from=%s&to=%s&limit=50" % (y, y))[1])
+        rows = [r for g in f["groups"] for r in g["results"]]
+        self.assertTrue(rows)
+        self.assertTrue(all(r["date"] == y and "path" in r and "repo" in r for r in rows), rows)
+        self.assertEqual(json.loads(self.get("/api/search?q=checkout&repo=nope")[1])["total"], 0)
+        for bad in ("from=2026-02-30", "to=nope"):
+            self.assertEqual(self.get("/api/search?q=order&" + bad)[0].status, 400, bad)
         st = json.loads(self.get("/api/status")[1])
         self.assertGreater(st["search"]["docs"], 0)
         self.assertEqual(st["search"]["engine"], s["engine"])

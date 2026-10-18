@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **Search index** ([docs/search.md](docs/search.md)): one persistent SQLite index (`.worklog\cache\search.sqlite`) for the dashboard, `/cg:search` and the MCP server. It now also covers saved and captured requests, branches, PRs and DB links; each result names the data-home file to read. Updated incrementally after every render (by content hash), rebuilt on a schema change or with `/cg:search --rebuild`. Filters by type, ticket, repo and date range (`/api/search?q=&type=&ticket=&repo=&from=&to=&limit=`).
+- **`/cg:search <words> [--rebuild]`**: the top results with the file to read for each.
+
+### Security
+- The path guard opens SQLite files only through `paths.sqlite_connect` (write roots checked, `ATTACH` and `VACUUM INTO` refused); the static check rejects any other `sqlite3.connect` of a file.
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

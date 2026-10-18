@@ -12,7 +12,7 @@ Routes
   /api/day/<YYYY-MM-DD>  the same for any day (a past day's preview is composed whole)
   /api/calendar?from=&to=   minutes per day with leave / holidays / targets (default: the last 365 days)
   /api/knowledge         tables, relations, writers, APIs and integrations from the catalog and the QA link map
-  /api/search?q=&type=&limit=   full-text search (in-memory index, see search.py)
+  /api/search?q=&type=&ticket=&repo=&from=&to=&limit=   full-text search (the search index, read-only; see searchidx.py)
   /api/setup             a read-only setup checklist (doctor's fast mode, cached 60 s)
   /api/events            Server-Sent Events: "cursor" events when /api/changes would move (max 16 streams)
   /api/tickets[?q=]      ticket list
@@ -402,7 +402,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/search":
             from . import search
             types = [t for t in re.split(r"[,\s]+", q("type")) if t] or None
-            return self.send_json(search.search(q("q"), types, _int(q("limit"), 40)))
+            try:
+                return self.send_json(search.search(q("q"), types, ticket=q("ticket")[:20] or None,
+                                                    repo=q("repo")[:200] or None, frm=q("from") or None,
+                                                    to=q("to") or None, limit=_int(q("limit"), 40)))
+            except ValueError as e:
+                return self.send_json({"error": str(e)[:200]}, 400)
         if path == "/api/setup":
             return self.send_json(api.setup())
         if path == "/api/tickets":
