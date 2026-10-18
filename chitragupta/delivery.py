@@ -18,6 +18,7 @@ import re
 from . import common
 from . import gitcmd
 from . import gittrack as gt
+from . import relations
 
 SYMBOL = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "✗", "reverted": "↩", "check": "?"}
 LABEL = {"in": "in target", "same": "same change in target", "squash": "via squash PR", "open": "PR open",
@@ -311,6 +312,25 @@ def superseded(b, branches, strat, prs):
     return None
 
 
+def explain_with_relations(row, targets, rels):
+    """A missing cell whose change is already in another target that flows into it says so, e.g. "in release/x;
+    reaches qa when release/x is merged into qa". Only the wording changes; the verdict stays real reachability."""
+    if not rels:
+        return
+    for t in targets:
+        c = row["cells"].get(t["role"]) or {}
+        if c.get("s") != "missing":
+            continue
+        for u in targets:
+            cu = row["cells"].get(u["role"]) or {}
+            if u is t or cu.get("s") not in ("in", "same", "squash") or u.get("any"):
+                continue
+            hint = relations.explain(u["name"], t["name"], rels)
+            if hint:
+                c["why"] = "in %s; %s" % (u["name"], hint) + ("; " + c["why"] if c.get("why") and c["why"] != "no PR carries it" else "")
+                break
+
+
 # --------------------------------------------------------------------------- one ticket in one repo
 
 def compute(r, key, tk, cfg, now=None):
@@ -324,7 +344,8 @@ def compute(r, key, tk, cfg, now=None):
     name, how = strategy_for(cfg, r, key, tk)
     strat = s["strategies"].get(name) if name else None
     out = {"repo": r.name, "strategy": name, "strategy_how": how, "pr_source": r.data.meta.get("pr_source"),
-           "branches": [], "prs": [], "targets": [], "rows": [], "alerts": []}
+           "branches": [], "prs": [], "targets": [], "rows": [], "alerts": [],
+           "relations": list(r.conf.get("relations") or [])}
     for b in branches:
         st = branch_status(b, prs)
         sup = superseded(b, branches, strat, prs) if strat else None
@@ -350,6 +371,7 @@ def compute(r, key, tk, cfg, now=None):
     ck.all_refs = sorted({ref for t in targets for ref in t["refs"]})
     for row in rows:
         row["cells"] = {t["role"]: ck.cell(row, t) if t["refs"] else {"s": "missing", "why": t["how"]} for t in targets}
+        explain_with_relations(row, targets, out["relations"])
     out["targets"] = [{k: t.get(k) for k in ("role", "name", "how", "any")} for t in targets]
     out["rows"] = [{"id": x["id"][:12], "shas": [s_[:9] for s_ in x["shas"]], "loose": [s_[:9] for s_ in x.get("loose") or []],
                     "subject": x["subject"], "date": x["date"], "branches": x["branches"], "cells": x["cells"]} for x in rows]

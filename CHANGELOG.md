@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Slack sender had no tool guard (hooks were off). It now has one, with the recipient checked in code.
 
 ### Added
+- **Base relations** (`branching.repos.<repo>.relations`: `cut_from`, `merges_into`, `syncs_from`): the branch graph draws bases from their real fork points and the merges between them; missing delivery cells say how the change will arrive (verdicts unchanged). `cli relations detect` proposes them from local refs (read-only), `cli relations set` saves them.
+
+### Added
 - **Dashboard 2.0, read side** ([docs/dashboard.md](docs/dashboard.md)): a new look and layout (navigation, a side list per page, the page), live updates, and these pages:
   - **Today**: time against the day's target, the day lane by lane per ticket with commits, delivery alerts across all tickets, tonight's Jira entries with a copy button per field; **past days** at `#/day/<date>`
   - **Tickets**: filter by text, status, repo, alerts and last active; sort any column. **Ticket**: a header that stays in view and tabs (Overview, Branches & PRs, DB flow, Requests, Queries, Artifacts, Timeline, Notes)
