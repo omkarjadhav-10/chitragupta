@@ -154,20 +154,19 @@ def day_rows(dd, store=None):
 
 
 def preview(day, cfg):
-    """Tonight's message as the 20:00 job would build it, without Jira or a model call (descriptions are the
-    recorded lines, not condensed). Nothing is saved or sent."""
-    from . import agent as agentmod
+    """Tonight's message exactly as the 20:00 job would build it now (the sender's own builder), from the cached Jira
+    facts and condensed lines: no Jira or model call, nothing saved or sent. -> (text, notes)."""
     from . import jiraworklog
-    from .redact import redact
-    a = agentmod.Agent()
-    jwl = a.jwl
-    cal = jiraworklog.load_cal()
-    until = common.now() if day == today_day(cfg) else None
-    res = T.compose(day, today_day(cfg), jwl.blocks(day, until), jwl.manual_for(day, cal), cal, jwl.ts,
-                    describe=lambda entries: jwl.describe(entries, condense=False))
-    if res.get("kind") == "message":
-        return redact(res["text"], mode="public")
-    return res.get("text") or "(no message for %s: %s)" % (day, res.get("reason"))
+    pv = jiraworklog.preview(day)
+    notes = []
+    if pv.get("facts_as_of"):
+        notes.append(pv["facts_as_of"] + ".")
+    elif pv.get("kind") == "message" and ((cfg.get("mcp") or {}).get("jira") or {}).get("enabled"):
+        notes.append("No Jira data yet: time already logged in Jira is subtracted at %s." % (pv.get("send_at") or "20:00"))
+    n = sum(1 for e in pv.get("entries") or [] if e.get("pending_condense"))
+    if n:
+        notes.append("%d description%s condensed at %s." % (n, " is" if n == 1 else "s are", pv.get("send_at") or "20:00"))
+    return pv.get("text") or "(no message for %s: %s)" % (day, pv.get("reason")), notes
 
 
 def cmd_today(a):
@@ -214,7 +213,11 @@ def cmd_today(a):
     out("## Jira worklog preview (sent at %s; nothing is sent now)" % ts.get("send_at", "20:00"))
     out()
     try:
-        out(preview(day, cfg))
+        text, notes = preview(day, cfg)
+        out(text)
+        if notes:
+            out()
+            out("_%s_" % " ".join(notes))
     except Exception as ex:  # a preview problem must not hide the time table
         out("(preview unavailable: %s)" % ex)
     return 0
@@ -367,13 +370,9 @@ def cmd_check(a):
     return 0
 
 
-def _append_inbox(line):
-    path = common.hp("inbox.md")
-    existing = common.read_text(path)
-    if any(l.strip() == line for l in existing.splitlines()):
-        return False
-    paths.append_text(path, ("\n" if existing and not existing.endswith("\n") else "") + line + "\n")
-    return True
+def _append_inbox(line, repeat=False):
+    from . import jiraworklog
+    return jiraworklog.append_inbox(line, repeat)
 
 
 def cmd_branch(a):
@@ -593,12 +592,17 @@ def cmd_log(a):
     if err:
         sys.stderr.write("Not added: %s.\n%s\n" % (err, GRAMMAR))
         return 2
-    if not _append_inbox(line):
+    from . import jiraworklog
+    if d["kind"] == "resend" and len(d["days"]) == 1 and line == "resend: " + d["days"][0]:
+        import uuid  # an action line: every request counts, so a repeat is added (each command is its own request)
+        jiraworklog.request_resend(d["days"][0], "cli-" + uuid.uuid4().hex)
+    elif d["kind"] == "resend":  # a range or a trailing note: the line as typed, repeats allowed too
+        _append_inbox(line, repeat=True)
+    elif not _append_inbox(line):
         out("Already in inbox.md: `%s` (the agent ignores repeated lines, so nothing was added)." % line)
         return 0
     out("Added to inbox.md: `%s`" % line)
     out("The background agent applies it on its next tick (within about 5 minutes).")
-    from . import jiraworklog
     for day in d["days"]:
         sh = jiraworklog.load_sheet(day)
         age = (_dt.date.fromisoformat(today) - _dt.date.fromisoformat(day)).days

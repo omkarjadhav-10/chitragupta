@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- **The worklog preview is the 20:00 message.** One builder makes the message for the sender and every preview (`/cg:today`, `agent worklog-show`): Jira comments, time already in Jira subtracted, condensed descriptions, closing note, delivery check, correction header. A preview uses the last Jira data ("Jira data as of HH:MM") and cached condensed lines, marks lines still "condensed at 20:00", and calls neither Jira nor the model. `worklog-show --jira` refreshes the Jira data (one read job) and `--exact` condenses now, both within the daily MCP budget ([docs/configuration.md](docs/configuration.md)).
+- **`resend:` can be repeated.** Every new copy of a `resend:` line sends the day again (other inbox lines are still read once); `/cg:log resend: <day>` always adds one. Each send, resends included, is kept in the day's history. Migration `inbox-counts` converts the inbox state, backing up `state.json` first.
+
+### Fixed
+- `agent worklog-show` could make a model call while labelled read-only.
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

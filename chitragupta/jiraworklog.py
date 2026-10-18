@@ -3,11 +3,18 @@
 State: data/calendar.json (leave / half days / holidays / extra workdays / manual time), data/timesheets/<day>.json
 (entries, message versions, status, Slack ts). One message per day, plus one "Corrected update" when an inbox line
 changes a day that was already messaged (up to 3 days back, debounced 15 min).
+
+One builder, JiraWorklog.build(), makes the 20:00 text; the sender (run_day) and every preview (dashboard, `/cg:today`,
+`agent worklog-show`) call it, so a preview from the same inputs is the message byte for byte. A preview reads the
+latest evening-facts cache (data/jira/_evening/<day>.json) and the condensed-line cache (.worklog/cache/condense/<day>.json)
+and calls neither Jira nor the model; refresh_facts() and preview_exact() are the two asked-for calls, within budget.
 """
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
+import threading
 import traceback
 
 from . import common
@@ -16,6 +23,11 @@ from . import mcpjobs
 from . import slack
 from . import timesheet as T
 from .redact import redact
+from .safety import paths
+
+_AUTO = object()  # build(until=...): "now" for the current work day, the whole day otherwise
+RESEND_WINDOW_S = 120  # a Resend request with the same id inside this window counts once
+CONDENSE_KEEP_DAYS = 14
 
 EXAMPLES = [
     "Retested the document upload fix on QA and checked the file shows up in the admin portal. Wrote the RCA comment.",
@@ -79,11 +91,37 @@ def save_sheet(day, sh):
     common.write_json(sheet_path(day), sh)
 
 
+def evening_cache(day):
+    """The latest evening-facts record of `day` ({"facts", "fetched_at", ...}) or {} (written by mcpjobs.jira_evening)."""
+    rec = common.read_json(common.hp("data", "jira", "_evening", day + ".json"), {}) or {}
+    return rec if isinstance(rec.get("facts"), dict) else {}
+
+
+def condense_path(day):
+    return common.wl("cache", "condense", day + ".json")
+
+
+def _row_key(row):
+    return hashlib.sha1(row.encode("utf-8")).hexdigest()[:20]
+
+
+def prune_condense_cache(today, keep_days=CONDENSE_KEEP_DAYS):
+    root = common.wl("cache", "condense")
+    cutoff = (_dt.date.fromisoformat(today) - _dt.timedelta(days=keep_days)).isoformat()
+    for fn in os.listdir(root) if os.path.isdir(root) else []:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.json", fn) and fn[:-5] < cutoff:
+            try:
+                paths.delete(os.path.join(root, fn))
+            except OSError:
+                pass
+
+
 class JiraWorklog:
     def __init__(self, agent):
         self.a = agent
         self.cfg = agent.cfg
         self.ts = T.settings(self.cfg)
+        self.condense_calls = 0  # model condense calls made by this instance (preview_exact counts them)
 
     @property
     def store(self):
@@ -278,9 +316,14 @@ class JiraWorklog:
                     return cand
         return "Worked on %s." % ticket
 
-    def describe(self, entries, condense=True, facts=None):
-        """Fill e['desc']: manual text | single line | joined lines (<= 30 words) | one batched model call when
-        notes need condensing or Jira facts of the day (my comments, status moves) belong in an entry."""
+    def describe(self, entries, condense="model", facts=None, day=None):
+        """Fill e['desc']: manual text | single line | joined lines (<= 30 words) | a condensed line when notes need
+        condensing or Jira facts of the day (my comments, status moves) belong in an entry.
+        condense: "model" (True) = cached condensed lines, one batched model call for the rest (then cached) |
+        "cache" = cached lines only; an entry still to condense keeps its joined text and gets pending_condense |
+        False = no condensing. The cache (per `day`) is keyed by a hash of each entry's condense input."""
+        if condense is True:
+            condense = "model"
         jf = self._facts_per_entry(entries, facts)
         need = []
         for i, e in enumerate(entries):
@@ -305,31 +348,62 @@ class JiraWorklog:
             else:
                 e["desc"] = " ".join(ls) if words(" ".join(ls)) <= 30 else ls[0]
                 need.append((i, e["ticket"], ls))
-        if need and condense:
-            try:
-                rows = []
-                for i, t, ls in need:
-                    row = "%d. %s: %s" % (i, t, " | ".join(ls) or "(no notes)")
-                    if jf.get(i):
-                        row += "\n   Jira today: " + " | ".join(jf[i])
-                    rows.append(row)
-                out, cost = extract.call_claude("worklog_condense", "\n".join(rows), self.cfg, timeout=180)
-                self._cost("describe", cost)
-                for d in out.get("descriptions") or []:
-                    k = d.get("i")
-                    if not (isinstance(k, int) and 0 <= k < len(entries)):
-                        continue
-                    why = line_ok(d.get("text"), entries[k]["ticket"])
-                    if why:
-                        common.log("agent", "condensed line rejected (%s): %s" % (why, common.truncate(d.get("text"), 200)))
-                    else:
-                        entries[k]["desc"] = d["text"].strip()
-            except Exception as ex:  # noqa: joined lines stay
-                common.log("agent", "condense failed: %r" % ex)
+        if need and condense in ("model", "cache"):
+            rows = {}
+            for i, t, ls in need:
+                row = "%s: %s" % (t, " | ".join(ls) or "(no notes)")
+                if jf.get(i):
+                    row += "\n   Jira today: " + " | ".join(jf[i])
+                rows[i] = row
+            cache = (common.read_json(condense_path(day), {}) or {}) if day else {}
+            lines = cache.get("rows") if isinstance(cache.get("rows"), dict) else {}
+            missing = []
+            for i in rows:
+                hit = lines.get(_row_key(rows[i]))
+                if not isinstance(hit, dict):
+                    missing.append(i)
+                elif hit.get("text"):  # a cached "text": null = the model gave nothing usable: the joined text stays
+                    entries[i]["desc"] = hit["text"]
+            if missing and condense == "model":
+                self._condense(entries, rows, missing, lines, day)
+            elif missing:
+                for i in missing:
+                    entries[i]["pending_condense"] = True
         for e in entries:
             if not e.get("manual") and line_ok(e.get("desc"), e["ticket"]):
                 e["desc"] = self.fallback(e["ticket"])
         return entries
+
+    def _condense(self, entries, rows, missing, lines, day):
+        """One batched model call for the entries in `missing`; every answer (or "nothing usable") is cached."""
+        try:
+            stdin = "\n".join("%d. %s" % (i, rows[i]) for i in missing)
+            out, cost = extract.call_claude("worklog_condense", stdin, self.cfg, timeout=180)
+            self.condense_calls += 1
+            self._cost("describe", cost)
+        except Exception as ex:  # noqa: joined lines stay (and nothing is cached: the next build tries again)
+            common.log("agent", "condense failed: %r" % ex)
+            return
+        got = {}
+        for d in out.get("descriptions") or []:
+            k = d.get("i")
+            if not (isinstance(k, int) and k in missing):
+                continue
+            why = line_ok(d.get("text"), entries[k]["ticket"])
+            if why:
+                common.log("agent", "condensed line rejected (%s): %s" % (why, common.truncate(d.get("text"), 200)))
+            else:
+                got[k] = d["text"].strip()
+                entries[k]["desc"] = got[k]
+        if not day:
+            return
+        at = common.now_iso()
+        for i in missing:
+            lines[_row_key(rows[i])] = {"ticket": entries[i]["ticket"], "text": got.get(i), "at": at}
+        try:
+            common.write_json(condense_path(day), {"day": day, "rows": lines})
+        except Exception:  # a cache that can't be written costs a model call next time, nothing more
+            common.log("agent", "condense cache not written: " + traceback.format_exc())
 
     def _facts_per_entry(self, entries, facts):
         """Jira facts of the day -> {entry index: ["comment (RCA ...): <snippet>", "moved to READY FOR TESTING"]}"""
@@ -366,39 +440,85 @@ class JiraWorklog:
     def manual_for(self, day, cal):
         return [dict(m) for m in ((cal.get("time") or {}).get(day) or [])]
 
-    def compose(self, day, send_day=None, correction=False, use_jira=True, until=None, describe=True):
-        send_day = send_day or common.workday(common.now(), self.cfg)
+    def fact_tickets(self, blocks, manual):
+        return sorted({b["ticket"] for b in blocks if b.get("ticket")} | {m["ticket"] for m in manual})
+
+    def build(self, day, send_day=None, *, until=_AUTO, facts="live", condense="model", correction=False, delivery=True):
+        """The 20:00 message: the one builder the sender and every preview call.
+        until: activity up to then (default: now for the current work day, the whole day otherwise).
+        facts: "live" = one read-only jira-evening job (the sender) | "cached" = the latest evening-facts cache, no call
+        (a preview) | None = no Jira. Only when mcp.jira.enabled; they add my Jira comments as activity points and
+        subtract time already logged in Jira.
+        condense: "model" | "cache" | False, see describe().
+        -> T.compose's result ("kind", "text", "entries", "note", "target", "tracked", ...) with the public pass and
+        the delivery-check block applied to "text", plus "facts" (bool), "facts_at" (ISO time of the Jira data or
+        None), "facts_source" ("live" | "cached" | None), "pending_condense" (bool; entries carry it too),
+        "delivery" (the block or "") and "blocks" (the activity blocks it was built from)."""
+        now = common.now()
+        send_day = send_day or common.workday(now, self.cfg)
+        if until is _AUTO:
+            until = now if day == send_day else None
         cal = load_cal()
         bl = self.blocks(day, until)
         manual = self.manual_for(day, cal)
-        facts = None
-        if use_jira and mcpjobs.enabled(self.cfg, "jira"):
-            tickets = sorted({b["ticket"] for b in bl if b.get("ticket")} | {m["ticket"] for m in manual})
-            if tickets:
+        fx, facts_at, source = None, None, None
+        if facts and mcpjobs.enabled(self.cfg, "jira"):
+            tickets = self.fact_tickets(bl, manual)
+            if tickets and facts == "live":
                 try:
-                    facts = mcpjobs.jira_evening(day, tickets, self.cfg, self.a.health)
-                    self.a.health.setdefault("jira_worklog", {})["jira_facts"] = common.now_iso()
+                    fx = mcpjobs.jira_evening(day, tickets, self.cfg, self.a.health)
+                    facts_at = common.now_iso()
+                    self.a.health.setdefault("jira_worklog", {})["jira_facts"] = facts_at
                 except mcpjobs.JobError as ex:
                     common.log("agent", "jira evening facts skipped: %s" % ex)
                     self.a.health.setdefault("jira_worklog", {})["jira_skipped"] = "%s %s" % (common.now_iso(), ex)
                 except Exception:
                     common.log("agent", "jira evening facts failed: " + traceback.format_exc())
+            elif tickets and facts == "cached":
+                rec = evening_cache(day)
+                fx, facts_at = rec.get("facts"), rec.get("fetched_at")
+            if fx:
+                source = facts
+            else:
+                fx = facts_at = None
         already = []
-        if facts:
-            bl = self.blocks(day, until, facts.get("comments"))
+        if fx:
+            bl = self.blocks(day, until, fx.get("comments"))
             per = {}
-            for w in facts.get("worklogs") or []:
+            for w in fx.get("worklogs") or []:
                 per[w["ticket"]] = per.get(w["ticket"], 0) + int(w.get("minutes") or 0)
             already = sorted(per.items())
 
         def fill(entries):
-            self.describe(entries, condense=describe, facts=facts)
-        res = T.compose(day, send_day, bl, manual, cal, self.ts, already=already, correction=correction,
-                        describe=fill if describe else None)
+            self.describe(entries, condense=condense, facts=fx, day=day)
+        res = T.compose(day, send_day, bl, manual, cal, self.ts, already=already, correction=correction, describe=fill)
+        if res["kind"] == "nudge" and day != send_day:
+            res = {"kind": "none", "reason": "nothing tracked (a late nudge is not sent)"}
+        res["delivery"] = ""
         if res.get("kind") == "message":
             res["text"] = redact(res["text"], mode="public")
-        res["facts"] = bool(facts)
+            if delivery:
+                try:  # after the closing note; the Jira entries above stay exactly as composed
+                    day_tickets = sorted({e["ticket"] for e in res.get("entries") or [] if e.get("ticket")} |
+                                         set((self.store.day(day).get("tickets") or {}).keys()))
+                    res["delivery"] = delivery_block(self.store, day_tickets)
+                    if res["delivery"]:
+                        res["text"] = res["text"] + "\n\n" + res["delivery"]
+                except Exception:
+                    common.log("agent", "delivery check block failed: " + traceback.format_exc())
+        res.update(facts=bool(fx), facts_at=facts_at, facts_source=source, blocks=bl,
+                   pending_condense=any(e.get("pending_condense") for e in res.get("entries") or []))
         return res
+
+    def compose(self, day, send_day=None, correction=False, use_jira=True, until=None, describe=True):
+        """build() without the delivery block (the Jira part only); kept for older callers."""
+        return self.build(day, send_day, until=until, facts="live" if use_jira else None,
+                          condense="model" if describe else False, correction=correction, delivery=False)
+
+    def preview(self, day, send_day=None):
+        """What the sender would send for `day` now, from the cached Jira facts and cached condensed lines: no Jira
+        call, no model call, nothing written. Entries still to condense carry pending_condense."""
+        return self.build(day, send_day, facts="cached", condense="cache")
 
     # ------------------------------------------------------------------ schedule (§10)
     def send_time(self, day):
@@ -452,30 +572,17 @@ class JiraWorklog:
 
     def run_day(self, day, why, send=True):
         sh = load_sheet(day)
-        now = common.now()
-        today = common.workday(now, self.cfg)
-        until = now if day == today else None
-        res = self.compose(day, today, correction=(why == "correction"), until=until)
+        today = common.workday(common.now(), self.cfg)
+        res = self.build(day, today, facts="live", condense="model", correction=(why == "correction"))
         sh.pop("resend", None)
         sh.pop("pending_correction", None)
-        if res["kind"] == "nudge" and day != today:
-            res = {"kind": "none", "reason": "nothing tracked (a late nudge is not sent)"}
         if res["kind"] == "none":
             sh.update(status="none", reason=res.get("reason"), checked_at=common.now_iso())
             save_sheet(day, sh)
             return sh
         text = res["text"]
-        if res["kind"] == "message":
-            try:  # after the closing note; the Jira entries above stay exactly as composed
-                day_tickets = sorted({e["ticket"] for e in res.get("entries") or [] if e.get("ticket")} |
-                                     set((self.store.day(day).get("tickets") or {}).keys()))
-                block = delivery_block(self.store, day_tickets)
-                if block:
-                    text = text + "\n\n" + block
-            except Exception:
-                common.log("agent", "delivery check block failed: " + traceback.format_exc())
         ver = {"v": len(sh.get("versions") or []) + 1, "at": common.now_iso(), "kind": res["kind"], "why": why, "text": text,
-               "jira_facts": res.get("facts", False)}
+               "jira_facts": res.get("facts", False), "jira_facts_at": res.get("facts_at")}
         if res["kind"] == "message":
             sh["entries"] = [{k: (v.isoformat() if isinstance(v, _dt.datetime) else v) for k, v in e.items()
                               if k in ("ticket", "minutes", "start_hhmm", "desc", "manual", "known")} for e in res["entries"]]
@@ -490,6 +597,7 @@ class JiraWorklog:
         sstate = slack.state(self.cfg)
         if sstate != "ready":  # no Slack: the message stays in the daily file and the timesheet; no retries
             sh.update(status="not_connected", slack=sstate, checked_at=common.now_iso())
+            ver["slack"] = {"ok": False, "state": sstate}  # nothing was sent; the history says why
             sh.pop("attempts", None)
             save_sheet(day, sh)
             h["slack"] = sstate
@@ -563,3 +671,176 @@ def daily_section(day):
     if sh.get("status") == "not_connected" and sh.get("slack") == "off":
         st = "saved here, Slack sending is off"
     return ["## Jira worklog", "_%s · version %d_" % (st, v["v"]), "", "~~~text", v["text"], "~~~", ""]
+
+
+# --------------------------------------------------------------------------- preview (dashboard, /cg:today, worklog-show)
+
+def preview_view(res, ts):
+    """build()'s result as plain JSON-ready data for a preview: the exact text plus the per-entry fields, the Jira
+    data's time ("Jira data as of HH:MM") and which descriptions are still condensed at 20:00."""
+    msg = res.get("kind") == "message"
+    entries = []
+    for e in res.get("entries") or []:
+        m = int(e.get("minutes") or 0)
+        desc = e.get("desc") or ""
+        entries.append({"ticket": e.get("ticket"), "start": e.get("start_hhmm") or "", "minutes": m,
+                        "duration": T.jira_dur(m), "description": redact(desc, mode="public") if msg else desc,
+                        "manual": bool(e.get("manual")), "pending_condense": bool(e.get("pending_condense"))})
+    at = res.get("facts_at")
+    return {"kind": res.get("kind"), "reason": res.get("reason"), "text": res.get("text") or "", "note": res.get("note") or "",
+            "target": res.get("target"), "tracked": res.get("tracked") or {}, "day_kind": res.get("day_kind"),
+            "entries": entries, "delivery": res.get("delivery") or "", "send_at": ts.get("send_at"),
+            "facts": bool(res.get("facts")), "facts_at": at, "facts_source": res.get("facts_source"),
+            "facts_as_of": ("Jira data as of %s" % common.hhmm(at)) if at else "",
+            "pending_condense": bool(res.get("pending_condense")), "condensed": not res.get("pending_condense")}
+
+
+def preview(day, with_blocks=False):
+    """The message the sender would send for `day` if it ran now, built by the sender's own builder from the latest
+    Jira evening-facts cache and the condensed-line cache. No Jira call, no model call, nothing written; safe from
+    any process at any time. -> preview_view() (+ "blocks", the raw activity blocks, when with_blocks)."""
+    from . import agent as agentmod
+    a = agentmod.Agent()
+    res = a.jwl.preview(day)
+    out = preview_view(res, a.jwl.ts)
+    if with_blocks:
+        out["blocks"] = res.get("blocks") or []
+    return out
+
+
+def _manual():
+    return common.env("MCP_MANUAL") == "1"  # CLI runs the user typed: counted apart from the background budget
+
+
+def _locked(wait_s, fn):
+    """fn(agent) under the agent lock: refresh and exact preview save health and caches, never beside a tick."""
+    from . import agent as agentmod
+    lock = agentmod.Lock()
+    if not lock.acquire_wait(wait_s):
+        return {"ok": False, "skipped": "the agent is busy; try again in a minute"}
+    a = None
+    try:
+        a = agentmod.Agent()
+        return fn(a)
+    finally:
+        if a:
+            try:
+                agentmod.save_state(a)
+            except Exception:
+                common.log("agent", "state save failed: " + traceback.format_exc())
+        lock.release()
+
+
+def _over_budget(a):
+    from . import kbjobs
+    today = common.workday(common.now(), a.cfg)
+    return not _manual() and mcpjobs.budget_left(a.health, a.cfg, today) <= kbjobs.EVENING_RESERVE
+
+
+_BUDGET = "the daily MCP call budget is used up (the 20:00 calls are kept)"
+
+
+def refresh_facts(day, wait_s=None):
+    """"Refresh from Jira": one read-only jira-evening job for `day` (comments, worklogs, status moves) within the
+    daily MCP budget (the 20:00 reserve is kept); then the preview from the fresh cache.
+    -> {"ok": True, "preview": preview_view()} | {"ok": False, "skipped": why[, "preview"]}"""
+    _dt.date.fromisoformat(day)
+
+    def go(a):
+        j = a.jwl
+
+        def skip(why):
+            return {"ok": False, "skipped": why, "preview": preview_view(j.preview(day), j.ts)}
+        if not mcpjobs.enabled(a.cfg, "jira"):
+            return skip("Jira is off (mcp.jira.enabled)")
+        if _over_budget(a):
+            return skip(_BUDGET)
+        today = common.workday(common.now(), a.cfg)
+        tickets = j.fact_tickets(j.blocks(day, common.now() if day == today else None), j.manual_for(day, load_cal()))
+        if not tickets:
+            return skip("no tickets on %s" % day)
+        try:
+            mcpjobs.jira_evening(day, tickets, a.cfg, a.health)
+        except mcpjobs.JobError as ex:
+            return skip(str(ex))
+        a.health.setdefault("jira_worklog", {})["jira_facts"] = common.now_iso()
+        return {"ok": True, "preview": preview_view(j.preview(day), j.ts)}
+    return _locked(wait_s, go)
+
+
+def preview_exact(day, wait_s=None):
+    """"Preview exactly": condense now the entries the preview marks "condensed at 20:00" (one batched model call,
+    counted in the daily MCP budget; the 20:00 reserve is kept) and cache the lines, so the preview and the 20:00
+    message share them. Uses the cached Jira facts and never calls Jira; no call at all when nothing is pending.
+    -> {"ok": True, "preview": preview_view(), "model_calls": n} | {"ok": False, "skipped": why, "preview"}"""
+    _dt.date.fromisoformat(day)
+
+    def go(a):
+        j = a.jwl
+        res = j.preview(day)
+        if not res.get("pending_condense"):
+            return {"ok": True, "preview": preview_view(res, j.ts), "model_calls": 0}
+        if _over_budget(a):
+            return {"ok": False, "skipped": _BUDGET, "preview": preview_view(res, j.ts)}
+        res = j.build(day, facts="cached", condense="model")
+        if j.condense_calls:
+            today = common.workday(common.now(), a.cfg)
+            calls = a.health.setdefault("mcp", {}).setdefault("manual_calls" if _manual() else "calls", {})
+            calls[today] = int(calls.get(today) or 0) + j.condense_calls
+        return {"ok": True, "preview": preview_view(res, j.ts), "model_calls": j.condense_calls}
+    return _locked(wait_s, go)
+
+
+# --------------------------------------------------------------------------- inbox lines, resend requests, history
+
+_REQUESTS = threading.Lock()
+
+
+def append_inbox(line, repeat=False):
+    """Append one line to inbox.md (never rewritten). A line already there is skipped unless `repeat` (action lines
+    such as resend: count every copy). -> True when written."""
+    path = common.hp("inbox.md")
+    existing = common.read_text(path)
+    if not repeat and any(l.strip() == line for l in existing.splitlines()):
+        return False
+    paths.append_text(path, ("\n" if existing and not existing.endswith("\n") else "") + line + "\n")
+    return True
+
+
+def request_resend(day, request_id):
+    """Ask for `day`'s message to be sent again: adds one `resend: <day>` line to inbox.md (the next tick sends it).
+    A request whose id was already seen in the last RESEND_WINDOW_S seconds (a double click) counts once.
+    -> {"ok": True, "duplicate": bool, "day", "line"}; ValueError for a bad day or an empty id."""
+    _dt.date.fromisoformat(day)
+    rid = str(request_id or "").strip()[:100]
+    if not rid:
+        raise ValueError("a resend request needs an id")
+    line = "resend: " + day
+    with _REQUESTS:
+        path = common.wl("resend_requests.json")
+        now = common.now().timestamp()
+        ids = (common.read_json(path, {}) or {}).get("ids") or {}
+        ids = {k: v for k, v in ids.items() if isinstance(v, dict) and 0 <= now - float(v.get("t") or 0) < RESEND_WINDOW_S}
+        if rid in ids:
+            return {"ok": True, "duplicate": True, "day": ids[rid].get("day") or day, "line": ids[rid].get("line") or line}
+        append_inbox(line, repeat=True)
+        ids[rid] = {"t": now, "day": day, "line": line, "at": common.now_iso()}
+        common.write_json(path, {"ids": ids})
+    return {"ok": True, "duplicate": False, "day": day, "line": line}
+
+
+def send_history(day):
+    """Every version of `day`'s message, oldest first: what was composed, why (first | resend | correction), when,
+    and what Slack said. -> [{"v", "at", "kind", "why", "sent", "slack_ts", "error", "slack_state", "jira_facts",
+    "jira_facts_at", "text"}]; slack_state: sent | failed | not_connected | off | not sent."""
+    out = []
+    for v in load_sheet(day).get("versions") or []:
+        if not isinstance(v, dict):
+            continue
+        sl = v.get("slack") if isinstance(v.get("slack"), dict) else {}
+        state = "sent" if sl.get("ok") else (sl.get("state") or ("failed" if sl else "not sent"))
+        out.append({"v": v.get("v"), "at": v.get("at"), "kind": v.get("kind"), "why": v.get("why"),
+                    "sent": bool(sl.get("ok")), "slack_ts": sl.get("ts"), "error": sl.get("error"), "slack_state": state,
+                    "jira_facts": bool(v.get("jira_facts")), "jira_facts_at": v.get("jira_facts_at"),
+                    "text": v.get("text") or ""})
+    return out

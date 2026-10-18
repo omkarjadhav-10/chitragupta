@@ -8,8 +8,7 @@ v0.1.0 brings the existing worklog features into the `cg` plugin. It also adds a
 - **Team sharing** of selected, redacted ticket notes.
 - **Official Atlassian remote MCP support.** v0.1.0 Jira jobs need the `mcp-atlassian` server. The official remote server, and the claude.ai Atlassian connector, are detected but reported as unsupported.
 - **A "Check again" for MCP status in the dashboard.** Health shows the last cached `claude mcp list` check; `/cg:doctor` runs a fresh one.
-- **A condensed, Jira-subtracted worklog preview in the dashboard.** Today's preview uses the raw lines and doesn't subtract time already in Jira, so it can differ from the 20:00 message.
+- **The exact worklog preview in the dashboard.** `/cg:today` and `agent worklog-show` already show what 20:00 would send (the sender's own builder, from cached Jira data and condensed lines); the Today page and its *Refresh from Jira* / *Preview exactly* buttons follow.
 - **Better free-text name redaction.** Names in labelled fields are masked; names written into prose are not reliably masked yet.
-- **A repeatable `resend:`.** Inbox lines are de-duplicated, so repeating the exact same `resend:` line is ignored.
 - **PR data through a host's read-only MCP** for branch tracking, when no host CLI is installed (v0.2.0 falls back to the PR merge commits).
 - **Base-branch relations in the branch graph.** The dashboard draws extra base branches forking from the first one; it doesn't know how qa, release and main relate.
