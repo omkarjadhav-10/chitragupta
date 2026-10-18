@@ -19,15 +19,37 @@ _T0 = time.perf_counter()
 LIMITS = {"prompt": 4000, "message": 12000, "command": 2000, "http_command": 20000, "mcp": 4000}
 
 
+_STDIN = []
+
+
 def _read_stdin():
+    """The hook input (read once; later calls get the same dict)."""
+    if _STDIN:
+        return _STDIN[0]
     stream = sys.stdin
-    if stream is None:
-        return {}
+    data = {}
+    if stream is not None:
+        try:
+            raw = stream.buffer.read() if hasattr(stream, "buffer") else stream.read().encode("utf-8")
+            data = json.loads(raw.decode("utf-8-sig") or "{}")
+        except Exception:
+            data = {}
+    _STDIN.append(data if isinstance(data, dict) else {})
+    return _STDIN[0]
+
+
+def _cg_mark(event):
+    """Safety: mark the session while a /cg: command runs (UserPromptSubmit), clear it at Stop. Independent of
+    pause and capture scope; the in-session guard (chitragupta.safety.hook) reads it."""
     try:
-        data = stream.buffer.read() if hasattr(stream, "buffer") else stream.read().encode("utf-8")
-        return json.loads(data.decode("utf-8-sig") or "{}")
-    except Exception:
-        return {}
+        from .safety import hook as safety_hook
+        inp = _read_stdin()
+        if event == "user-prompt":
+            safety_hook.mark(inp.get("session_id"), str(inp.get("prompt") or inp.get("user_prompt") or ""))
+        elif event == "stop":
+            safety_hook.clear(inp.get("session_id"))
+    except Exception:  # noqa: BLE001 — a hook must never fail
+        pass
 
 
 def _key_input(tool, ti, common, redact, repo_root=None):
@@ -179,6 +201,8 @@ def main():
         if common.env("HOOK_TIMING"):
             common.log("hook-timing", "%s %.1fms" % (event, (time.perf_counter() - _T0) * 1000))
         return
+    if event in ("user-prompt", "stop"):
+        _cg_mark(event)
     try:
         _capture(event, common)
     finally:
@@ -276,11 +300,9 @@ if __name__ == "__main__":
             from . import plugin as _plugin
             if not _plugin.is_set_up():
                 raise SystemExit  # nothing is written before setup
-            base = _common.home()
-            os.makedirs(os.path.join(base, ".worklog", "logs"), exist_ok=True)
-            with open(os.path.join(base, ".worklog", "logs", "hook-errors.log"), "a", encoding="utf-8") as f:
-                f.write("%s %s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), sys.argv[1:],
-                                        traceback.format_exc().replace("\n", " | ")))
+            from .safety import paths as _paths
+            _paths.append_text(_common.wl("logs", "hook-errors.log"), "%s %s %s\n" % (
+                time.strftime("%Y-%m-%dT%H:%M:%S"), sys.argv[1:], traceback.format_exc().replace("\n", " | ")))
         except BaseException:
             pass
     os._exit(0)

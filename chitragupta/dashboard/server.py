@@ -43,6 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .. import __version__ as VERSION  # read once: a reinstall swaps files under a running server
 from .. import APP
 from .. import common
+from ..safety import paths
 from . import api
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -189,9 +190,7 @@ class DashboardServer(ThreadingHTTPServer):
     def write_token(self):
         p = token_path(self.port)
         try:
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"pid": os.getpid(), "token": self.token, "version": VERSION}))
+            paths.write_text(p, json.dumps({"pid": os.getpid(), "token": self.token, "version": VERSION}))
         except OSError as e:
             log("could not write the shutdown token: %s" % e)
 
@@ -199,8 +198,9 @@ class DashboardServer(ThreadingHTTPServer):
         p = token_path(self.port)
         try:
             with open(p, encoding="utf-8") as f:
-                if json.load(f).get("token") == self.token:
-                    os.remove(p)
+                mine = json.load(f).get("token") == self.token
+            if mine:
+                paths.delete(p)
         except (OSError, ValueError):
             pass
 

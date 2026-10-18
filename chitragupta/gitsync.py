@@ -1,13 +1,11 @@
 """Git sync for the Worklog repo: private-repo guard, redact-checked commits, safe pushes.
 Fully non-interactive (GIT_TERMINAL_PROMPT=0, credentials from Git Credential Manager)."""
-import json
 import os
 import re
-import urllib.error
-import urllib.request
 
 from . import common
 from . import redact
+from .safety import commands, net, paths
 
 # Allowlist: only the daily work is pushed; everything else is a local knowledge base (upgrade 02).
 PUSH_PATHS = ("daily/", "README.md", ".gitignore", ".gitattributes")
@@ -47,7 +45,8 @@ def allowed_path(rel, paths=PUSH_PATHS):
 
 
 def git(args, cfg, timeout=120):
-    return common.run([common.git_exe(cfg), "-C", common.home()] + args, timeout=timeout)
+    """git in the data-home repo, through the command guard (purpose git-home)."""
+    return commands.run([common.git_exe(cfg), "-C", common.home()] + args, "git-home", timeout=timeout, cfg=cfg)
 
 
 def parse_github(url):
@@ -87,7 +86,7 @@ def install_pre_commit(cfg):
     path = os.path.join(common.home(), ".git", "hooks", "pre-commit")
     common.write_text(path, PRE_COMMIT.format(command=command))
     try:  # git skips hooks that aren't executable (no-op on Windows)
-        os.chmod(path, 0o755)
+        paths.chmod(path, 0o755)
     except OSError:
         pass
 
@@ -105,15 +104,9 @@ def privacy_status(cfg):
         if url and (os.path.isdir(url) or url.startswith("file://")):
             return "private"
         return "unknown"
-    req = urllib.request.Request("https://api.github.com/repos/%s/%s" % gh,
-                                 headers={"User-Agent": "worklog-privacy-check", "Accept": "application/vnd.github+json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return "public" if r.status == 200 else "unknown"
-    except urllib.error.HTTPError as e:
-        return "private" if e.code == 404 else "unknown"
-    except Exception:
-        return "unknown"
+    st = net.github_status("https://api.github.com/repos/%s/%s" % gh,
+                           headers={"User-Agent": "worklog-privacy-check", "Accept": "application/vnd.github+json"})
+    return "public" if st == 200 else "private" if st == 404 else "unknown"
 
 
 def check_privacy(cfg, health, force=False):
@@ -190,9 +183,7 @@ def commit(cfg, message, health):
         return False
     held = held_files(files, health)
     scan_and_mask(files, health)
-    git(["add", "-A"], cfg)
-    if held:
-        git(["reset", "-q", "--"] + held, cfg)
+    stage(cfg, files, held)
     for attempt in range(2):
         rc, so, se = git(["commit", "-q", "-m", message], cfg)
         if rc == 0:
@@ -203,12 +194,20 @@ def commit(cfg, message, health):
         # pre-commit blocked: mask whatever it named, re-stage, retry
         bad = [l.strip() for l in se.splitlines() if l.startswith("  ")]
         scan_and_mask(bad or files, health)
-        git(["add", "-A"], cfg)
-        held = held_files(changed_files(cfg), health)
-        if held:
-            git(["reset", "-q", "--"] + held, cfg)
+        files = [f for f in changed_files(cfg) if allowed_path(f, push_paths(cfg))]
+        held = held_files(files, health)
+        stage(cfg, files, held)
     common.log("agent", "commit failed: " + (se or so).strip()[:400])
     return False
+
+
+def stage(cfg, files, held):
+    """git add -- <the push-path files>, minus the held ones (never `add -A`)."""
+    keep = [f for f in files if f not in set(held or [])]
+    for i in range(0, len(keep), 100):
+        git(["add", "--"] + keep[i:i + 100], cfg)
+    if held:
+        git(["reset", "-q", "--"] + held, cfg)
 
 
 def unpushed(cfg):

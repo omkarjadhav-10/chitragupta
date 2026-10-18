@@ -24,6 +24,7 @@ from . import sources  # noqa: E402
 from . import store as storemod  # noqa: E402
 from .redact import redact  # noqa: E402
 from .store import Store  # noqa: E402
+from .safety import paths  # noqa: E402
 
 LOCK_STALE_S = 30 * 60
 LOCK_WAIT_S = 300  # how long CLI commands that change state wait for a running tick
@@ -43,13 +44,12 @@ class Lock:
         common.ensure_dir(os.path.dirname(self.path))
         for _ in range(2):
             try:
-                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, ("%d %s" % (os.getpid(), common.now_iso())).encode())
+                self.fd = paths.create_exclusive(self.path, ("%d %s" % (os.getpid(), common.now_iso())).encode())
                 return True
             except FileExistsError:
                 try:
                     if time.time() - os.path.getmtime(self.path) > LOCK_STALE_S:
-                        os.remove(self.path)
+                        paths.delete(self.path)
                         continue
                 except OSError:
                     pass
@@ -72,7 +72,7 @@ class Lock:
     def refresh(self):
         """Keep a long-held lock from looking stale."""
         try:
-            os.utime(self.path)
+            paths.touch(self.path)
         except OSError:
             pass
 
@@ -81,7 +81,7 @@ class Lock:
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
-            os.remove(self.path)
+            paths.delete(self.path)
         except OSError:
             pass
 
@@ -876,22 +876,35 @@ class Agent:
             except OSError:
                 continue
             if f and f.get("extracted", 0) >= size and f.get("read", 0) >= size and lp.timestamp() > mtime:
-                os.remove(path)
+                paths.delete(path)
                 s["files"].pop(path, None)
         root = common.wl("raw")
         for d in os.listdir(root) if os.path.isdir(root) else []:
             tdir = os.path.join(root, d, "time")  # time-only events of worklog-folder sessions
             if d < cutoff and os.path.isdir(tdir):
                 for fn in os.listdir(tdir):
-                    os.remove(os.path.join(tdir, fn))
-                os.rmdir(tdir)
+                    paths.delete(os.path.join(tdir, fn))
+                paths.rmdir(tdir)
             dp = os.path.join(root, d)
             if os.path.isdir(dp) and not os.listdir(dp):
-                os.rmdir(dp)
+                paths.rmdir(dp)
         for sid in list(sessions):
             s = sessions[sid]
             if not s.get("files") and (s.get("last_event") or "") < cutoff:
                 del sessions[sid]
+        self.prune_tmp()
+
+    @staticmethod
+    def prune_tmp(max_age_s=2 * 86400):
+        """<home>/.worklog/tmp (replay request bodies and run folders) keeps two days."""
+        root = paths.tmp_dir()
+        for name in os.listdir(root) if os.path.isdir(root) else []:
+            p = os.path.join(root, name)
+            try:
+                if time.time() - os.path.getmtime(p) > max_age_s:
+                    paths.rmtree(p) if os.path.isdir(p) else paths.delete(p)
+            except OSError:
+                continue
 
     # ------------------------------------------------------------------ main
     def tick(self):

@@ -139,6 +139,7 @@ class KbJobsTests(Case):
         self.assertTrue(os.path.isfile(common.wl("mcp", "readonly-settings.json")))
 
     def test_backup_runs_with_no_mcp_jobs(self):
+        from chitragupta import common
         dest = tempfile.mkdtemp(prefix="cg-bak-")
         self.addCleanup(rmtree, dest)
         os.environ["CHITRAGUPTA_NO_MCP_JOBS"] = "1"
@@ -147,6 +148,7 @@ class KbJobsTests(Case):
             a = self.agent()
             a.force = force
             a.cfg["storage"] = {"local_backup_dir": dest}
+            common.save_config(dict(common.load_config(), storage={"local_backup_dir": dest}))  # the path guard reads it
             a.state.setdefault("kbjobs", {}).pop("backup_day", None)
             a.jobs.tick()
             zp = os.path.join(dest, "worklog-kb-2026-10-16.zip")

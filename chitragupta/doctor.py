@@ -167,7 +167,8 @@ def run(probe=True, task_expected=True, mcp=None):
     rows = []
     cfg_raw, cfg_err = setup.read_raw_config()
     cfg = common.load_config()
-    rows += [r for r in setup.environment(cfg) if r["name"] in ("python", "git", "claude")]
+    env = [r for r in setup.environment(cfg) if r["name"] in ("python", "git", "claude")]
+    rows += env
     h = setup.home_state()
     src = "CHITRAGUPTA_HOME" if h["env"] else "pointer %s" % h["pointer_file"] if h["pointer"] else "default"
     rows.append(_row("home", plugin.is_set_up() and os.path.isdir(h["resolved"]),
@@ -198,6 +199,8 @@ def run(probe=True, task_expected=True, mcp=None):
                      ": %s" % (bl["problem"] or "block missing, re-run `setup apply`"))))
     st = mcp if mcp is not None else (setup.mcp_status(cfg, probe=True) if probe else setup.cached_mcp_status())
     rows += mcp_rows(st, cfg)
+    from .safety import status as safety_status
+    rows += safety_status.doctor_rows(cfg, next((r["detail"] for r in env if r["name"] == "claude" and r["ok"]), ""))
     rows.append(errors_row(health))
     return rows
 

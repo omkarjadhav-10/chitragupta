@@ -6,6 +6,15 @@ argument-hint: "<TICKET-KEY>"
 allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli branches *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli branches *)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:branches <KEY>
@@ -21,3 +30,7 @@ If no key was given, ask for one and stop. Otherwise give a compact status from 
 5. The data is as of the last background tick; `/cg:check <KEY>` fetches and refreshes now.
 
 Read-only: never run git yourself for this, and never edit files in the data home.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

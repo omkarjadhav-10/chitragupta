@@ -26,6 +26,7 @@ import time
 from . import __version__
 from . import common
 from . import plugin
+from .safety import paths as sp
 
 MD_START, MD_END = "<!-- chitragupta:start -->", "<!-- chitragupta:end -->"
 SKILL_NAME = "chitragupta"
@@ -41,10 +42,12 @@ BLOCK_TEMPLATES = [os.path.join(common.PACKAGE_DIR, "templates", "claude_md_bloc
 RUNNER = None  # tests: callable(args, cwd=None, timeout=…) -> (rc, stdout, stderr) for git / claude / py calls
 
 
-def _run(args, cwd=None, timeout=60):
+def _run(args, purpose, cwd=None, timeout=60):
+    """A process through the command guard (purposes: probe, git-probe, claude, git-home)."""
     if RUNNER is not None:
         return RUNNER(args, cwd=cwd, timeout=timeout)
-    return common.run(args, cwd=cwd, timeout=timeout)
+    from .safety import commands
+    return commands.run(args, purpose, cwd=cwd, timeout=timeout)
 
 
 def _claude_exe(cfg=None):
@@ -61,9 +64,9 @@ def _fwd(p):
 
 # --------------------------------------------------------------------------- environment
 
-def _version_of(args, cwd=None):
+def _version_of(args, cwd=None, purpose="probe"):
     try:
-        rc, so, se = _run(args, cwd=cwd, timeout=30)
+        rc, so, se = _run(args, purpose, cwd=cwd, timeout=30)
     except Exception as e:  # noqa: BLE001
         return False, str(e)
     text = (so or se or "").strip().splitlines()
@@ -75,7 +78,7 @@ def environment(cfg=None):
     v = sys.version_info
     rows.append({"name": "python", "ok": v >= MIN_PYTHON, "detail": "%d.%d.%d (%s)" % (v[0], v[1], v[2], sys.executable)})
     git = (cfg or {}).get("paths", {}).get("git") or shutil.which("git") or "git"
-    ok, d = _version_of([git, "--version"])
+    ok, d = _version_of([git, "--version"], purpose="git-probe")
     rows.append({"name": "git", "ok": ok, "detail": d if ok else "git not found: %s" % d})
     rows.append({"name": "windows", "ok": os.name == "nt", "detail": "Windows" if os.name == "nt" else
                  "not Windows: the scheduled task is Windows-only"})
@@ -282,7 +285,7 @@ def mcp_list(folder, cfg=None, timeout=90):
     exe = _claude_exe(cfg)
     if not exe:
         return None
-    rc, so, se = _run(exe + ["mcp", "list"], cwd=folder if os.path.isdir(folder) else common.home(), timeout=timeout)
+    rc, so, se = _run(exe + ["mcp", "list"], "claude", cwd=folder if os.path.isdir(folder) else common.home(), timeout=timeout)
     if rc != 0 and not so:
         return None
     return parse_mcp_list(so)
@@ -480,7 +483,7 @@ def backup_once(path, run_id):
     if not os.path.isfile(path) or _BACKED_UP.get(path) == run_id:
         return None
     bak = path + ".chitragupta.bak"
-    shutil.copy2(path, bak)
+    sp.copy(path, bak)
     _BACKED_UP[path] = run_id
     return bak
 
@@ -576,7 +579,7 @@ def write_raw_config(cfg, before):
         dest = common.wl("backups", "chitragupta-setup-" + time.strftime("%Y%m%d-%H%M%S"))
         common.ensure_dir(dest)
         backup = os.path.join(dest, "config.json")
-        shutil.copy2(p, backup)
+        sp.copy(p, backup)
     common.write_json(p, cfg)
     return backup or "new"
 
@@ -678,15 +681,16 @@ def apply(home, prefixes=(), repos=(), bruno=(), task=True, github_remote=None, 
 # --------------------------------------------------------------------------- MCP actions
 
 def add_slack(client_id=None, callback_port=None):
-    """Add Slack's hosted MCP in local scope of <home>/.worklog/slack-sender/ (its own git root), for background
-    jobs only. Prints the one-time browser sign-in steps."""
+    """Prepare <home>/.worklog/slack-sender/ (its own git root) for Slack's hosted MCP, for background jobs only, and
+    print the one `claude mcp add --scope local …` command and the browser sign-in for you to run. Chitragupta never
+    writes Claude Code's settings itself."""
     from . import slack
     cfg = common.load_config()
     sender = slack.sender_dir()
     common.ensure_dir(sender)
     out = {"ok": False, "folder": sender, "steps": []}
     if not os.path.exists(os.path.join(sender, ".git")):
-        rc, so, se = _run([common.git_exe(cfg), "init", "-q", sender], timeout=60)
+        rc, so, se = _run([common.git_exe(cfg), "init", "-q", sender], "git-home", timeout=60)
         if rc != 0:
             out["error"] = "git init failed: %s" % (se or so).strip()
             return out
@@ -698,21 +702,11 @@ def add_slack(client_id=None, callback_port=None):
     callback_port = callback_port or srv.get("callback_port")
     if existing:
         out["steps"].append("Slack server %r already in local scope of %s" % (existing, sender))
-    else:
-        exe = _claude_exe(cfg)
-        if not exe:
-            out["error"] = "claude executable not found"
-            return out
-        args = exe + ["mcp", "add", "--transport", "http", "--scope", "local"]
+    else:  # Chitragupta never writes Claude Code's settings (~/.claude.json): you run this one command yourself
         from . import slack as _slack  # Slack's MCP has no dynamic client registration: always send a client id
-        args += ["--client-id", str(client_id or _slack.DEFAULT_CLIENT_ID),
-                 "--callback-port", str(callback_port or _slack.DEFAULT_CALLBACK_PORT)]
-        args += ["slack", srv.get("url") or SLACK_URL]
-        rc, so, se = _run(args, cwd=sender, timeout=60)
-        if rc != 0:
-            out["error"] = "claude mcp add failed: %s" % (se or so).strip()[:300]
-            return out
-        out["steps"].append("added Slack's hosted MCP as 'slack' in local scope of %s" % sender)
+        out["command"] = "claude mcp add --transport http --scope local --client-id %s --callback-port %s slack %s" % (
+            client_id or _slack.DEFAULT_CLIENT_ID, callback_port or _slack.DEFAULT_CALLBACK_PORT, srv.get("url") or SLACK_URL)
+        out["steps"].append("run this once in %s (it registers Slack for that folder only): %s" % (sender, out["command"]))
     if client_id or callback_port:
         raw, err = read_raw_config()
         if raw is not None:
@@ -724,8 +718,9 @@ def add_slack(client_id=None, callback_port=None):
                 s["callback_port"] = int(callback_port)
             write_raw_config(raw, before)
     out["ok"] = True
-    out["sign_in"] = [
-        "Open a terminal in %s" % sender,
+    out["sign_in"] = ([
+        "Open a terminal in %s and run: %s" % (sender, out["command"])] if out.get("command") else [
+        "Open a terminal in %s" % sender]) + [
         "Run `claude`, type /mcp, choose slack, then Authenticate and finish the sign-in in the browser",
         "Exit that session, then run `/cg:setup` again (or `setup slack-user`) to store your Slack user ID",
     ]

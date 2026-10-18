@@ -258,13 +258,12 @@ class McpTests(SetupCase):
         self.apply(task=False, run_doctor=False)
         res = self.setup_mod.add_slack()
         self.assertTrue(res["ok"], res)
-        add = next((a, c) for a, c in self.calls if "add" in a and "mcp" in a)
-        self.assertIn("--scope", add[0])
-        self.assertEqual(add[0][add[0].index("--scope") + 1], "local")
-        self.assertNotIn("user", add[0])
-        self.assertEqual(add[1].replace("\\", "/"), self.sender())
+        # Chitragupta never writes Claude Code's settings: it prints the local-scope command for you to run
+        self.assertFalse([a for a, c in self.calls if "mcp" in a and "add" in a])
+        self.assertIn("--scope local", res["command"])
+        self.assertNotIn("--scope user", res["command"])
+        self.assertIn(res["command"], " ".join(res["sign_in"]))
         self.assertTrue(os.path.isdir(os.path.join(self.sender(), ".git")))
-        self.assertTrue(res["sign_in"])
 
 
 class DetectTests(SetupCase):

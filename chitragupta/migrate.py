@@ -26,6 +26,7 @@ import sys
 import time
 
 from . import common
+from .safety import paths as sp
 
 MIGRATION_ID = "database-mcp-rename"
 BRANCH_ID = "branch-tracking"
@@ -157,10 +158,10 @@ def _backup(paths):
     n, base = 2, dest
     while os.path.exists(dest):
         dest, n = "%s-%d" % (base, n), n + 1
-    os.makedirs(dest)
+    sp.makedirs(dest)
     for p in paths:
         if os.path.isfile(p):
-            shutil.copy2(p, os.path.join(dest, os.path.basename(p)))
+            sp.copy(p, os.path.join(dest, os.path.basename(p)))
     return dest
 
 

@@ -437,6 +437,8 @@ class ReadOnly(unittest.TestCase):
                 path = os.path.join(dp, fn)
                 src = open(path, encoding="utf-8").read()
                 rel = os.path.relpath(path, pkg)
+                if rel.startswith("safety" + os.sep):
+                    continue  # the command guard itself (allowlists and red-team samples)
                 if fn not in exempt and "git_exe(" in src:
                     problems.append("%s runs git directly (use gitro)" % rel)
                 for node in ast.walk(ast.parse(src)):

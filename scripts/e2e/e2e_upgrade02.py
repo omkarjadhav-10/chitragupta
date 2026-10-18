@@ -23,10 +23,10 @@ def setup(te, jobs=False):
     from chitragupta import common, mcpjobs
     log = os.path.join(te.tmp, "stub.log")
     stub = {SERVER: {"type": "stdio", "command": PY, "args": ["-B", STUB_MCP], "env": {"STUB_MCP_LOG": log}}}
-    db = {"enabled": True, "server": SERVER, "label": "database MCP"}
+    db = {"enabled": True, "server": SERVER, "label": "database MCP",
+          "connections": {"qa": "qa-main", "dev": ""}, "allowed": {"qa": ["qa-main"]}}
     if jobs:
-        db.update(connections={"qa": "qa-main", "dev": ""}, allowed={"qa": ["qa-main"]},
-                  schema_map={"shop": "qa-main", "shop_audit": "qa-main"})
+        db.update(schema_map={"shop": "qa-main", "shop_audit": "qa-main"})
     cfg = {"ticket_prefixes": ["ABC"], "day_starts_at": "04:00", "paths": paths_cfg(),
            "mcp": {"daily_call_budget": 10, "jira": {"enabled": False}, "database": db}}
     common.write_json(os.path.join(te.home, ".worklog", "config.json"), cfg)
@@ -35,11 +35,9 @@ def setup(te, jobs=False):
     if not jobs:
         allow = mcpjobs.allow_default(cfg)
         allow["servers"][SERVER]["connections"] = ["qa-main"]
-        ap = os.path.join(te.tmp, "allow.json")
-        common.write_json(ap, allow)
-        os.environ["CHITRAGUPTA_GUARD_ALLOW"] = ap
+        common.write_json(os.path.join(te.home, ".worklog", "mcp", "allow.json"), allow)  # the one allowlist
     else:
-        ov = os.path.join(te.tmp, "override.json")
+        ov = os.path.join(te.home, ".worklog", "cache", "override.json")
         common.write_json(ov, stub)
         os.environ["CHITRAGUPTA_MCP_OVERRIDE"] = ov
     mcpjobs.ensure_files(cfg)  # writes into the temp home only
@@ -81,7 +79,10 @@ def guard(te):
     ck = Checks()
     ck(not bad, "no write reached the server (%d did)" % len(bad))
     ck(any("LIMIT 5" in (r["args"].get("sql") or "") for r in got), "the valid SELECT reached the server")
-    ck(os.path.exists(os.path.join(te.home, ".worklog", "logs", "mcp-guard.log")), "guard log is in the temp home")
+    sec = os.path.join(os.environ["CHITRAGUPTA_USER_DIR"], "logs", "security.log")
+    denied = sum(1 for c in res["calls"] if c.get("is_error"))
+    logged = open(sec, encoding="utf-8").read().splitlines() if os.path.exists(sec) else []
+    ck(denied and len(logged) >= denied, "every denied call is in the temp security.log (%d denied, %d logged)" % (denied, len(logged)))
     return ck.summary()
 
 

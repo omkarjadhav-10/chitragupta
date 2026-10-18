@@ -510,18 +510,21 @@ class GuardTests(Isolated, unittest.TestCase):
         self.assertIsNotNone(m({"collection": "orders", "operation": "deleteMany", "filter": {}}))
 
     def test_hook_process_denies(self):
-        """The guard as Claude Code runs it (launcher -> chitragupta.mcpguard); its log lands in the temp home."""
-        ap = os.path.join(self.home, "allow.json")
+        """The guard as Claude Code runs it (launcher -> the old `mcpguard` name -> the safety guard): it denies with
+        exit 2 and the block lands in the temp user dir's security.log."""
+        ap = os.path.join(self.home, ".worklog", "mcp", "allow.json")
+        os.makedirs(os.path.dirname(ap), exist_ok=True)
         with open(ap, "w") as f:
             json.dump(self.allow, f)
         p = subprocess.run([PY, "-B", RUN_PY, "mcpguard"], capture_output=True, timeout=30,
                            input=json.dumps({"tool_name": "mcp__sqldb__run_query",
                                              "tool_input": {"connection_id": "qa-main", "sql": "UPDATE t SET a=1"}}).encode(),
-                           env=self.child_env(CHITRAGUPTA_GUARD_ALLOW=ap))
+                           env=self.child_env())
         out = json.loads(p.stdout.decode())
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        log = os.path.join(self.home, ".worklog", "logs", "mcp-guard.log")
-        self.assertIn("DENY mcp__sqldb__run_query", rd(log))
+        self.assertEqual(p.returncode, 2)
+        log = os.path.join(self.user_dir, "logs", "security.log")
+        self.assertIn("mcp__sqldb__run_query", rd(log))
 
     def test_parse_stream_keeps_raw_results(self):
         from chitragupta import mcpjobs

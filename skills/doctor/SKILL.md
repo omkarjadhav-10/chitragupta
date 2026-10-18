@@ -7,6 +7,15 @@ allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli where *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli where *)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:doctor
@@ -20,3 +29,7 @@ Then run `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor` (it exits 1 when a 
 3. Where things live (data home, runtime), from the first block.
 
 Don't run any repair yourself, and don't edit files.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

@@ -8,7 +8,7 @@ import sys
 
 ENTRY_MODULES = {
     "agent", "hook", "redact", "mcpguard", "bruenv", "install", "uninstall", "migrate",
-    "setup", "doctor", "dashboard", "timesheet", "upgrade01", "mermaid_check", "cli", "plugin", "runtime",
+    "setup", "doctor", "dashboard", "timesheet", "upgrade01", "mermaid_check", "cli", "plugin", "runtime", "safety",
 }
 
 

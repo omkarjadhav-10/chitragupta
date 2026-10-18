@@ -376,10 +376,8 @@ def fix_file(path, stats=None, mode="local"):
         new = redact(original, stats, mode=mode)
     if new == original:
         return False
-    tmp = path + ".redact.tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(new)
-    os.replace(tmp, path)
+    from .safety import paths
+    paths.write_text(path, new)
     return True
 
 
@@ -416,10 +414,13 @@ def should_scan(rel):
 
 
 def _staged_files():
-    import subprocess
-    out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
-                         capture_output=True, text=True, encoding="utf-8")
-    return [p for p in out.stdout.split("\0") if p]
+    from . import common
+    from .safety import commands
+    rc, so, se = commands.run([common.git_exe(), "-C", common.home(), "diff", "--cached", "--name-only",
+                               "--diff-filter=ACMR", "-z"], "git-home")
+    if rc != 0:
+        raise RuntimeError("git diff --cached failed: %s" % se.strip()[:200])
+    return [p for p in so.split("\0") if p]
 
 
 def main(argv):

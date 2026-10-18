@@ -18,6 +18,7 @@ import sys
 
 from . import common
 from . import plugin
+from .safety import commands, paths as sp
 
 TASK_NAME = "Chitragupta"
 STARTUP_FILE = "Chitragupta.vbs"
@@ -25,7 +26,10 @@ RUNNER = None  # tests: a callable(args, timeout=…) -> (rc, stdout, stderr)
 
 
 def _run(args, timeout=60):
-    return (RUNNER or common.run)(args, timeout=timeout)
+    """schtasks through the command guard (purpose `task`: the Chitragupta task only)."""
+    if RUNNER is not None:
+        return RUNNER(args, timeout=timeout)
+    return commands.run(args, "task", timeout=timeout)
 
 
 def _scheduler():
@@ -175,7 +179,7 @@ def remove_shortcuts():
         p = os.path.join(d, SHORTCUT_FILE)
         try:
             if os.path.isfile(p) and "[InternetShortcut]" in common.read_text(p):
-                os.remove(p)
+                sp.delete(p)
                 out.append("shortcut removed: %s" % p)
         except OSError as e:
             out.append("shortcut left: %s (%s)" % (p, e))
@@ -191,20 +195,18 @@ def register_task(cfg=None):
         return {"ok": False, "method": "skipped", "detail": "scheduled task is Windows-only"}
     cfg = cfg or common.load_config()
     xml_path = common.wl("cache", TASK_NAME + ".xml")
-    common.ensure_dir(os.path.dirname(xml_path))
-    with open(xml_path, "w", encoding="utf-16") as f:
+    with sp.open_write(xml_path, "w", encoding="utf-16") as f:
         f.write(task_xml(cfg))
     rc, so, se = _run(["schtasks", "/create", "/tn", TASK_NAME, "/xml", xml_path, "/f"])
     if rc == 0:
         if os.path.exists(startup_launcher_path()):  # an earlier fallback is no longer needed
             try:
-                os.remove(startup_launcher_path())
+                sp.delete(startup_launcher_path())
             except OSError:
                 pass
         return {"ok": True, "method": "task", "detail": "scheduled task %s registered" % TASK_NAME}
     try:
-        common.ensure_dir(startup_dir())
-        with open(startup_launcher_path(), "w", encoding="utf-8") as f:
+        with sp.open_write(startup_launcher_path(), "w", encoding="utf-8") as f:
             f.write(startup_vbs(cfg))
     except OSError as e:
         return {"ok": False, "method": "none", "detail": "schtasks failed (%s); Startup launcher failed: %s"
@@ -220,7 +222,7 @@ def unregister_task():
         out.append("scheduled task %s removed" % TASK_NAME if rc == 0 else
                    "scheduled task %s: %s" % (TASK_NAME, (se or so).strip()[:200] or "not found"))
     if os.path.exists(startup_launcher_path()):
-        os.remove(startup_launcher_path())
+        sp.delete(startup_launcher_path())
         out.append("Startup launcher removed")
     return out
 

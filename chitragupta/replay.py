@@ -24,6 +24,7 @@ from . import apicalls
 from . import brufile
 from . import common
 from .redact import redact
+from .safety import paths
 
 HEALTH_RX = re.compile(r"(?i)/(?:actuator(?:/health)?|health(?:check|z)?|ping|status|ready|live|swagger[^/]*|v\d/api-docs|openapi[^/]*|favicon\.ico)(?:/|\?|$)")
 CODES_RX = re.compile(r"\b([1-5]\d\d)\b")
@@ -726,7 +727,7 @@ def generate(store, t, cfg):
         r = regf.get(key) or {}
         if r.get("owner") == "engine" and fn not in wanted and sha(files[fn]["text"]) == r.get("sha"):
             try:
-                os.remove(files[fn]["path"])
+                paths.delete(files[fn]["path"])
             except OSError:
                 continue
             del files[fn]
@@ -847,7 +848,7 @@ def write_payloads(t, final, files):
     if os.path.isdir(pdir):
         for fn in os.listdir(pdir):
             if fn not in want and re.match(r"^\d{2}-.*\.json$", fn):
-                os.remove(os.path.join(pdir, fn))
+                paths.delete(os.path.join(pdir, fn))
                 out.append("tickets/%s/payloads/%s" % (t, fn))
     return out
 
@@ -994,7 +995,7 @@ PY="%(py)s"
 LAUNCHER="%(launcher)s"
 "$PY" -c "import sys" >/dev/null 2>&1 || { echo "Python 3 not found ($PY)"; exit 2; }
 [ -f "$LAUNCHER" ] || { echo "Chitragupta launcher not found ($LAUNCHER)"; exit 2; }
-TMP="$(mktemp -d)"; VARS="$TMP/vars.json"; JAR="$TMP/cookies.txt"; echo '{}' > "$VARS"
+TMP="$WL/.worklog/tmp/replay-$$"; mkdir -p "$TMP"; VARS="$TMP/vars.json"; JAR="$TMP/cookies.txt"; echo '{}' > "$VARS"
 trap 'rm -rf "$TMP"' EXIT
 wp() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%%s' "$1"; fi; }
 bruenv() { CHITRAGUPTA_HOME="$(wp "$WL")" "$PY" "$LAUNCHER" bruenv "$@"; }

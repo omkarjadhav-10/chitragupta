@@ -12,8 +12,8 @@ import re
 import shutil
 from urllib.parse import quote, unquote
 
-from . import common
 from . import gitro
+from .safety import commands
 
 SAFE_ARG = re.compile(r"^[A-Za-z0-9._/@+=-]+$")  # branch names passed to a CLI (az is a .cmd file on Windows)
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._ @+=-]+$")  # org / project / repo names: spaces allowed, no shell characters
@@ -65,7 +65,8 @@ def source_for(cfg, info, pref=None):
 
 
 def _run(cmd, timeout=60):
-    return common.run(cmd, timeout=timeout, env_extra={"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1", "GLAB_NO_PROMPT": "1",
+    """A Git-host CLI call through the command guard (purpose `host`: list / view only)."""
+    return commands.run(cmd, "host", timeout=timeout, env_extra={"GH_PROMPT_DISABLED": "1", "NO_COLOR": "1", "GLAB_NO_PROMPT": "1",
                                                         "AZURE_CORE_NO_COLOR": "1", "AZURE_CORE_ONLY_SHOW_ERRORS": "1"})
 
 

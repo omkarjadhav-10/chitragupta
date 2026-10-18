@@ -8,12 +8,12 @@ import json
 import os
 import re
 import traceback
-import zipfile
 
 from . import common
 from . import envmap
 from . import mcpjobs
 from .redact import redact
+from .safety import paths
 
 OFFLINE_BACKOFF_S = 2 * 3600
 EVENING_RESERVE = 2  # budget kept for the 20:00 Jira call (and one retry)
@@ -272,10 +272,10 @@ class KBJobs:
         if not dest or st.get("backup_day") == today or common.now().hour < 21:
             return
         try:
-            os.makedirs(dest, exist_ok=True)
+            paths.makedirs(dest)
             path = os.path.join(dest, "worklog-kb-%s.zip" % today)
             h = common.home()
-            with zipfile.ZipFile(path + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
+            with paths.zip_writer(path + ".tmp") as z:
                 for dp, dns, fns in os.walk(h):
                     rel = os.path.relpath(dp, h).replace("\\", "/")
                     dns[:] = [d for d in dns if d not in (".git", "raw", "sandbox", "logs", "__pycache__", "locks")]
@@ -283,10 +283,10 @@ class KBJobs:
                         if fn == ".env":
                             continue  # credentials never leave their file
                         z.write(os.path.join(dp, fn), os.path.join(rel, fn))
-            os.replace(path + ".tmp", path)
+            paths.replace(path + ".tmp", path)
             zips = sorted(f for f in os.listdir(dest) if f.startswith("worklog-kb-") and f.endswith(".zip"))
             for f in zips[:-7]:
-                os.remove(os.path.join(dest, f))
+                paths.delete(os.path.join(dest, f))
             st["backup_day"] = today
         except Exception:
             common.log("agent", "backup failed: " + traceback.format_exc())

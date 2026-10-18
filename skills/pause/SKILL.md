@@ -10,6 +10,15 @@ allowed-tools:
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli pause)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli resume)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli status)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:pause [resume|status]
@@ -23,3 +32,7 @@ Run exactly one command and report its output in one or two lines:
 - `status` → `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli status`
 
 While paused, the hooks record nothing and the background tick skips ingesting new work (housekeeping still runs). Already-recorded data is untouched. Remind them to resume with `/cg:pause resume`.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

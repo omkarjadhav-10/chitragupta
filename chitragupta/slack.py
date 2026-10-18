@@ -1,7 +1,8 @@
 """Slack DM sender (official Slack MCP server, OAuth), token-lean.
 
 The server is registered in local scope for .worklog/slack-sender only (its own git root), so no other Claude Code
-session loads Slack's tools. One `claude -p` call per send: haiku, only the send tool allowed, hooks off, lean flags.
+session loads Slack's tools. One `claude -p` call per send: haiku, only the send tool allowed, lean flags, and the safety guard (profile
+slack-send, fail-closed) checks the call itself: only the send tool, only to my own user ID, plain text, capped.
 The tool-call text is compared with the intended message (stream-json) and any mismatch is logged.
 """
 import json
@@ -9,6 +10,7 @@ import re
 
 from . import common
 from . import mcpjobs
+from .safety import claude as builder, commands
 
 DEFAULT_URL = "https://mcp.slack.com/mcp"  # the public Slack MCP server
 # Slack's hosted MCP has no dynamic client registration; Slack publishes this client id (and callback
@@ -67,16 +69,13 @@ def ensure_config(cfg=None):
     common.write_json(common.wl("mcp", "slack.json"), {"mcpServers": {"slack": server_def(cfg)}})
 
 
-def _args(cfg, task, allowed, mode, max_turns=3, disallowed=None):
-    a = mcpjobs.lean_args(cfg, "haiku", common.prompt_path("slack_send.md")) + [
-        "-p", task, "--max-turns", str(max_turns), "--settings", json.dumps({"disableAllHooks": True})]
-    if allowed:
-        a += ["--allowedTools", ",".join(allowed)]
-    if disallowed:  # disallowed tools are dropped from the context: ~23k -> ~4k input tokens per turn
-        a += ["--disallowedTools", ",".join(disallowed)]
-    if mode == "strict":
-        a += ["--strict-mcp-config", "--mcp-config", common.wl("mcp", "slack.json")]
-    return a
+def _args(cfg, task, allowed, mode, max_turns=3, disallowed=None, profile="slack-send"):
+    """One guarded call (safety.claude): `slack-send` lets only the send tool reach my own user ID; `slack-discover`
+    only reads my profile. Disallowed tools are dropped from the context: ~23k -> ~4k input tokens per turn."""
+    return builder.build(mcpjobs.claude_exe(cfg), task, profile, "haiku", common.prompt_path("slack_send.md"),
+                         allowed=allowed or [], disallowed=disallowed or [], strict=mode == "strict",
+                         mcp_config=common.wl("mcp", "slack.json") if mode == "strict" else None,
+                         output="stream-json", max_turns=max_turns, cfg=cfg)
 
 
 def _cwd(mode):
@@ -88,9 +87,11 @@ def _others(cfg, keep):
     return [t for t in tools if t not in keep]
 
 
-def _run(cfg, task, allowed, mode, timeout=180, disallowed=None):
-    rc, so, se = common.run(_args(cfg, task, allowed, mode, disallowed=disallowed), cwd=_cwd(mode), input_text="", timeout=timeout,
-                            env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"))
+def _run(cfg, task, allowed, mode, timeout=180, disallowed=None, profile="slack-send"):
+    common.ensure_dir(_cwd(mode))
+    rc, so, se = commands.run(_args(cfg, task, allowed, mode, disallowed=disallowed, profile=profile), "claude",
+                              cwd=_cwd(mode), input_text="", timeout=timeout, cfg=cfg,
+                              env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"))
     res = mcpjobs.parse_stream(so)
     res["rc"], res["stderr"] = rc, (se or "")[-400:]
     return res
@@ -102,7 +103,7 @@ def discover(cfg, email):
     ensure_config(cfg)
     last = None
     for mode in ("strict", "local"):
-        res = _run(cfg, "List nothing yet. Reply READY.", [], mode)
+        res = _run(cfg, "List nothing yet. Reply READY.", [], mode, profile="slack-discover")
         slack_tools = [t for t in res["tools_loaded"] if t.startswith("mcp__slack__")]
         st = {s.get("name"): s.get("status") for s in res.get("mcp_servers") or []}
         last = {"mode": mode, "servers": st, "tools": slack_tools, "rc": res["rc"]}
@@ -117,7 +118,8 @@ def discover(cfg, email):
             if look and look[0].endswith("read_user_profile") else \
             ("Find the Slack user whose email is %s using the user lookup/search tool, then reply with only JSON "
              '{"user_id": "U...", "name": "..."}, or {"user_id": "", "name": "FAILED <reason>"}.' % email)
-        r2 = _run(cfg, task, look[:1], mode, disallowed=[t for t in slack_tools if t not in look[:1]])
+        r2 = _run(cfg, task, look[:1], mode, disallowed=[t for t in slack_tools if t not in look[:1]],
+                  profile="slack-discover")
         out = r2.get("out") or {}
         uid = out.get("user_id") or ""
         if not uid:

@@ -1,85 +1,42 @@
-"""Read-only git for work repos. Every git call against a watched repo goes through `run()` here.
+"""Read-only git for work repos. Every git call against a work repo goes through `run()` here, which goes through
+the safety layer's command guard (chitragupta/safety/commands.py: purpose `git-work`).
 
 Allowed: rev-parse, for-each-ref, log, rev-list, merge-base, cherry, patch-id, show (metadata only), reflog (show),
-branch --list / --contains, ls-remote, remote get-url, config --get, fetch (remote-tracking refs only, never prune),
-ls-files (untracked files, for artifacts).
-Anything else raises NotAllowed before a process starts. The data home's own repo (gitsync.py) is not a work repo
-and does not use this module.
-
-Every call: no window, no terminal prompt, GIT_OPTIONAL_LOCKS=0 (read commands never take the index lock).
+branch --list / --contains, ls-remote, remote get-url, config --get, fetch (remote-tracking refs only, never prune,
+only in a watched repo, git.allow_fetch), ls-files (untracked files, for artifacts).
+Every call is hardened against the repo's own config (no pager, fsmonitor, external diff, textconv, ext:: transport
+or hooks) and runs with GIT_OPTIONAL_LOCKS=0, no window and no terminal prompt. Anything else raises NotAllowed
+(safety Blocked) before a process starts. The data home's own repo (gitsync.py) is not a work repo.
 """
-import glob
-import os
 import re
 
-from . import common
+from .safety import commands
+from .safety.log import Blocked as NotAllowed
 
-READ_ONLY = {"rev-parse", "for-each-ref", "log", "rev-list", "merge-base", "cherry", "patch-id", "show", "reflog",
-             "branch", "ls-remote", "remote", "config", "fetch", "ls-files"}
-# git's global options that may come before the subcommand
+READ_ONLY = commands.WORK_READ
+ENV = commands.GIT_ENV
 _GLOBAL_OK = {"--no-pager", "--literal-pathspecs", "--no-replace-objects"}
-_REFSPEC = re.compile(r"^\+?refs/heads/[^:\s]+:refs/remotes/[^/:\s]+/[^:\s]+$")
-_SAFE_FETCH_FLAGS = {"--no-tags", "--quiet", "-q", "--no-auto-gc", "--no-auto-maintenance", "--no-write-fetch-head",
-                     "--no-recurse-submodules"}
-_PATCH_FLAGS = ("-p", "-u", "--patch", "--stat", "--numstat", "--name-only", "--name-status", "--raw", "--shortstat",
-                "-U", "--unified")
-ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never",
-       "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=15"}
-
-
-class NotAllowed(Exception):
-    pass
 
 
 def check(args):
-    """Raise NotAllowed unless `args` (everything after `git -C <repo>`) is a read-only call."""
+    """Raise NotAllowed unless `args` (everything after `git -C <repo>`) is a read-only call. Pure: nothing is logged."""
     a = list(args)
     while a and a[0] in _GLOBAL_OK:
         a.pop(0)
-    if not a:
-        raise NotAllowed("empty git call")
-    sub, rest = a[0], a[1:]
-    if sub not in READ_ONLY:
-        raise NotAllowed("git %s is not allowed on a work repo" % sub)
-    if sub == "show" and (not any(x in ("-s", "--no-patch") for x in rest) or any(x.startswith(_PATCH_FLAGS) for x in rest)):
-        raise NotAllowed("git show is allowed for metadata only (-s / --no-patch)")
-    if sub == "reflog" and rest and rest[0] not in ("show",) and not rest[0].startswith(("-", "refs/", "HEAD")):
-        raise NotAllowed("git reflog %s is not allowed" % rest[0])
-    if sub == "reflog" and any(x in ("expire", "delete") for x in rest):
-        raise NotAllowed("git reflog expire/delete is not allowed")
-    if sub == "branch":
-        if not rest or not any(x in ("--list", "-l", "--contains", "--merged", "--no-merged", "--points-at") for x in rest):
-            raise NotAllowed("git branch needs --list / --contains")
-        if any(x in ("-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-f", "--force", "-u",
-                     "--set-upstream-to", "--unset-upstream", "--edit-description") or x.startswith("--set-upstream")
-               for x in rest):
-            raise NotAllowed("git branch may only list")
-    if sub == "remote" and (not rest or rest[0] != "get-url"):
-        raise NotAllowed("git remote: only get-url")
-    if sub == "config" and (not rest or rest[0] not in ("--get", "--get-all", "--get-regexp")):
-        raise NotAllowed("git config: only --get")
-    if sub == "fetch":
-        refspecs = [x for x in rest if not x.startswith("-")]
-        flags = [x for x in rest if x.startswith("-")]
-        bad = [f for f in flags if f not in _SAFE_FETCH_FLAGS]
-        if bad:
-            raise NotAllowed("git fetch flag(s) not allowed: %s" % " ".join(bad))
-        if "--no-tags" not in flags:
-            raise NotAllowed("git fetch must use --no-tags")
-        if len(refspecs) < 2 or not all(_REFSPEC.match(r) for r in refspecs[1:]):
-            raise NotAllowed("git fetch needs <remote> and explicit refs/heads/*:refs/remotes/<remote>/* refspecs")
-        remote = refspecs[0]
-        if any(not r.split(":", 1)[1].startswith("refs/remotes/%s/" % remote) for r in refspecs[1:]):
-            raise NotAllowed("git fetch may only update refs/remotes/%s/*" % remote)
-    if sub == "log" and any(x in ("-g", "--walk-reflogs") for x in rest) and any(x == "--expire" for x in rest):
-        raise NotAllowed("not allowed")
+    if a and a[0] in ("log", "show"):
+        a = [a[0]] + [f for f in commands.NO_DRIVERS if f not in a] + a[1:]
+    why = commands.git_work_reason(a)
+    if why:
+        raise NotAllowed(commands.LAYER, why, "git " + " ".join(a), "git-work")
     return True
 
 
 def run(cfg, repo, args, timeout=60, input_text=None):
     """(rc, stdout, stderr) for a checked read-only call."""
-    check(args)
-    return common.run([common.git_exe(cfg), "-C", repo] + list(args), timeout=timeout, input_text=input_text, env_extra=ENV)
+    a = list(args)
+    while a and a[0] in _GLOBAL_OK:
+        a.pop(0)
+    return commands.run(commands.work_argv(cfg, repo, a), "git-work", timeout=timeout, input_text=input_text, cfg=cfg)
 
 
 def ok(cfg, repo, args, timeout=60):
@@ -98,32 +55,26 @@ def rev(cfg, repo, ref):
 
 
 def git_dir(repo):
-    return common._git_dir(repo)
+    return commands.git_dir(repo)
 
 
 def locked(repo):
     """True while git holds any lock in the repo (a commit, checkout, rebase or fetch is running)."""
-    gd = git_dir(repo)
-    if not gd:
-        return False
-    pats = [os.path.join(gd, "*.lock"), os.path.join(gd, "refs", "remotes", "*", "*.lock")]
-    common_dir = common.read_text(os.path.join(gd, "commondir")).strip()
-    if common_dir:  # a worktree: the shared refs live in the main .git
-        cd = common_dir if os.path.isabs(common_dir) else os.path.normpath(os.path.join(gd, common_dir))
-        pats += [os.path.join(cd, "*.lock")]
-    return any(glob.glob(p) for p in pats)
+    return commands.locked(repo)
 
 
 def fetch(cfg, repo, remote, branches, timeout=180):
     """git fetch --no-tags <remote> +refs/heads/<b>:refs/remotes/<remote>/<b> ... ; never prunes, never while locked.
     Returns (ok, message)."""
+    if not commands.allow_fetch(cfg):
+        return False, "skipped: fetch is off (git.allow_fetch)"
     if locked(repo):
         return False, "skipped: a git lock file exists"
     specs = ["+refs/heads/%s:refs/remotes/%s/%s" % (b, remote, b) for b in sorted(set(branches)) if _safe_name(b)]
     if not specs:
         return False, "nothing to fetch"
     rc, so, se = run(cfg, repo, ["fetch", "--no-tags", "--quiet", "--no-auto-gc", "--no-auto-maintenance",
-                                 "--no-recurse-submodules", remote] + specs, timeout=timeout)
+                                 "--no-recurse-submodules", "--no-write-fetch-head", remote] + specs, timeout=timeout)
     return rc == 0, (se or so).strip()[:300]
 
 

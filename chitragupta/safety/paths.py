@@ -1,0 +1,265 @@
+"""Path guard: the only functions in Chitragupta that create, change, move or delete a file.
+
+A path is allowed only when its real location (junctions and symlinks followed, Windows case-insensitive) is under
+one of Chitragupta's own write roots:
+
+  tree     the data home · %USERPROFILE%\\.chitragupta · <claude dir>/skills/chitragupta
+  file     <claude dir>/CLAUDE.md (the chitragupta block) and CLAUDE.md.chitragupta.bak ·
+           the one Startup-folder launcher (only used when Task Scheduler refuses the task) ·
+           the dashboard's Chitragupta.url shortcut in the Start menu and on the Desktop
+  pattern  worklog-kb-*.zip in storage.local_backup_dir (the nightly backup and its pruning)
+  delete   <claude dir>/projects/<the sandbox's folder>/ : the tool-result copies of our own MCP jobs (delete only)
+
+Rejected before anything else: empty paths, UNC and device paths (\\\\server, \\\\?\\, \\\\.\\), NUL, `..` components,
+alternate data streams (a ':' after the drive letter). Sources of copies are only read, never moved.
+"""
+import fnmatch
+import os
+import re
+import shutil
+import time
+
+from .. import common
+from .log import block
+
+LAYER = "path"
+BACKUP_PATTERN = "worklog-kb-*.zip*"
+
+
+def _real(p):
+    r = os.path.realpath(os.path.abspath(p))
+    if r.startswith("\\\\?\\"):
+        r = r[4:]
+    return os.path.normcase(r)
+
+
+def _claude_dir():
+    from .. import plugin
+    return plugin.claude_dir()
+
+
+def sandbox():
+    return common.wl("sandbox")
+
+
+def tmp_dir():
+    """Chitragupta's own temp folder (bruenv request bodies); never the system temp."""
+    return common.wl("tmp")
+
+
+def _project_slug(p):
+    """Claude Code's folder name under projects/ for a working directory."""
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(p))
+
+
+def roots():
+    """[(kind, path)] — computed on every call (tests switch homes through the environment)."""
+    cd = _claude_dir()
+    md = os.path.join(cd, "CLAUDE.md")
+    out = [("tree", common.home()), ("tree", common.user_dir()), ("tree", os.path.join(cd, "skills", "chitragupta")),
+           ("file", md), ("file", md + ".chitragupta.bak"),
+           ("delete", os.path.join(cd, "projects", _project_slug(sandbox())))]
+    try:
+        from .. import install
+        out.append(("file", install.startup_launcher_path()))
+        out += [("file", os.path.join(d, install.SHORTCUT_FILE)) for d in install.shortcut_dirs(desktop=True)]
+    except Exception:  # noqa: BLE001
+        pass
+    bd = _backup_dir()
+    if bd:
+        out.append(("pattern", bd))
+    return out
+
+
+_BD = {}
+
+
+def _backup_dir():
+    """storage.local_backup_dir, re-read only when config.json changes."""
+    p = common.wl("config.json")
+    try:
+        st = os.stat(p)
+        key = (p, st.st_mtime_ns, st.st_size)  # size too: Windows file times can repeat within one clock tick
+    except OSError:
+        return ""
+    if key not in _BD:
+        try:
+            _BD.clear()
+            _BD[key] = ((common.read_json(p, {}).get("storage") or {}).get("local_backup_dir") or "").strip()
+        except Exception:  # noqa: BLE001
+            _BD[key] = ""
+    return _BD[key]
+
+
+def _syntax(raw):
+    """Reason the raw path is refused outright, or None."""
+    if not raw:
+        return "empty path"
+    if "\x00" in raw:
+        return "NUL in path"
+    if raw.startswith(("\\\\", "//")):
+        return "UNC or device path"
+    rest = raw[2:] if re.match(r"^[A-Za-z]:", raw) else raw
+    if ":" in rest:
+        return "alternate data stream or device name"
+    if ".." in re.split(r"[\\/]+", raw):
+        return "'..' in path"
+    return None
+
+
+def allowed(path, op="write"):
+    """None when `path` may be changed by `op` (write | delete), else the reason."""
+    raw = os.fspath(path) if path is not None else ""
+    bad = _syntax(raw)
+    if bad:
+        return bad
+    real = _real(raw)
+    for kind, root in roots():
+        rr = _real(root)
+        if kind == "tree" and (real == rr or real.startswith(rr.rstrip(os.sep) + os.sep)):
+            return None
+        if kind == "file" and real == rr:
+            return None
+        if kind == "pattern" and ((os.path.dirname(real) == rr and fnmatch.fnmatch(os.path.basename(real), BACKUP_PATTERN))
+                                  or (real == rr and op == "write")):
+            return None
+        if kind == "delete" and op == "delete" and real.startswith(rr.rstrip(os.sep) + os.sep):
+            return None
+    return "outside Chitragupta's write roots"
+
+
+def check(path, op="write", caller=""):
+    """Raise Blocked (and log) unless allowed; returns the path unchanged."""
+    reason = allowed(path, op)
+    if reason:
+        block(LAYER, reason, "%s %s" % (op, path), op, caller)
+    return path
+
+
+# --------------------------------------------------------------------------- the write functions
+
+def makedirs(p, caller=""):
+    if p and not os.path.isdir(p):
+        check(p, caller=caller)
+        os.makedirs(p, exist_ok=True)
+
+
+def write_text(path, text, caller="", newline="\n"):
+    """Atomic UTF-8 (no BOM) write. Returns True if the content changed."""
+    check(path, caller=caller)
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            if f.read() == text:
+                return False
+    except OSError:
+        pass
+    makedirs(os.path.dirname(path), caller)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8", newline=newline) as f:
+        f.write(text)
+    _replace_retry(tmp, path)
+    return True
+
+
+def write_bytes(path, data, caller=""):
+    check(path, caller=caller)
+    makedirs(os.path.dirname(path), caller)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "wb") as f:
+        f.write(data)
+    _replace_retry(tmp, path)
+
+
+def _replace_retry(tmp, path):
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # file briefly locked by an editor / AV scanner
+            time.sleep(0.2 * (attempt + 1))
+    os.replace(tmp, path)
+
+
+def append_text(path, text, caller=""):
+    check(path, caller=caller)
+    makedirs(os.path.dirname(path), caller)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def open_write(path, mode="w", caller="", **kw):
+    """An open file for streaming writes (mode w / wb / a / x); the caller closes it."""
+    if not set(mode) & set("wax+"):
+        raise ValueError("open_write needs a write mode")
+    check(path, caller=caller)
+    makedirs(os.path.dirname(path), caller)
+    return open(path, mode, **kw)
+
+
+def zip_writer(path, caller=""):
+    import zipfile
+    check(path, caller=caller)
+    makedirs(os.path.dirname(path), caller)
+    return zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED)
+
+
+def create_exclusive(path, data=b"", caller=""):
+    """Create `path` only if it doesn't exist (O_EXCL; a lock file). Returns the open fd; FileExistsError if taken."""
+    check(path, caller=caller)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    if data:
+        os.write(fd, data)
+    return fd
+
+
+def mkstemp(prefix="cg-", suffix="", caller=""):
+    """(fd, path) of a new file in <home>/.worklog/tmp."""
+    import tempfile
+    d = tmp_dir()
+    makedirs(d, caller)
+    fd, p = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=d)
+    return fd, p
+
+
+def replace(src, dst, caller=""):
+    """Move within the write roots (both ends checked)."""
+    check(src, "delete", caller)
+    check(dst, caller=caller)
+    os.replace(src, dst)
+
+
+def copy(src, dst, caller=""):
+    """Copy (never move) from anywhere readable into the write roots."""
+    check(dst, caller=caller)
+    makedirs(os.path.dirname(dst), caller)
+    shutil.copy2(src, dst)
+
+
+def copytree(src, dst, ignore=None, caller=""):
+    check(dst, caller=caller)
+    shutil.copytree(src, dst, ignore=ignore)
+
+
+def delete(path, caller=""):
+    check(path, "delete", caller)
+    os.remove(path)
+
+
+def rmdir(path, caller=""):
+    check(path, "delete", caller)
+    os.rmdir(path)
+
+
+def rmtree(path, caller=""):
+    check(path, "delete", caller)
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def chmod(path, mode, caller=""):
+    check(path, caller=caller)
+    os.chmod(path, mode)
+
+
+def touch(path, caller=""):
+    check(path, caller=caller)
+    os.utime(path)

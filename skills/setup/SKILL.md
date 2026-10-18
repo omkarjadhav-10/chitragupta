@@ -10,6 +10,15 @@ allowed-tools:
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup check *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup mcp-status *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor *)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:setup
@@ -45,7 +54,7 @@ Report what it did in a few lines. If it fails, show the error and stop.
 
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup mcp-status --json`
 
-- **Slack** (the 20:00 Jira-worklog DM). If missing, offer `setup add-slack`: it adds Slack's hosted MCP for background jobs only (not to their global config) and prints a one-time browser sign-in — walk them through it. When signed in, run `setup slack-user` to store their Slack user ID, then offer `setup slack-test` (one short DM to themselves) to confirm it works. Without Slack the evening worklog is still composed and saved in the daily note, just not sent.
+- **Slack** (the 20:00 Jira-worklog DM). If missing, offer `setup add-slack`: it prepares a folder for background jobs only and prints the one `claude mcp add --scope local …` command plus a one-time browser sign-in. Chitragupta never writes Claude Code's settings itself, so the user runs that command (in a terminal in the printed folder) — walk them through it; don't run it for them. When signed in, run `setup slack-user` to store their Slack user ID, then offer `setup slack-test` (one short DM to themselves) to confirm it works. Without Slack the evening worklog is still composed and saved in the daily note, just not sent.
 - **Jira** (`mcp-atlassian`): used for ticket titles and to subtract time already logged in Jira. If it reports the official Atlassian remote server, say it is present but not supported by v0.1.0 jobs. Without Jira, titles come from branch names.
 - **Database MCP** (QA worked examples in DB flows, schema facts): if candidate servers are listed, ask which one (or none), then `setup use-database <server>`. Never pick one for them.
 
@@ -58,3 +67,7 @@ If they decline Slack or Jira for good, ask whether to stop the weekly "connect 
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor`
 
 Show the failing rows with their fix, or "all checks passed". Finish with: start a new Claude Code session so the `chitragupta` recall skill and the CLAUDE.md block load; try `/cg:today`.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

@@ -6,6 +6,15 @@ argument-hint: "<TICKET-KEY>"
 allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli trace *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli trace *)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:trace <KEY>
@@ -21,3 +30,7 @@ If no key was given, ask for one and stop. Otherwise:
    `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" agent qa-trace <KEY>` (read-only SELECTs on QA through the database MCP; takes a minute or two). Run it only after they say yes, then run `cli trace` again. When it says `not configured`, don't offer it.
 
 Never edit files in the data home.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

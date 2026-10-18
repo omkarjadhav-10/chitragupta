@@ -1,6 +1,12 @@
 ---
 name: chitragupta
 description: Answer questions from the user's automatic worklog (Chitragupta) at {{HOME}} — what they did on a day or week, everything known about a ticket (findings, root cause, how it works, DB queries, tables, APIs, integrations, files, decisions), standups, timesheets and handover notes; the daily Jira worklog sent to Slack at 20:00 (log extra time or a meeting, leave, half days, holidays, working weekend days, resend or show a day's worklog); replay or run a ticket's saved requests, save requests to the worklog, show or map a ticket's DB flow (which tables and columns change, from what to what), find a ticket's artifacts, and a ticket's branches, PRs and delivery check (did every commit reach release / qa / uat / staging, which PRs are open). Use whenever they mention a ticket ID, ask what they did or found, what we know about something, which tables, APIs or queries were involved, want to replay / save / pin a request, map a DB flow, find an analysis doc or export, ask whether a ticket reached release / qa or which PRs are open, or want a standup, timesheet, weekly summary or handover, say they were on leave / took a half day / worked extra time, or ask a read-only Jira or database question about a ticket — even if they don't say "worklog".
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash(py -3 "{{LAUNCHER}}" cli *)
+  - PowerShell(py -3 "{{LAUNCHER}}" cli *)
 ---
 
 # Worklog recall (Chitragupta)
@@ -48,8 +54,9 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
    `py -3 "{{LAUNCHER}}" cli hours --week` / `--month`); label totals as approximate (derived from Claude Code activity).
 6. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
 7. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
-   `bruno/<TICKET>`); you may run replay.sh yourself when asked. If it stops on a missing variable, the name to fill is in
-   `bruno/.env.example`; the user fills `bruno/.env` themselves — never write secrets anywhere.
+   `bruno/<TICKET>`). Don't run replay.sh yourself: it sends real requests that can change data, so the user runs it.
+   If it stops on a missing variable, the name to fill is in `bruno/.env.example`; the user fills `bruno/.env`
+   themselves — never write secrets anywhere.
 
 ## Saving requests (only when the user asks to save / pin requests to the worklog)
 End your final reply with one fenced block; the agent files it exactly as written and pins the requests:
@@ -127,6 +134,12 @@ production. Cached copies: `data/jira/<KEY>.json`, `data/db-schema/<connection>/
 Only `daily/**` and `README.md` go to GitHub (when a remote is configured). Everything else (tickets/, knowledge/,
 bruno/, data/, .worklog/) is a local knowledge base on this machine; QA values may appear in it literally, production
 values never.
+
+## What Chitragupta will never do
+This skill only reads. Never, as part of it: edit a codebase; run a git command that changes history or branches
+(commit, merge, rebase, checkout, push…); create, approve, comment on, merge or close a PR, or change a branch or
+pipeline (`gh`, `glab`, `az`); change anything in Azure or Jira; run anything but a single SELECT on a database; or run
+replay.sh or any other request against an API. If the user wants one of those, they do it themselves, outside this skill.
 
 ## The only writes allowed (only when the user explicitly asks)
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;

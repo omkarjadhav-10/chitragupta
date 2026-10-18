@@ -23,6 +23,7 @@ import sys
 
 from . import __version__
 from . import common
+from .safety import paths
 from . import timesheet as T
 
 KEY_RX = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}$")
@@ -124,9 +125,7 @@ def cmd_pause(a):
     if os.path.exists(p):
         out("Already paused (%s)." % p)
         return 0
-    common.ensure_dir(os.path.dirname(p))
-    with open(p, "w", encoding="utf-8", newline="\n") as f:
-        f.write(common.now_iso() + "\n")
+    common.write_text(p, common.now_iso() + "\n")
     out("Paused. Hooks capture nothing and the background tick only does housekeeping until you resume.")
     return 0
 
@@ -136,7 +135,7 @@ def cmd_resume(a):
     if not os.path.exists(p):
         out("Not paused.")
         return 0
-    os.remove(p)
+    paths.delete(p)
     out("Resumed. Capture starts again with the next Claude Code event.")
     return 0
 
@@ -373,11 +372,7 @@ def _append_inbox(line):
     existing = common.read_text(path)
     if any(l.strip() == line for l in existing.splitlines()):
         return False
-    common.ensure_dir(os.path.dirname(path))
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        if existing and not existing.endswith("\n"):
-            f.write("\n")
-        f.write(line + "\n")
+    paths.append_text(path, ("\n" if existing and not existing.endswith("\n") else "") + line + "\n")
     return True
 
 

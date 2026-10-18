@@ -16,12 +16,12 @@ import hashlib
 import io
 import os
 import re
-import shutil
 import zipfile
 
 from . import common
 from . import gitro
 from .redact import redact
+from .safety import paths
 
 TEXT_EXT = {".md": "doc", ".markdown": "doc", ".txt": "doc", ".html": "html", ".htm": "html", ".mmd": "diagram",
             ".mermaid": "diagram", ".puml": "diagram", ".plantuml": "diagram", ".svg": "diagram", ".drawio": "diagram",
@@ -230,7 +230,7 @@ class Collector:
             self._copy_local(src, None, ldir, stored_name, rotate=True)
             rec.update(storage="local-only", local=stored_name)
             if ext in self.push_bin:
-                shutil.copy2(src, os.path.join(adir, stored_name))
+                paths.copy(src, os.path.join(adir, stored_name))
                 rec.update(storage="pushed", stored=stored_name)
         if not purpose:
             pp = (self.state.get("artifact_purposes") or {}).get(name.lower())
@@ -315,18 +315,17 @@ class Collector:
             # keep the last 3 versions: current + .1 + .2
             p1, p2 = os.path.join(vdir, stored_name + ".1"), os.path.join(vdir, stored_name + ".2")
             if os.path.exists(p1):
-                os.replace(p1, p2)
-            shutil.copy2(dst, p1)
+                paths.replace(p1, p2)
+            paths.copy(dst, p1)
         if src and os.path.isfile(src):
-            shutil.copy2(src, dst)
+            paths.copy(src, dst)
         elif content is not None:
-            with open(dst, "w", encoding="utf-8", newline="") as f:
-                f.write(content)
+            paths.write_text(dst, content, newline="")
 
     @staticmethod
     def _remove(src):
         try:
-            os.remove(src)
+            paths.delete(src)  # only ever a file in _drop/ (the data home); the path guard refuses anything else
         except OSError:
             pass
 

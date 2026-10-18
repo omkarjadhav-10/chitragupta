@@ -1,10 +1,9 @@
 """Structural syntax check for the Mermaid we generate (flowchart, sequenceDiagram, erDiagram).
-No Node/mmdc needed; if `mmdc` is on PATH, `check(..., use_mmdc=True)` also runs it.
+No Node/mmdc needed (Chitragupta runs no external renderer; `use_mmdc` is accepted and ignored).
 
     mermaid_check.py FILE.md...   exit 1 and list problems for every ```mermaid block
 """
 import re
-import shutil
 import sys
 
 ID = r"[A-Za-z][A-Za-z0-9_]*"
@@ -89,18 +88,6 @@ def check(md, use_mmdc=False):
     errs = []
     for i, b in enumerate(blocks(md)):
         errs += ["block %d: %s" % (i + 1, e) for e in check_block(b)]
-    if use_mmdc and shutil.which("mmdc") and not errs:
-        import os
-        import subprocess
-        import tempfile
-        for b in blocks(md):
-            d = tempfile.mkdtemp()
-            src, out = os.path.join(d, "a.mmd"), os.path.join(d, "a.svg")
-            with open(src, "w", encoding="utf-8") as f:
-                f.write(b)
-            p = subprocess.run([shutil.which("mmdc"), "-i", src, "-o", out], capture_output=True, text=True)
-            if p.returncode != 0:
-                errs.append("mmdc: " + (p.stderr or p.stdout)[:300])
     return errs
 
 

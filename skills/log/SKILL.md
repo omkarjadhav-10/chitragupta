@@ -6,6 +6,15 @@ argument-hint: "<what to log, e.g. 1h on ABC-1234 at 18:30: sync with the team>"
 allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli log *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli log *)
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: py
+          args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
+          timeout: 10
+          onFailure: block
 ---
 
 # /cg:log <what>
@@ -31,3 +40,7 @@ Then run exactly one command with the directive as the arguments, for example:
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli log leave: 2026-10-20`
 
 The command checks the line and appends it to `inbox.md`; report what it printed. If it says "Not added", fix the line from the grammar it prints and try once more, or ask. If the request is ambiguous (which ticket, which day, how long), ask instead of guessing. Never edit `inbox.md` or any other file yourself.
+
+## Safety
+
+Chitragupta's /cg: commands only read. While this command runs, Chitragupta's safety guard allows only read tools and Chitragupta's own helper (`run.py`): no file edits, no git, no `gh` / `glab` / `az` writes, no Jira or database writes, nothing else. If a step needs one of those, tell the user instead of trying.

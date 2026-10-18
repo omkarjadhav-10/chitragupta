@@ -21,6 +21,7 @@ import sys
 
 from . import __version__
 from . import common
+from .safety import paths
 
 KEEP = 2  # newest versions kept, the current one always among them
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", "*.tmp")
@@ -101,16 +102,12 @@ def _write_bytes_atomic(path, data):
                 return False
     except OSError:
         pass
-    common.ensure_dir(os.path.dirname(path))
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    paths.write_bytes(path, data)
     return True
 
 
 def _rmtree(p):
-    shutil.rmtree(p, ignore_errors=True)
+    paths.rmtree(p)
 
 
 def versions():
@@ -170,18 +167,18 @@ def install(pkg_dir=None, force=False):
     if not fresh:
         tmp = os.path.join(rt, ".%s.tmp-%d" % (ver, os.getpid()))
         _rmtree(tmp)
-        shutil.copytree(src, os.path.join(tmp, "chitragupta"), ignore=_IGNORE)
+        paths.copytree(src, os.path.join(tmp, "chitragupta"), ignore=_IGNORE)
         for name, s in extras.items():
             if s:
-                shutil.copytree(s, os.path.join(tmp, name), ignore=_IGNORE)
+                paths.copytree(s, os.path.join(tmp, name), ignore=_IGNORE)
         if os.path.exists(target):
             old = os.path.join(rt, ".%s.old-%d" % (ver, os.getpid()))
             _rmtree(old)
-            os.replace(target, old)
-            os.replace(tmp, target)
+            paths.replace(target, old)
+            paths.replace(tmp, target)
             _rmtree(old)
         else:
-            os.replace(tmp, target)
+            paths.replace(tmp, target)
         res["copied"] = True
     lsrc = launcher_source(src)
     if lsrc and os.path.abspath(lsrc) != os.path.abspath(launcher_path()):

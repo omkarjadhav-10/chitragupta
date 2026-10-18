@@ -3,7 +3,7 @@ link map).
 
 Every job is one `claude -p` call (haiku, lean flags) with only the server(s) and read tools that job needs:
   --strict-mcp-config --mcp-config <per-job file>   --allowedTools <job reads>   --disallowedTools <server writes>
-  --settings .worklog/mcp/readonly-settings.json      (PreToolUse guard: chitragupta.mcpguard via the launcher)
+  built by chitragupta.safety.claude: no built-in tools, dontAsk, and a fail-closed PreToolUse guard (profile mcp)
 Raw tool results are taken from the stream-json events and written to local files; the model only picks the calls
 and returns a short JSON. Never run from hooks; budget = mcp.daily_call_budget calls a day.
 
@@ -21,6 +21,7 @@ import time
 from . import common
 from . import extract
 from .redact import redact
+from .safety import claude as builder, commands, paths
 
 MCP_DIR = None  # set lazily: <home>/.worklog/mcp
 
@@ -119,7 +120,7 @@ def _persisted(content):
     p = m.group(1)
     try:
         txt = common.read_text(p)
-        os.remove(p)
+        paths.delete(p, caller="mcpjobs.persisted")
         return txt
     except OSError:
         return None
@@ -198,13 +199,11 @@ def parse_stream(text):
     return res
 
 
-def lean_args(cfg, model, system_prompt_file):
+def claude_exe(cfg):
     exe = extract.resolve_claude(cfg)
     if not exe:
         raise JobError("claude executable not found", skip=True)
-    return exe + ["--model", model, "--system-prompt-file", system_prompt_file, "--tools", "",
-                  "--setting-sources", "project", "--no-session-persistence", "--disable-slash-commands",
-                  "--output-format", "stream-json", "--verbose"]
+    return exe
 
 
 def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_turns=5, model="haiku", timeout=300,
@@ -235,23 +234,18 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     if missing:  # signed out: don't spend a model call to find out
         health.setdefault("mcp", {}).setdefault("offline", {})[job] = "missing env %s" % ",".join(sorted(missing))
         raise JobError("signed out: env %s not set" % ", ".join(sorted(missing)), skip=True)
-    settings = os.path.join(mcp_dir(), "readonly-settings.json")
-    if not os.path.isfile(settings) or not os.path.isfile(os.path.join(mcp_dir(), "allow.json")):
-        ensure_files(cfg)  # never run a job without the read-only guard
-    args = lean_args(cfg, model, common.prompt_path("mcp_job.md")) + [
-        "-p", task, "--strict-mcp-config", "--mcp-config", cfg_path, "--settings", settings,
-        "--max-turns", str(max_turns),
-        "--allowedTools", ",".join(reads),
-    ]
-    if writes:
-        args += ["--disallowedTools", ",".join(writes)]
-    if schema:
-        args += ["--json-schema", json.dumps(schema, separators=(",", ":"))]
+    if not os.path.isfile(os.path.join(mcp_dir(), "allow.json")):
+        ensure_files(cfg)  # never run a job without the read allowlist
+    args = builder.build(claude_exe(cfg), task, "mcp", model, common.prompt_path("mcp_job.md"), allowed=reads,
+                         disallowed=writes, mcp_config=cfg_path, json_schema=schema, output="stream-json",
+                         max_turns=max_turns, cfg=cfg)
     m = health.setdefault("mcp", {})
     ck = "manual_calls" if manual else "calls"
     m.setdefault(ck, {})[day] = int(m.setdefault(ck, {}).get(day) or 0) + 1
     t0 = time.time()
-    rc, so, se = common.run(args, cwd=common.wl("sandbox"), input_text=stdin_text or "", timeout=timeout, env_extra=env_extra)
+    common.ensure_dir(common.wl("sandbox"))
+    rc, so, se = commands.run(args, "claude", cwd=common.wl("sandbox"), input_text=stdin_text or "", timeout=timeout,
+                              env_extra=env_extra, cfg=cfg)
     res = parse_stream(so)
     common.write_text(os.path.join(common.wl("cache", "mcp"), job + ".last.jsonl"), redact(so or "", mode="secrets"))
     res["seconds"] = round(time.time() - t0, 1)
@@ -270,7 +264,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     if rc != 0 and not res["out"]:
         raise JobError("claude rc=%s: %s" % (rc, (se or so)[-300:].strip()))
     for c in res["calls"]:
-        if c.get("is_error") and "read-only guard" in str(c.get("result")):
+        if c.get("is_error") and ("read-only guard" in str(c.get("result")) or "safety guard" in str(c.get("result"))):
             m.setdefault("denied", []).append({"at": common.now_iso(), "job": job, "tool": c["name"]})
             m["denied"] = m["denied"][-20:]
     return res
@@ -410,13 +404,9 @@ def ensure_files(cfg):
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
     allow["max_rows"] = int((cfg.get("qa_data") or {}).get("max_rows_per_query") or 20)
     common.write_json(ap, allow)
-    # the guard runs through the stable launcher, never a versioned plugin path
-    py, launcher, module = [x.replace("\\", "/") for x in common.self_command("mcpguard", cfg=cfg)]
-    common.write_json(os.path.join(d, "readonly-settings.json"), {
-        "disableAllHooks": False,
-        "hooks": {"PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": '"%s" "%s" %s' % (py, launcher, module),
-                                                              "timeout": 20}]}]},
-    })
+    # Kept for inspection; every job passes the same settings inline (safety.claude.guard_settings, fail-closed).
+    common.write_text(os.path.join(d, "readonly-settings.json"),
+                      json.dumps(json.loads(builder.guard_settings("mcp", cfg)), indent=2) + "\n")
     return allow
 
 

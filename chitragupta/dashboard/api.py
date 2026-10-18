@@ -942,6 +942,20 @@ def recent_errors(h, n=12):
     return out[-n:]
 
 
+def _safety(cfg):
+    """Safety layer: enforced or not, and what it blocked (security.log). Never raises."""
+    try:
+        from ..safety import status as safety_status
+        s = safety_status.status(cfg)
+        return {"enforced": s["enforced"], "problems": s["problems"], "checks": s["checks"],
+                "blocks_24h": s["blocks_24h"], "blocks_7d": s["blocks_7d"], "by_layer": s["by_layer"],
+                "recent": [{"at": e.get("at"), "layer": e.get("layer"), "what": _cut(e.get("what") or "", 300),
+                            "reason": _cut(e.get("reason") or "", 300)} for e in s["last"]],
+                "database_read_only": s["database_read_only"], "fetch": s["fetch"], "log": s["log"]}
+    except Exception as e:  # noqa: BLE001
+        return {"enforced": False, "problems": ["safety status failed: %r" % e], "recent": []}
+
+
 def status(cfg=None, now=None, server=None):
     cfg = cfg or common.load_config()
     now = now or common.now()
@@ -966,6 +980,7 @@ def status(cfg=None, now=None, server=None):
         "errors": recent_errors(h),
         "dashboard": server or {},
         "search": _search_stats(),
+        "safety": _safety(cfg),
     }
 
 

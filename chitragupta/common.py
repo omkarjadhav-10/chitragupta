@@ -109,6 +109,8 @@ DEFAULT_CONFIG = {
     "push_interval_minutes": 30,
     "raw_retention_days": 30,
     "paths": {"python": "", "pythonw": "", "claude": "", "git": ""},
+    # fetch of remote-tracking refs in watched repos (precise merge status); false = no writes inside .git at all
+    "git": {"allow_fetch": True},
     "extra_sensitive_patterns": [],
     "allow_patterns": [],
     # Example ticket key shown in generated text (daily "unfiled artifacts" hint, README examples).
@@ -148,29 +150,14 @@ def save_config(cfg):
 # --------------------------------------------------------------------------- atomic I/O
 
 def ensure_dir(p):
-    os.makedirs(p, exist_ok=True)
+    from .safety import paths
+    paths.makedirs(p)
 
 
 def write_text(path, text):
-    """Atomic UTF-8 (no BOM) write with LF newlines. Returns True if content changed."""
-    try:
-        with open(path, encoding="utf-8", newline="") as f:
-            if f.read() == text:
-                return False
-    except OSError:
-        pass
-    ensure_dir(os.path.dirname(path))
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    for attempt in range(5):
-        try:
-            os.replace(tmp, path)
-            return True
-        except PermissionError:  # file briefly locked by an editor / AV scanner
-            time.sleep(0.2 * (attempt + 1))
-    os.replace(tmp, path)
-    return True
+    """Atomic UTF-8 (no BOM) write with LF newlines, through the path guard. Returns True if content changed."""
+    from .safety import paths
+    return paths.write_text(path, text)
 
 
 def read_text(path, default=""):
@@ -194,9 +181,8 @@ def read_json(path, default=None):
 
 
 def append_line(path, text):
-    ensure_dir(os.path.dirname(path))
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(text.rstrip("\n") + "\n")
+    from .safety import paths
+    paths.append_text(path, text.rstrip("\n") + "\n")
 
 
 def log(name, msg, max_bytes=1_000_000, keep=5):
@@ -204,11 +190,12 @@ def log(name, msg, max_bytes=1_000_000, keep=5):
     path = wl("logs", name + ".log")
     try:
         if os.path.exists(path) and os.path.getsize(path) > max_bytes:
+            from .safety import paths
             for i in range(keep - 1, 0, -1):
                 src = "%s.%d" % (path, i)
                 if os.path.exists(src):
-                    os.replace(src, "%s.%d" % (path, i + 1))
-            os.replace(path, path + ".1")
+                    paths.replace(src, "%s.%d" % (path, i + 1))
+            paths.replace(path, path + ".1")
         append_line(path, "%s %s" % (now_iso(), msg))
     except OSError:
         pass
@@ -373,29 +360,9 @@ def read_branch(repo_root):
     return ("detached@" + head[:8]) if head else None
 
 
-# --------------------------------------------------------------------------- processes (agent only)
+# --------------------------------------------------------------------------- processes
 
-CREATE_NO_WINDOW = 0x08000000
-
-
-def run(args, cwd=None, input_text=None, timeout=120, env_extra=None):
-    """Run a child process hidden, never through a shell. Returns (rc, stdout, stderr)."""
-    import subprocess
-    env = dict(os.environ)
-    env.update({"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"})
-    env.update(INTERNAL_ENV)
-    if env_extra:
-        env.update(env_extra)
-    try:
-        p = subprocess.run(args, cwd=cwd, input=input_text, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, env=env,
-                           creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
-        return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired:
-        return 124, "", "timeout after %ss" % timeout
-    except OSError as e:
-        return 127, "", str(e)
-
+# Processes start only through chitragupta.safety.commands.run(argv, purpose).
 
 def launcher():
     """Stable launcher (~/.chitragupta/runtime/run.py). Anything persisted outside the engine

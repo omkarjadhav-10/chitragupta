@@ -11,7 +11,8 @@ Run as `"<python>" "<launcher>" bruenv <cmd> ...` (= `python -m chitragupta brue
 
 ENV is an environment name from bruno/environments (case-insensitive: qa, QA, local ...).
 Non-secret values come from bruno/environments/<ENV>.bru, secrets from bruno/.env. Runtime variables
-live only in the temporary VARS file of one replay run; nothing here writes a secret into the repo.
+live only in the temporary VARS file of one replay run (under <home>/.worklog/tmp); nothing here writes a secret
+into the repo, and nothing is written outside the data home.
 """
 import datetime as _dt
 import json
@@ -19,10 +20,11 @@ import os
 import random
 import re
 import sys
-import tempfile
 import uuid
 
 from . import common
+from .safety import paths
+from .safety.log import Blocked
 
 HOME = common.home()
 BRUNO = common.env("BRUNO_DIR") or os.path.join(HOME, "bruno")
@@ -84,8 +86,7 @@ def runtime(vars_path):
 
 
 def save_runtime(vars_path, data):
-    with open(vars_path, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+    paths.write_text(vars_path, json.dumps(data))
 
 
 def dynamic(name):
@@ -180,14 +181,13 @@ def main(argv):
         elif cmd == "file":
             with open(args[2], encoding="utf-8") as f:
                 txt = substitute(f.read(), args[0], args[1])
-            with open(args[3], "w", encoding="utf-8", newline="") as f:
-                f.write(txt)
+            paths.write_text(args[3], txt, newline="")
         elif cmd == "body":
             with open(args[1], encoding="utf-8") as f:
                 txt = substitute(f.read(), args[0], None)
-            fd, p = tempfile.mkstemp(prefix="wl-body-", suffix=os.path.splitext(args[1])[1])
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-                f.write(txt)
+            fd, p = paths.mkstemp(prefix="wl-body-", suffix=os.path.splitext(args[1])[1])
+            os.close(fd)
+            paths.write_text(p, txt, newline="")
             print(p.replace("\\", "/"))
         elif cmd == "check":
             dot = dotenv()
@@ -210,7 +210,7 @@ def main(argv):
     except Missing as e:
         sys.stderr.write("bruenv: %s\n" % e)
         return 3
-    except (IndexError, OSError) as e:
+    except (IndexError, OSError, Blocked) as e:
         sys.stderr.write("bruenv: %s\n" % e)
         return 2
     return 0

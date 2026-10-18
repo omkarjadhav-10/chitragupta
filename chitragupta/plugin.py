@@ -13,6 +13,7 @@ import time
 
 from . import __version__
 from . import common
+from .safety import paths
 
 NOT_SET_UP = "Chitragupta isn't set up yet — run /cg:setup to finish."
 REMINDER_DAYS = 7
@@ -21,7 +22,7 @@ MAINTENANCE_STALE_EVERY = 120  # ... and while the runtime is behind the plugin
 LOCK_TTL = 900                # a maintenance lock older than this is abandoned
 
 # Windows process creation flags for a detached, windowless child.
-_DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+
 
 
 # --------------------------------------------------------------------------- paths outside the data home
@@ -152,22 +153,12 @@ def spawn_maintenance(cfg=None, popen=None):
     if not maintenance_due():
         return False
     try:
-        common.ensure_dir(os.path.dirname(_stamp()))
-        with open(_stamp(), "w", encoding="utf-8") as f:
-            f.write(common.now_iso() + "\n")
+        common.write_text(_stamp(), common.now_iso() + "\n")
     except OSError:
         return False
-    import subprocess
-    env = dict(os.environ)
-    env.update(common.INTERNAL_ENV)
-    kw = dict(cwd=common.home(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-              close_fds=True, env=env)
-    if os.name == "nt":
-        kw["creationflags"] = _DETACHED
-    else:
-        kw["start_new_session"] = True
+    from .safety import commands
     try:
-        (popen or subprocess.Popen)(maintenance_argv(cfg), **kw)
+        commands.spawn(maintenance_argv(cfg), cwd=common.home(), cfg=cfg, popen=popen)
         return True
     except (OSError, ValueError):
         return False
@@ -190,14 +181,12 @@ def _take_lock():
     common.ensure_dir(os.path.dirname(p))
     for _ in range(2):
         try:
-            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, ("%d %s\n" % (os.getpid(), common.now_iso())).encode())
-            os.close(fd)
+            os.close(paths.create_exclusive(p, ("%d %s\n" % (os.getpid(), common.now_iso())).encode()))
             return True
         except FileExistsError:
             try:
                 if time.time() - os.path.getmtime(p) > LOCK_TTL:
-                    os.remove(p)
+                    paths.delete(p)
                     continue
             except OSError:
                 continue
@@ -240,7 +229,7 @@ def maintain(mcp_refresh=None):
             done.append("mcp status failed: %r" % e)
     finally:
         try:
-            os.remove(_lock_path())
+            paths.delete(_lock_path())
         except OSError:
             pass
     if is_set_up():

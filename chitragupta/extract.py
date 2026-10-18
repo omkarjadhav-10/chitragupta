@@ -291,13 +291,11 @@ def call_claude(kind, stdin_text, cfg, timeout=300):
             return cached["out"], 0.0
     sandbox = common.wl("sandbox")
     common.ensure_dir(sandbox)
-    args = exe + ["-p", "Process the worklog input provided on stdin and return the structured result.",
-                  "--output-format", "json", "--json-schema", schema_arg, "--model", model,
-                  "--system-prompt-file", prompt_path, "--tools", "",
-                  "--settings", json.dumps({"disableAllHooks": True}), "--setting-sources", "project",
-                  "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"]
-    rc, so, se = common.run(args, cwd=sandbox, input_text=stdin_text, timeout=timeout,
-                            env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"))
+    from .safety import claude as builder, commands
+    args = builder.build(exe, "Process the worklog input provided on stdin and return the structured result.", "none",
+                         model, system_prompt_file=prompt_path, json_schema=schema_arg, output="json", cfg=cfg)
+    rc, so, se = commands.run(args, "claude", cwd=sandbox, input_text=stdin_text, timeout=timeout, cfg=cfg,
+                              env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"))
     data = None
     try:
         data = json.loads(so.strip().splitlines()[-1]) if so.strip() else None

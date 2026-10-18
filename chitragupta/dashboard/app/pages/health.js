@@ -35,6 +35,9 @@ function diagnostics(s, setup) {
   ((mc.live && (mc.live.servers || mc.live.rows)) || []).forEach((x) => L.push('  live ' + (x.name || x.server) + ': ' + x.status));
   L.push('MCP today: ' + (mc.calls_today || 0) + ' jobs' + (mc.budget ? ' of ' + mc.budget : '') + ', tokens in ' + (mc.tokens_in_today || 0) + ' out ' + (mc.tokens_out_today || 0));
   if (setup) setup.items.forEach((i) => L.push('Setup ' + i.label + ': ' + i.status + (i.detail ? ' (' + i.detail + ')' : '')));
+  const sf = s.safety || {};
+  L.push('Safety: ' + (sf.enforced ? 'enforced' : 'NOT enforced ' + (sf.problems || []).join('; ')) + ', blocked 24h ' + (sf.blocks_24h || 0) + ', 7d ' + (sf.blocks_7d || 0));
+  (sf.recent || []).forEach((e) => L.push('  [' + e.layer + '] ' + e.reason + ' :: ' + e.what));
   L.push('Errors all time: ' + (s.errors_total || 0));
   (s.errors || []).forEach((e) => L.push('  [' + e.source + '] ' + e.text));
   return L.join('\n');
@@ -50,7 +53,8 @@ export function HealthPage() {
       const last = (sl.recent || [])[0];
       const ss = slackState(sl);
       const live = (mc.live && (mc.live.servers || mc.live.rows)) || [];
-      const guard = (s.errors || []).filter((e) => e.source === 'mcp-guard');
+      const sf = s.safety || {};
+      const blocks = sf.blocks_24h || 0;
       const task = setup.data && setup.data.items.find((i) => /task/i.test(i.id + ' ' + i.label));
       const budgetHit = mc.budget && mc.calls_today >= mc.budget;
       return html`
@@ -69,8 +73,10 @@ export function HealthPage() {
             ss[1] === 'Not connected' ? "Slack isn't connected; the worklog is still written to the daily file. Connect it with /cg:setup." : '']} />
         <${Card} id="h-task" title="Scheduled task" status=${task ? html`<${Status} kind=${task.status}>${task.status === 'ok' ? 'Registered' : task.status === 'off' ? 'Off' : 'Needs attention'}</${Status}>` : html`<${Status} kind="wait">Checking</${Status}>`}
           lines=${[task ? task.detail : '', task && task.fix && task.fix.text && task.status !== 'ok' ? 'Fix: ' + task.fix.text : '']} />
-        <${Card} id="h-safe" title="Safety" status=${guard.length ? html`<${Status} kind="warn">${plural(guard.length, 'blocked call')}</${Status}>` : html`<${Status} kind="ok">No violations</${Status}>`}
-          lines=${[guard.length ? 'The read-only guard blocked these MCP calls; see the errors below.' : 'No MCP call was blocked recently.']} />
+        <${Card} id="h-safe" title="Safety" status=${!sf.enforced ? html`<${Status} kind="bad">Not enforced</${Status}>` : blocks ? html`<${Status} kind="warn">${plural(blocks, 'blocked action')}</${Status}>` : html`<${Status} kind="ok">Enforced</${Status}>`}
+          big=${sf.enforced ? 'Read-only' : '—'}
+          lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h; latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
+            sf.database_read_only === false ? "The database MCP's read-only login isn't confirmed (mcp.database.read_only_login)." : '', sf.log ? 'Log: ' + sf.log : '']} />
       </div>
 
       <section class="sec" aria-labelledby="h-mcp"><div class="sec-head"><h2 id="h-mcp">MCP servers</h2>

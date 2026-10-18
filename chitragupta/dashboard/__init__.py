@@ -9,23 +9,18 @@ ensure(): down -> spawn ours ("started"); ours with the same home and version >=
 ours but older -> stop it, spawn ours ("replaced"); a different home or a foreign app -> "other", left alone.
 Never downgrades, so a dev checkout and the stable runtime do not replace each other back and forth.
 """
-import http.client
 import json
 import os
-import subprocess
 import sys
 import time
 
 from .. import __version__ as VERSION
 from .. import APP
 from .. import common
+from ..safety import commands, net
 
 DEFAULT_PORT = 7419
 PROBE_BODY_MAX = 4096
-DETACHED_PROCESS = 0x00000008
-CREATE_NEW_PROCESS_GROUP = 0x00000200
-CREATE_NO_WINDOW = 0x08000000
-_spawned = []
 
 
 def port(cfg=None):
@@ -68,21 +63,7 @@ def _same_home(a, b):
         return False
 
 
-def port_free(p):
-    """True when nothing listens on the port. Checked by binding (and closing at once) because on Windows a
-    connect() to a closed local port is refused only after ~2 s of SYN retries — far past a 150 ms probe."""
-    import socket
-    for host in ("127.0.0.1", "0.0.0.0"):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            s.bind((host, p))
-        except OSError:
-            return False
-        finally:
-            s.close()
-    return True
+port_free = net.port_free
 
 
 def probe(p=None, timeout=0.15):
@@ -90,21 +71,16 @@ def probe(p=None, timeout=0.15):
     p = p or port()
     if port_free(p):
         return {"state": "down", "port": p}
-    conn = http.client.HTTPConnection("127.0.0.1", p, timeout=timeout)
     try:
-        conn.request("GET", "/api/health", headers={"Host": "127.0.0.1:%d" % p, "Accept": "application/json"})
-        r = conn.getresponse()
-        body = r.read(PROBE_BODY_MAX + 1)
+        status, body = net.local_get(p, "/api/health", timeout=timeout, max_body=PROBE_BODY_MAX + 1)
     except ConnectionRefusedError:
         return {"state": "down", "port": p}
     except OSError as e:  # timeouts, resets: something holds the port but does not answer like us
         return {"state": "foreign", "port": p, "detail": "%s: %s" % (e.__class__.__name__, e)}
     except Exception as e:  # noqa: BLE001 — garbage on the port
         return {"state": "foreign", "port": p, "detail": "%s: %s" % (e.__class__.__name__, e)}
-    finally:
-        conn.close()
-    if r.status != 200 or len(body) > PROBE_BODY_MAX:
-        return {"state": "foreign", "port": p, "detail": "HTTP %s" % r.status}
+    if status != 200 or len(body) > PROBE_BODY_MAX:
+        return {"state": "foreign", "port": p, "detail": "HTTP %s" % status}
     try:
         h = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -136,39 +112,22 @@ def serve_command(p, cfg=None):
 def spawn(p, cfg=None):
     """Start a detached, windowless server; never waits for it. Returns the Popen pid (or None)."""
     argv, extra = serve_command(p, cfg)
-    env = dict(os.environ)
-    env.update(extra)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    for k in common.INTERNAL_ENV:
-        env.pop(k, None)
+    extra = dict(extra, PYTHONDONTWRITEBYTECODE="1")
     cwd = common.home() if os.path.isdir(common.home()) else common.user_dir()
     if not os.path.isdir(cwd):
         cwd = None
-    logf = None
+    lp = None
     try:
-        common.ensure_dir(os.path.dirname(log_path()))
-        logf = open(log_path(), "w", encoding="utf-8")  # truncated on every start
-        logf.write("%s starting: %s\n" % (common.now_iso(), " ".join(argv)))
-        logf.flush()
+        common.write_text(log_path(), "%s starting: %s\n" % (common.now_iso(), " ".join(argv)))  # truncated on every start
+        lp = log_path()
     except OSError:
-        logf = None
-    kw = dict(cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=logf or subprocess.DEVNULL,
-              stderr=subprocess.STDOUT if logf else subprocess.DEVNULL, close_fds=True)
-    if os.name == "nt":
-        kw["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-    else:
-        kw["start_new_session"] = True
+        pass
     try:
-        proc = subprocess.Popen(argv, **kw)
-        _spawned.append(proc)  # detached and never waited on; kept so Popen.__del__ does not warn
-        return proc.pid
+        return commands.spawn(argv, cwd=cwd, env_extra=extra, log_path=lp, internal=False, cfg=cfg).pid
     except OSError as e:
-        if logf:
-            logf.write("spawn failed: %s\n" % e)
+        if lp:
+            common.append_line(lp, "spawn failed: %s" % e)
         return None
-    finally:
-        if logf:
-            logf.close()
 
 
 def _wait_state(p, want, timeout, probe_timeout=0.5):
@@ -191,22 +150,7 @@ def _token_for(p, pid):
 
 
 def _terminate(pid):
-    try:
-        if os.name == "nt":
-            import ctypes
-            k = ctypes.windll.kernel32
-            h = k.OpenProcess(0x0001, False, int(pid))  # PROCESS_TERMINATE
-            if not h:
-                return False
-            try:
-                return bool(k.TerminateProcess(h, 1))
-            finally:
-                k.CloseHandle(h)
-        import signal
-        os.kill(int(pid), signal.SIGTERM)
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    return commands.terminate(pid)
 
 
 def stop(p=None, timeout=1.5):
@@ -222,15 +166,11 @@ def stop(p=None, timeout=1.5):
     how = None
     tok = _token_for(p, pid)
     if tok:
-        conn = http.client.HTTPConnection("127.0.0.1", p, timeout=timeout)
         try:
-            conn.request("GET", "/api/shutdown?token=" + tok, headers={"Host": "127.0.0.1:%d" % p})
-            if conn.getresponse().status == 200:
+            if net.local_get(p, "/api/shutdown?token=" + tok, timeout=timeout)[0] == 200:
                 how = "shutdown"
         except OSError:
             pass
-        finally:
-            conn.close()
     if how and _wait_state(p, ("down",), 2.0)["state"] == "down":
         return {"stopped": True, "state": "down", "detail": "stopped pid %d" % pid}
     if pid != os.getpid() and _terminate(pid):
