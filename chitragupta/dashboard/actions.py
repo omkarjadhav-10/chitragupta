@@ -156,3 +156,16 @@ def calendar_mark(body):
     jiraworklog.append_inbox(line, repeat=True)
     record_action("calendar-mark", True, line)
     return 200, {"ok": True, "line": line}
+
+
+@action("search-rebuild", cap=256)
+def search_rebuild(body):
+    """Rebuild the search index from the data home (the same as /cg:search --rebuild); it is a cache in the data home."""
+    from .. import searchidx
+    try:
+        res = searchidx.rebuild()
+    except Exception as e:  # noqa: BLE001
+        record_action("search-rebuild", False, str(e)[:200])
+        return 502, {"error": "The index couldn't be rebuilt: %s" % (str(e)[:200] or e.__class__.__name__)}
+    record_action("search-rebuild", True)
+    return 200, {"ok": True, "stats": searchidx.stats(), "result": res if isinstance(res, dict) else None}

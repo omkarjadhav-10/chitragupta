@@ -68,5 +68,15 @@ class CalendarMark(td.Base):
             self.assertEqual(actions.calendar_mark(bad)[0], 400, bad)
 
 
+class SearchRebuild(td.Base):
+    def test_rebuild(self):
+        import os
+        from chitragupta.dashboard import actions
+        st, body = actions.search_rebuild({})
+        self.assertEqual(st, 200)
+        self.assertGreater(body["stats"]["docs"], 0)
+        self.assertTrue(os.path.isfile(common.wl("cache", "search.sqlite")))
+
+
 if __name__ == "__main__":
     unittest.main()

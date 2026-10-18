@@ -1,8 +1,8 @@
 // Health: capture, background runs, the daily push, Slack, MCP servers (the cached `claude mcp list` check and what the
 // last jobs saw), the scheduled task, safety violations and recent errors, with "Copy diagnostics".
-import { useEffect } from '/vendor/hooks.module.js';
+import { useEffect, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtTs, fmtDay, ago, plural } from '../lib/core.js';
+import { useApi, fmtTs, fmtDay, ago, plural, runAction, toast } from '../lib/core.js';
 import { Icon, Status, CopyButton, Empty, Load, PageHead, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { McpStatusPanel } from '../lib/mcpstatus.js';
@@ -44,6 +44,23 @@ function diagnostics(s, setup) {
   return L.join('\n');
 }
 
+const VIEW = { disk: 'read from the file', memory: 'an up-to-date copy in memory' };
+function SearchCard({ st, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const rebuild = () => {
+    setBusy(true);
+    runAction('search-rebuild').then((r) => { toast('Search index rebuilt: ' + plural(r.stats.docs, 'entry', 'entries'), 'ok'); onDone(); },
+      (e) => toast(e.message, 'bad')).finally(() => setBusy(false));
+  };
+  const s = st || {};
+  return html`<section class="card" aria-labelledby="h-search"><h2 id="h-search">Search index${!st ? html`<${Status} kind="bad">Unavailable</${Status}>`
+    : s.built_at ? html`<${Status} kind="ok">${s.engine === 'fts5' ? 'Full-text' : 'Simple scan'}</${Status}>` : html`<${Status} kind="wait">Not built yet</${Status}>`}</h2>
+    <div class="big">${s.built_at && s.docs != null ? plural(s.docs, 'entry', 'entries') : '—'}</div>
+    ${s.built_at ? html`<p>Built ${fmtTs(s.built_at)}${s.build_ms != null ? ' in ' + s.build_ms + ' ms' : ''} from ${plural(s.sources || 0, 'file')}</p>` : html`<p>The background run builds it after its next pass.</p>`}
+    ${s.updated_at ? html`<p>Updated ${fmtTs(s.updated_at)}${s.update_ms != null ? ' in ' + s.update_ms + ' ms' : ''}${s.view ? ' · this page uses ' + (VIEW[s.view] || s.view) : ''}</p>` : null}
+    <p><button type="button" class="btn" disabled=${busy} onClick=${rebuild}><${Icon} name="reset" size=${15} />${busy ? 'Rebuilding…' : 'Rebuild index'}</button></p></section>`;
+}
+
 export function HealthPage() {
   const res = useApi('/api/status');
   const setup = useApi('/api/setup');
@@ -78,6 +95,7 @@ export function HealthPage() {
           big=${sf.enforced ? 'Read-only' : '—'}
           lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h; latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
             sf.database_read_only === false ? "The database MCP's read-only login isn't confirmed (mcp.database.read_only_login)." : '', sf.log ? 'Log: ' + sf.log : '']} />
+        <${SearchCard} st=${s.search} onDone=${res.reload} />
       </div>
 
       <section class="sec" aria-labelledby="h-mcp"><div class="sec-head"><h2 id="h-mcp">MCP servers</h2>
