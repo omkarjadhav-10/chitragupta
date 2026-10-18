@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- A Slack send that makes no call now says whether the Slack server connected and whether the send tool loaded.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added

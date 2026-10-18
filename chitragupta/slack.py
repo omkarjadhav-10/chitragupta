@@ -152,8 +152,11 @@ def send(cfg, text, health):
         calls = [c for c in res["calls"] if c["name"] == tool]
         tokens = {k: tokens[k] + v for k, v in (("in", res["input_tokens"]), ("out", res["output_tokens"]),
                                                  ("cost", round(res["cost"], 4)))}
-    if not calls:
-        return {"ok": False, "error": "no send call: %s" % (res.get("result") or res["stderr"])[:200], "tokens": tokens}
+    if not calls:  # say whether the server connected and the tool loaded: "not available" has two different causes
+        srv = ", ".join("%s %s" % (s.get("name"), s.get("status")) for s in res.get("mcp_servers") or []) or "none"
+        return {"ok": False, "error": "no send call: %s [servers: %s; send tool loaded: %s]" % (
+            (res.get("result") or res["stderr"])[:200], srv, "yes" if tool in (res.get("tools_loaded") or []) else "no"),
+            "tokens": tokens}
     c = calls[-1]
     sent_text = next((v for k, v in (c.get("input") or {}).items() if isinstance(v, str) and k in ("text", "message", "content")), "")
     mismatch = sent_text.strip() != text.strip()
