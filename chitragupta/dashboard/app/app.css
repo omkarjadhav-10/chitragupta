@@ -481,3 +481,9 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
 .setrow.stack { grid-template-columns: minmax(0, 1fr); }
 .setctl select { max-width: 100%; }
 .setrow.stack .setctl, .setctl .baseedit { justify-items: stretch; width: 100%; }
+
+/* Search filters */
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin: -8px 0 20px; }
+.filtrow { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
+.filt { display: grid; gap: 2px; }
+.filt input { min-width: 150px; }

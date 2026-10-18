@@ -311,7 +311,7 @@ def catalog_units(cat, linkmap, cards):
             name = t.get("name") or k
             c = cols.get(name.lower()) or bare.get(name.lower().rsplit(".", 1)[-1]) or t.get("key_columns") or []
             out.append(_unit("table", name, name, _j(t.get("db"), t.get("purpose"), _flat(c)), _first(t.get("tickets")),
-                             t.get("last_seen"), "#/knowledge?tab=db&table=" + urllib.parse.quote(name, safe=""),
+                             t.get("last_seen"), "#/db/" + urllib.parse.quote(str(name).lower(), safe=""),
                              kn("db-tables.md"), tickets=_strs(t.get("tickets"))))
     dbmap = kn("db-map.md")
     for rid, r in sorted((cat.get("db_relations") or {}).items()):
@@ -320,7 +320,7 @@ def catalog_units(cat, linkmap, cards):
             out.append(_unit("dblink", "%s -> %s" % (a, b), "%s → %s" % (a, b),
                              _j(r.get("kind"), str(r.get("evidence") or "")[:2000], _flat(r.get("tickets"))),
                              _first(r.get("tickets")), r.get("last_seen"),
-                             "#/knowledge?tab=db&table=" + urllib.parse.quote(_table_of(a), safe=""), dbmap,
+                             "#/db/" + urllib.parse.quote(_table_of(a).lower(), safe=""), dbmap,
                              tickets=_strs(r.get("tickets"))))
     res = (linkmap or {}).get("result") if isinstance(linkmap, dict) else None
     for ln in (res or {}).get("links") or [] if isinstance(res, dict) else []:
@@ -331,7 +331,7 @@ def catalog_units(cat, linkmap, cards):
                          _j(ln.get("connection"), ln.get("evidence"),
                             "%s of %s sampled values matched" % (ln.get("matched"), ln.get("sampled"))
                             if ln.get("sampled") else ""),
-                         "", linkmap.get("fetched_at"), "#/knowledge?tab=db&table=" + urllib.parse.quote(_table_of(a), safe=""),
+                         "", linkmap.get("fetched_at"), "#/db/" + urllib.parse.quote(_table_of(a).lower(), safe=""),
                          dbmap))
     for k, i in sorted((cat.get("integrations") or {}).items()):
         if isinstance(i, dict):

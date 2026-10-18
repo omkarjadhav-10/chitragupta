@@ -90,6 +90,14 @@ class DbMapData(td.Base):
         weak = {(l["from"], l["status"], l["ratio"]) for l in dbmap.table("billing.invoices")["links"]}
         self.assertEqual(weak, {("billing.invoices", "unverified", 0.1)})
 
+    def test_search_opens_the_db_map(self):
+        from chitragupta import searchidx
+        searchidx.reset() if hasattr(searchidx, "reset") else None
+        res = searchidx.search("orders", types=["table", "dblink"])
+        hrefs = {r["href"] for g in res["groups"] for r in g["results"]}
+        self.assertTrue(hrefs and all(h.startswith("#/db/") for h in hrefs), hrefs)
+        self.assertIn("#/db/shop.orders", hrefs)
+
     def test_empty_home(self):
         from chitragupta.dashboard import dbmap
         from chitragupta.safety import paths
