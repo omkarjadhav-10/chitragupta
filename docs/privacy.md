@@ -111,6 +111,7 @@ MCP jobs run only in the background tick or when you ask for them, never from a 
 - **No credentials in its files.** Literal header values from your Claude Code MCP config, such as an auth header, are written into the per-job file as `${CHITRAGUPTA_RT_…}` references. The values reach only that job's process environment. If a value is missing, for example because you're signed out, the job is skipped without a model call.
 
 The guard files are written only when an MCP job can actually run: Jira is enabled, or a database server is chosen and enabled.
+Once a day the Jira, database and Git-host entries of `allow.json` are refreshed from the code under the configured server names (`mcp.jira.server`, `mcp.database.server`, `mcp.git_host.*`): their read tools come only from the code (so new read tools reach an existing install and a renamed server isn't blocked), and write names you added to an entry stay on its deny list.
 
 Jira results are cached locally in `data\jira\`. They can include colleagues' names from comments and worklogs. That cache is never pushed.
 

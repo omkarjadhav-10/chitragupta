@@ -76,9 +76,9 @@ def server_def(name):
     return s
 
 
-def job_config(server, tools, job):
+def job_config(server, tools, job, cfg=None):
     s = server_def(server)
-    if server == "mcp-atlassian":  # the server itself enforces read-only and loads only this job's tools
+    if server == server_name(cfg or {}, "jira"):  # the server itself enforces read-only and loads only this job's tools
         env = {k: v for k, v in (s.get("env") or {}).items()
                if not (k.startswith("CONFLUENCE_") and all(t.startswith("jira_") for t in tools))}
         env["READ_ONLY_MODE"] = "true"
@@ -241,7 +241,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
         merged["mcpServers"] = servers_override
     else:
         for srv, tools in servers.items():
-            path, r = job_config(srv, tools, job + "-" + srv)
+            path, r = job_config(srv, tools, job + "-" + srv, cfg)
             merged["mcpServers"].update(common.read_json(path)["mcpServers"])
             refs |= r
     cfg_path = os.path.join(common.wl("cache", "mcp"), job + ".json")
@@ -305,33 +305,32 @@ def tool_results(res, tool_suffix):
 
 # --------------------------------------------------------------------------- allowlist
 
-ALLOW_DEFAULT = {
-    "max_rows": 20,
-    "servers": {
-        "mcp-atlassian": {
-            "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile"],
-            "write": ["jira_add_comment", "jira_add_issues_to_sprint", "jira_add_watcher", "jira_add_worklog",
-                      "jira_assign_issue", "jira_batch_create_issues", "jira_batch_create_versions",
-                      "jira_create_customer_request", "jira_create_issue", "jira_create_issue_link",
-                      "jira_create_remote_issue_link", "jira_create_sprint", "jira_create_version", "jira_delete_issue",
-                      "jira_download_attachments", "jira_edit_comment", "jira_link_to_epic", "jira_move_issue",
-                      "jira_move_issues_to_backlog", "jira_remove_issue_link", "jira_remove_watcher",
-                      "jira_transition_issue", "jira_update_issue", "jira_update_proforma_form_answers",
-                      "jira_update_sprint", "jira_update_version", "confluence_add_comment", "confluence_add_inline_comment",
-                      "confluence_add_label", "confluence_copy_page", "confluence_create_page",
-                      "confluence_create_page_from_template", "confluence_delete_attachment", "confluence_delete_page",
-                      "confluence_download_attachment", "confluence_download_content_attachments", "confluence_move_page",
-                      "confluence_reply_to_comment", "confluence_set_page_restrictions", "confluence_update_page",
-                      "confluence_update_page_section", "confluence_upload_attachment", "confluence_upload_attachments"],
-        },
-    },
+# Allowlist entry for the Jira server, filed under the configured name (mcp.jira.server, default mcp-atlassian) and
+# re-applied from here every day, so a renamed server works and new read tools reach existing installs.
+JIRA_ALLOW_DEFAULT = {
+    "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile"],
+    "write": ["jira_add_comment", "jira_add_issues_to_sprint", "jira_add_watcher", "jira_add_worklog",
+              "jira_assign_issue", "jira_batch_create_issues", "jira_batch_create_versions",
+              "jira_create_customer_request", "jira_create_issue", "jira_create_issue_link",
+              "jira_create_remote_issue_link", "jira_create_sprint", "jira_create_version", "jira_delete_issue",
+              "jira_download_attachments", "jira_edit_comment", "jira_link_to_epic", "jira_move_issue",
+              "jira_move_issues_to_backlog", "jira_remove_issue_link", "jira_remove_watcher",
+              "jira_transition_issue", "jira_update_issue", "jira_update_proforma_form_answers",
+              "jira_update_sprint", "jira_update_version", "confluence_add_comment", "confluence_add_inline_comment",
+              "confluence_add_label", "confluence_copy_page", "confluence_create_page",
+              "confluence_create_page_from_template", "confluence_delete_attachment", "confluence_delete_page",
+              "confluence_download_attachment", "confluence_download_content_attachments", "confluence_move_page",
+              "confluence_reply_to_comment", "confluence_set_page_restrictions", "confluence_update_page",
+              "confluence_update_page_section", "confluence_upload_attachment", "confluence_upload_attachments"],
 }
+
+ALLOW_DEFAULT = {"max_rows": 20, "servers": {"mcp-atlassian": JIRA_ALLOW_DEFAULT}}
 
 # Allowlist entry for the database MCP, filed under the configured server name (mcp.database.server).
 # The tool names are that server's tools.
 DATABASE_ALLOW_DEFAULT = {
     "read": ["whoami", "list_connections", "list_schemas", "list_tables", "describe_table", "run_query",
-             "get_artifact", "list_artifacts", "get_write_request"],
+             "get_artifact", "list_artifacts"],
     "write": ["create_artifact", "update_artifact", "archive_artifact", "create_write_request", "update_write_request"],
     "query_tools": ["run_query"],
     "connections": {"qa": "", "dev": ""},
@@ -388,7 +387,7 @@ def allow_default(cfg=None):
     """Default allowlist: the Jira server's tools, plus the database MCP's under its configured name (if any), plus
     each configured Git-host server with its provider's classified read tools (hostmcp)."""
     from . import hostmcp
-    allow = json.loads(json.dumps(ALLOW_DEFAULT))
+    allow = {"max_rows": ALLOW_DEFAULT["max_rows"], "servers": {server_name(cfg or {}, "jira"): jira_allow_entry()}}
     srv = server_name(cfg or {}, "database")
     if srv:
         allow["servers"].setdefault(srv, _database_allow_entry(cfg))
@@ -406,12 +405,24 @@ def configured(cfg):
         bool(hostmcp.configured(cfg))
 
 
+def jira_allow_entry(existing=None):
+    """allow.json entry for the Jira server: the code's reads (only), the known writes plus any listed before."""
+    e = dict(existing or {})
+    e["read"] = list(JIRA_ALLOW_DEFAULT["read"])
+    e["write"] = list(JIRA_ALLOW_DEFAULT["write"]) + sorted(set(e.get("write") or []) - set(JIRA_ALLOW_DEFAULT["write"]))
+    return e
+
+
+_RETIRED_READS = ("get_write_request",)  # never a read (the name floor denies it); dropped from older files
+
+
 def mcp_tool(server, tool):
     return "mcp__%s__%s" % (server, tool)
 
 
 def ensure_files(cfg):
-    """allow.json (kept, only created) and readonly-settings.json (regenerated)."""
+    """allow.json (created once; the Jira, database and Git-host entries are refreshed from the code every day) and
+    readonly-settings.json (regenerated)."""
     d = mcp_dir()
     common.ensure_dir(d)
     ap = os.path.join(d, "allow.json")
@@ -428,8 +439,11 @@ def ensure_files(cfg):
             if (db.get("connections") or {}).get(env):
                 allowed.add(db["connections"][env])
         entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
+        entry["read"] = [t for t in entry.get("read") or [] if t not in _RETIRED_READS]
         _apply_tool_names(entry, cfg)
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
+    jname = server_name(cfg, "jira")  # under the configured name, from the code: renames and new read tools apply
+    allow.setdefault("servers", {})[jname] = jira_allow_entry(allow["servers"].get(jname))
     from . import hostmcp
     for provider, name in hostmcp.configured(cfg).items():  # re-classified every time: only the provider's reads
         allow.setdefault("servers", {})[name] = hostmcp.allow_entry(provider, allow["servers"].get(name))
@@ -470,7 +484,8 @@ def jira_card(key, cfg, health):
     task = ("Call jira_get_issue once with issue_key=%s, fields=\"summary,issuetype,status,priority,parent,issuelinks,"
             "description,comment,customfield_10020,labels\", comment_limit=30. Then return the JSON. found=false only when the "
             "tool says the issue does not exist. summary: 2-3 plain sentences on the problem and where it stands." % key)
-    res = run("jira-card-" + key, {srv: ["jira_get_issue"]}, reads, _writes(srv), task, CARD_SCHEMA, cfg, health, max_turns=3)
+    res = run("jira-card-" + key, {srv: ["jira_get_issue"]}, reads, _writes(srv, cfg), task, CARD_SCHEMA, cfg, health,
+              max_turns=3)
     raw = tool_results(res, "jira_get_issue")
     out = res.get("out") or {}
     rec = {"key": key, "fetched_at": common.now_iso(), "card": out, "raw": raw[0][1] if raw else None,
@@ -501,7 +516,7 @@ def jira_evening(day, tickets, cfg, health):
             "that is expected, do not retry or read them. Then return {\"done\": true}." % (
                 json.dumps(jql), len(keys) + 1, ",".join(keys)))
     res = run("jira-evening", {srv: ["jira_search", "jira_batch_get_changelogs"]},
-              [mcp_tool(srv, "jira_search"), mcp_tool(srv, "jira_batch_get_changelogs")], _writes(srv), task,
+              [mcp_tool(srv, "jira_search"), mcp_tool(srv, "jira_batch_get_changelogs")], _writes(srv, cfg), task,
               DONE_SCHEMA, cfg, health, day=day, max_turns=4, timeout=400)
     search = [unwrap(v) for _, v in tool_results(res, "jira_search")]
     changes = [unwrap(v) for _, v in tool_results(res, "jira_batch_get_changelogs")]
