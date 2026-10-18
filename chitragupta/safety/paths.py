@@ -12,6 +12,7 @@ one of Chitragupta's own write roots:
 
 Rejected before anything else: empty paths, UNC and device paths (\\\\server, \\\\?\\, \\\\.\\), NUL, `..` components,
 alternate data streams (a ':' after the drive letter). Sources of copies are only read, never moved.
+A SQLite database file is opened only through sqlite_connect() (write roots checked; ATTACH refused).
 """
 import fnmatch
 import os
@@ -263,3 +264,41 @@ def chmod(path, mode, caller=""):
 def touch(path, caller=""):
     check(path, caller=caller)
     os.utime(path)
+
+
+# --------------------------------------------------------------------------- SQLite (the search index cache)
+
+_SQLITE_ATTACH = 24  # sqlite3.SQLITE_ATTACH (not exported by every Python build)
+
+
+def _no_attach(action, *_):
+    """Authorizer: ATTACH could create or change a database file anywhere, so it is refused on every connection
+    (VACUUM attaches internally, so VACUUM and VACUUM INTO are refused with it)."""
+    import sqlite3
+    return sqlite3.SQLITE_DENY if action == _SQLITE_ATTACH else sqlite3.SQLITE_OK
+
+
+def sqlite_connect(path, readonly=False, caller="", timeout=5.0):
+    """A SQLite connection to a database file (SQLite also writes `<file>-journal` next to it).
+
+    readonly  opened as `mode=ro`: nothing can be written, so the path only has to pass the syntax checks; a missing
+              file raises sqlite3.OperationalError instead of being created
+    else      the file must be under a write root (it is created when missing)
+
+    Every connection refuses ATTACH (and so VACUUM [INTO]), so a statement can't write a database file elsewhere. ":memory:" is
+    allowed outside this function; nothing else is (tests/test_safety_static.py)."""
+    import sqlite3
+    import urllib.parse
+    raw = os.fspath(path) if path is not None else ""
+    if readonly:
+        bad = _syntax(raw)
+        if bad:
+            block(LAYER, bad, "read %s" % raw, "read", caller)
+        uri = "file:%s?mode=ro" % urllib.parse.quote(os.path.abspath(raw).replace("\\", "/"), safe="/:")
+        con = sqlite3.connect(uri, uri=True, timeout=timeout, check_same_thread=False)
+    else:
+        check(raw, caller=caller)
+        makedirs(os.path.dirname(raw), caller)
+        con = sqlite3.connect(raw, timeout=timeout, check_same_thread=False)
+    con.set_authorizer(_no_attach)
+    return con

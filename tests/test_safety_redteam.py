@@ -324,6 +324,38 @@ class PathGuardTests(SafetyCase):
         p = os.path.join(common.home().upper(), "inbox.md")
         self.assertTrue(paths.write_text(p, "x\n"))
 
+    def test_sqlite_files_only_in_the_roots(self):
+        import sqlite3
+        from chitragupta import common
+        from chitragupta.safety import paths
+        outside = os.path.join(self.repo, "x.sqlite")
+        for p in (outside, os.path.join(common.home(), "..", "x.sqlite"), "\\\\server\\share\\x.sqlite", ""):
+            with self.subTest(p=p):
+                self.assertBlocked(lambda: paths.sqlite_connect(p), "path")
+        self.assertFalse(os.path.exists(outside))
+        self.assertBlocked(lambda: paths.sqlite_connect("\\\\server\\share\\x.sqlite", readonly=True), "path")
+        mine = common.wl("cache", "t.sqlite")
+        con = paths.sqlite_connect(mine)
+        try:
+            con.execute("CREATE TABLE t(x)")
+            con.commit()
+            with self.assertRaises(sqlite3.DatabaseError):  # ATTACH would create a database file anywhere
+                con.execute("ATTACH DATABASE ? AS o", (outside,))
+            with self.assertRaises(sqlite3.DatabaseError):
+                con.execute("VACUUM INTO ?", (outside,))
+        finally:
+            con.close()
+        self.assertFalse(os.path.exists(outside))
+        ro = paths.sqlite_connect(mine, readonly=True)
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                ro.execute("INSERT INTO t VALUES (1)")
+        finally:
+            ro.close()
+        with self.assertRaises(sqlite3.OperationalError):  # read-only never creates the file
+            paths.sqlite_connect(outside, readonly=True).execute("SELECT 1")
+        self.assertFalse(os.path.exists(outside))
+
     def test_copies_read_from_outside_and_never_move(self):
         from chitragupta import common
         from chitragupta.safety import paths

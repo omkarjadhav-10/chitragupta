@@ -50,9 +50,17 @@ def _write_mode(call):
     return True  # a computed mode counts as a write
 
 
-def violations(path):
-    with open(path, encoding="utf-8") as f:
-        tree = ast.parse(f.read(), path)
+def _memory_db(call):
+    """sqlite3.connect(":memory:") touches no file; any other database goes through safety.paths.sqlite_connect."""
+    a = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "database"), None)
+    return isinstance(a, ast.Constant) and a.value == ":memory:" and not any(k.arg == "uri" for k in call.keywords)
+
+
+def violations(path, source=None):
+    if source is None:
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+    tree = ast.parse(source, path)
     out = []
     listener = os.path.normcase(path) == os.path.normcase(LISTENER)
     uses_pathlib = any(isinstance(n, (ast.Import, ast.ImportFrom)) and
@@ -61,6 +69,8 @@ def violations(path):
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            if isinstance(node, ast.ImportFrom) and node.module == "sqlite3":
+                out += ["%d: from sqlite3 import %s" % (node.lineno, a.name) for a in node.names if a.name == "connect"]
             if isinstance(node, ast.ImportFrom) and node.module in ("os", "shutil"):
                 out += ["%d: from %s import %s" % (node.lineno, node.module, a.name) for a in node.names
                         if (node.module, a.name) in BANNED_CALLS]
@@ -78,6 +88,8 @@ def violations(path):
                 recv = f.value.id if isinstance(f.value, ast.Name) else None
                 if (recv, f.attr) in BANNED_CALLS or any(recv == m and f.attr.startswith(p) for m, p in BANNED_PREFIX):
                     out.append("%d: %s.%s()" % (node.lineno, recv, f.attr))
+                if recv == "sqlite3" and f.attr == "connect" and not _memory_db(node):
+                    out.append("%d: sqlite3.connect() of a file (use safety.paths.sqlite_connect)" % node.lineno)
                 if recv == "zipfile" and f.attr in ("ZipFile", "PyZipFile") and _write_mode(node):
                     out.append("%d: zipfile.%s() for writing" % (node.lineno, f.attr))
                 if recv == "io" and f.attr == "open" and _write_mode(node):
@@ -98,6 +110,14 @@ class StaticSafetyTest(unittest.TestCase):
                 bad[os.path.relpath(p, ROOT)] = v
         self.assertEqual(bad, {}, "side effects outside chitragupta/safety/:\n" +
                          "\n".join("%s\n  %s" % (k, "\n  ".join(v)) for k, v in bad.items()))
+
+    def test_sqlite_files_only_through_the_guard(self):
+        bad = violations("x.py", "import sqlite3\nsqlite3.connect(p)\nsqlite3.connect('C:/x.db')\n"
+                                 "sqlite3.connect(database=p)\nsqlite3.connect(':memory:', uri=True)\n"
+                                 "from sqlite3 import connect\n")
+        self.assertEqual(len(bad), 5, bad)
+        self.assertEqual(violations("x.py", "import sqlite3\nsqlite3.connect(':memory:')\n"
+                                            "sqlite3.connect(database=':memory:', check_same_thread=False)\n"), [])
 
     def test_builder_never_bypasses(self):
         from chitragupta.safety import claude as builder
