@@ -144,11 +144,14 @@ class CliTest(Isolated, unittest.TestCase):
             self.assertEqual(rc, 2, argv)
             self.assertIn("Not added", err)
         self.assertEqual(self.inbox(), "")
-        run_cli("log", "leave:", "2026-10-20")
-        rc, out, _ = run_cli("log", "leave:", "2026-10-20")
+        t = ("time:", "2026-10-20", "1h", "ABC-1001", "Late call.")
+        run_cli("log", *t)
+        rc, out, _ = run_cli("log", *t)  # a data line: a repeat is not added
         self.assertEqual(rc, 0)
         self.assertIn("Already in inbox.md", out)
-        self.assertEqual(self.inbox(), "leave: 2026-10-20\n")
+        run_cli("log", "leave:", "2026-10-20")
+        run_cli("log", "leave:", "2026-10-20")  # a calendar mark counts every copy (mark, clear, mark again)
+        self.assertEqual(self.inbox(), "time: 2026-10-20 1h ABC-1001 Late call.\nleave: 2026-10-20\nleave: 2026-10-20\n")
 
     def test_log_keeps_existing_inbox_and_adds_newline(self):
         wr(os.path.join(self.home, "inbox.md"), "# Inbox\nABC-1001: remember the proxy limit")
