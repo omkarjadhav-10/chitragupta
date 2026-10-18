@@ -24,7 +24,7 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
 6. **Docs move with features.** Any user-visible change updates `docs/` and `CHANGELOG.md` in the same commit.
 7. **Versions agree.** `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `chitragupta/__init__.py` carry the same version; change it only with `scripts/bump_version.py`.
 8. **Data format is stable.** The data home layout and file formats are shared with existing installs. Any change needs a forward-only migration that backs up first.
-9. **Dashboard is read-only and local**: 127.0.0.1 only, Host header checked, GET/HEAD only, no CORS, no external requests.
+9. **Dashboard is local and reads by default**: 127.0.0.1 only, Host header checked, no CORS, no external requests. Reads are GET/HEAD; the only writes are the allowlisted routes in `chitragupta/dashboard/writes.py` (Origin and per-start token checked, JSON only, size and rate limits, every write recorded). Settings change only through `configstore`; see "The dashboard's writes" in `docs/safety.md`.
 10. **Never write to a user's real data home in tests or dev.** Tests use temp dirs via `CHITRAGUPTA_HOME`; dev uses `.dev-home/`.
 
 ## Safety rules — Chitragupta only reads
@@ -60,6 +60,7 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
 - commit and push of daily files in the data-home repo
 - the Slack DM to my own ID
 - `fetch` of remote-tracking refs in work repos
+- the dashboard's allowlisted writes: settings through the `/cg:setup` write path, and the actions listed in `docs/safety.md` (none of them writes outside Chitragupta's own folders)
 
 Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.
 

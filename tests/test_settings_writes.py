@@ -246,5 +246,19 @@ class WriteProtectionTests(td.Base):
             other.server_close()
 
 
+class ActionsDocumented(unittest.TestCase):
+    def test_every_action_is_in_the_safety_doc(self):
+        """The allowlist in docs/safety.md is the user's view of what the dashboard may do: it lists every action."""
+        import os
+        import re
+        from chitragupta.dashboard import actions, writes  # noqa: F401 — importing actions registers them
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "docs", "safety.md"), encoding="utf-8") as f:
+            doc = f.read()
+        table = doc[doc.index("## The dashboard's writes"):]
+        listed = set(re.findall(r"`([a-z]+(?:-[a-z]+)+)`", table))
+        self.assertEqual(set(writes.ACTIONS) - listed, set())
+
+
 if __name__ == "__main__":
     unittest.main()

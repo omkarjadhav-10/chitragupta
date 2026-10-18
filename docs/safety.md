@@ -40,6 +40,26 @@ Two layers make this hold:
 - commit and push of daily files in the data-home repo
 - the Slack DM to my own ID
 - `fetch` of remote-tracking refs in work repos
+- the dashboard's allowlisted writes: settings through the `/cg:setup` write path, and the actions below (none of them writes outside Chitragupta's own folders)
+
+## The dashboard's writes
+
+The dashboard reads with GET and HEAD. It writes only through a short allowlist of routes (`chitragupta/dashboard/writes.py`), each answered only for a request from the dashboard page itself: Host and Origin must be this server, the request must carry the token the server minted when it started, the body must be JSON within the route's size limit, and at most 30 writes a minute are accepted. Every write is recorded in `settings-history.jsonl`.
+
+- **Settings.** The dashboard may change my configuration only through the same validated write path as `/cg:setup`, only for settings marked editable, only on a request from my own browser carrying the per-start token, and every change is recorded with its old and new value. It can never change the safety rules, MCP tool lists, secrets, the data folder or the GitHub repo.
+- **Live MCP status.** `claude mcp list` may also be run when I press Check now or open Health (at most every 5 minutes).
+- **Actions.** Dashboard actions are an allowlist; nothing else is accepted:
+
+| Action | What it does | Paid call |
+|---|---|---|
+| `mcp-check` | `claude mcp list`, the same check `/cg:doctor` runs | no |
+| `worklog-refresh` | Refresh from Jira: one read-only Jira job for the day | one MCP job, within the daily budget |
+| `worklog-exact` | Preview exactly: one batched condensing call for the lines still marked *condensed at 20:00* | one model call, within the daily budget |
+| `worklog-resend` | Send again: adds one `resend:` line to `inbox.md` | no |
+| `calendar-mark` | Mark a day as leave, half day, holiday or extra workday, or remove its mark: one line in `inbox.md` | no |
+| `search-rebuild` | Rebuilds the search index (a cache in the data home) | no |
+| `relations-detect` | Proposes base relations from a watched repo's local refs (read-only git, no fetch); saves nothing | no |
+| `capture-pause`, `capture-resume` | Creates or removes the `PAUSED` file in the data home | no |
 
 Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.
 
