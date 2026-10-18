@@ -90,7 +90,7 @@ If Slack is connected, it receives only the evening Jira-worklog message, sent a
 
 Every model call is a headless `claude -p`:
 
-- **Isolated.** It runs in an empty sandbox folder (`.worklog\sandbox`) with `disableAllHooks`, no tools (`--tools ""`), no MCP servers (`--strict-mcp-config`), project settings only, no session persistence and slash commands off. The internal-process marker is set.
+- **Isolated.** It runs in an empty sandbox folder (`.worklog\sandbox`) with no tools (`--tools ""`), nothing pre-approved (`--allowedTools ""`), `--permission-mode dontAsk`, no MCP servers (`--strict-mcp-config`), project settings only, no session persistence, slash commands off, and the fail-closed safety guard on every tool call. The internal-process marker is set. See [safety.md](safety.md).
 - **Redacted input.** It sends a digest of the session that has already been redacted, up to about 120,000 characters, along with the packaged prompt.
 - **Logged.** It records the cost in `health.json`.
 - **Kept out of the hooks.** Hooks never call a model; only the background tick and the commands you run do.
@@ -101,13 +101,13 @@ MCP jobs run only in the background tick or when you ask for them, never from a 
 
 - **Only its own server.** `--strict-mcp-config --mcp-config <a file with only that server>`.
 - **Only read tools.** `--allowedTools` lists the job's read tools, and `--disallowedTools` lists the server's write tools.
-- **A guard hook.** `--settings .worklog\mcp\readonly-settings.json` installs a PreToolUse guard (the `mcpguard` module, run through the stable launcher). The guard denies:
-  - any tool that isn't on the read allowlist (`.worklog\mcp\allow.json`)
-  - any statement that isn't a single read. `SELECT`, `WITH … SELECT`, `EXPLAIN`, `SHOW`, `DESCRIBE`, catalog reads and Mongo `find`/`count`/`aggregate` (without `$out`/`$merge`) are allowed. `SELECT INTO`, locking hints, other procedure calls and multiple statements are denied.
+- **A guard hook.** The inline `--settings` install the safety guard as a PreToolUse hook with `"onFailure": "block"` (profile `mcp`; `.worklog\mcp\readonly-settings.json` keeps a copy for inspection). If the guard errors or times out, the call is denied. The guard denies:
+  - any tool that isn't on the read allowlist (`.worklog\mcp\allow.json`), and any tool whose name says it writes, whatever the allowlist says
+  - any statement that isn't a single read. `SELECT`, `WITH … SELECT`, `EXPLAIN`, `SHOW`, `DESCRIBE`, catalog reads and Mongo `find`/`count`/`aggregate` (without `$out`/`$merge`) are allowed. `SELECT INTO`, `EXPLAIN ANALYZE`, side-effect functions, locking hints, other procedure calls, multiple statements and look-alike Unicode tricks are denied.
   - row reads without a `TOP`/`LIMIT`/`FETCH FIRST` within the row limit
   - connections that aren't allowed
 
-  Every decision is logged in `logs\mcp-guard.log`.
+  Every block is logged in `%USERPROFILE%\.chitragupta\logs\security.log` and shown on Health.
 - **No credentials in its files.** Literal header values from your Claude Code MCP config, such as an auth header, are written into the per-job file as `${CHITRAGUPTA_RT_…}` references. The values reach only that job's process environment. If a value is missing, for example because you're signed out, the job is skipped without a model call.
 
 The guard files are written only when an MCP job can actually run: Jira is enabled, or a database server is chosen and enabled.

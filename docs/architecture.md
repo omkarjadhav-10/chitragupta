@@ -68,9 +68,10 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 
 ### 3. Model and MCP calls
 
-- **Model calls** run as `claude -p` from `.worklog/sandbox` with `disableAllHooks`, no tools, no MCP servers, no session persistence, and `CHITRAGUPTA_INTERNAL=1` set. The internal marker stops the hooks from recording the engine itself. Prompts ship in `chitragupta/prompts/`; a copy in `<home>/.worklog/prompts/` overrides one.
-- **MCP jobs** each get one server, its read tools only, its write tools disallowed, and a PreToolUse guard (`mcpguard`) that allows only single read statements on allowed connections. See [privacy.md](privacy.md#mcp-jobs).
-- **Slack** sends run from `.worklog/slack-sender/`, where the Slack server is registered in local scope only.
+- **Model calls** run as `claude -p` from `.worklog/sandbox`, built by one function (`safety/claude.py`): no tools, nothing pre-approved, `--permission-mode dontAsk`, no MCP servers, a fail-closed PreToolUse guard, no session persistence, and `CHITRAGUPTA_INTERNAL=1` set. The internal marker stops the hooks from recording the engine itself. Prompts ship in `chitragupta/prompts/`; a copy in `<home>/.worklog/prompts/` overrides one.
+- **MCP jobs** each get one server, its read tools only, its write tools disallowed, and the fail-closed safety guard (profile `mcp`) that allows only single read statements on allowed connections. See [privacy.md](privacy.md#mcp-jobs) and [safety.md](safety.md).
+- **Slack** sends run from `.worklog/slack-sender/`, where the Slack server is registered in local scope only; the guard (profile `slack-send`) lets only the send tool reach your own user ID.
+- **Every side effect** (processes, file writes, network) goes through `chitragupta/safety/`, which checks it against an allowlist and logs every block to `%USERPROFILE%\.chitragupta\logs\security.log`. See [safety.md](safety.md).
 
 ### 4. Dashboard
 
@@ -127,7 +128,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
     config.json  state.json  health.json  README.md
     raw\<day>\<session>.jsonl  raw\<day>\time\<session>.jsonl
     cache\  logs\  locks\  backups\  sandbox\  prompts\ (optional overrides)
-    mcp\allow.json  mcp\readonly-settings.json  mcp\slack.json
+    mcp\allow.json  mcp\readonly-settings.json (for inspection)  mcp\slack.json  tmp\ (replay request bodies, 2 days)
     slack-sender\                            Slack's local-scope folder
     PAUSED                                   present while capture is paused
 ```

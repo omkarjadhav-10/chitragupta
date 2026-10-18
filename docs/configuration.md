@@ -163,6 +163,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 | `mcp.database.label` | string | `"database MCP"` | How rendered headings name it, for example "Schema facts (database MCP, …)". |
 | `mcp.database.connections` | object env → connection | `{}` | Default connection per environment, for example `{"qa": "qa-main"}`. |
 | `mcp.database.allowed` | object env → list | `{}` | More connections the guard allows per environment, for example `{"qa": ["qa-main", "qa-audit"]}`. Connections whose name contains `prod` are always dropped. |
+| `mcp.database.read_only_login` | bool | `false` | Set to `true` once the database MCP connects with a read-only login. Until then Health and `/cg:doctor` show a standing warning. It changes nothing else: every statement still goes through the query guard. |
 | `mcp.database.schema_map` | object schema → connection | `{}` | Which connection holds a schema, for example `{"shop": "qa-main"}`. When this is set, tables in unmapped schemas are skipped instead of guessed. |
 | `mcp.database.types` | object connection → dialect | `{}` | `postgres`, `mssql`, `mongodb` or `elasticsearch`. If a connection isn't listed, the dialect is guessed from its name, falling back to `postgres`. |
 | `mcp.database.entity_prefixes` | list | `[]` | Prefixes stripped when an id column names its table, so that with `["shop"]` the column `shopOrderId` points to `orders`. |
@@ -200,7 +201,13 @@ The tool mapped to `query` is SQL-checked by the guard. The guard reads the stat
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `storage.push_paths` | list | `["daily/","README.md",".gitignore",".gitattributes"]` | What may be committed and pushed. The pre-commit hook refuses everything else. Widening this pushes more of your data, so think twice. |
-| `storage.local_backup_dir` | path | `""` | If set, a zip of the data home is written there each night after 21:00 (`worklog-kb-<day>.zip`, last 7 kept). |
+| `storage.local_backup_dir` | path | `""` | If set, a zip of the data home is written there each night after 21:00 (`worklog-kb-<day>.zip`, last 7 kept). Only files with that name may be written there. |
+
+## `git`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `git.allow_fetch` | bool | `true` | Branch tracking may `git fetch` remote-tracking refs (`refs/remotes/<remote>/*` only, `--no-tags`, never while a lock exists) in watched repos, for precise merge status. `false` = no writes inside your repos' `.git` folders at all. See [safety.md](safety.md#fetch). |
 
 ## `dbflow`
 
@@ -255,9 +262,8 @@ Development and test only:
 | `CHITRAGUPTA_STARTUP_DIR` | Startup folder used for the task fallback. |
 | `CHITRAGUPTA_TRANSCRIPTS_DIR` | Folder of Claude Code transcripts for the safety-net scan (default `<claude config>\projects`). |
 | `CHITRAGUPTA_LLM_CACHE` | Folder that caches model answers by input, so the same input gets the same answer. |
-| `CHITRAGUPTA_MCP_OVERRIDE` | JSON file of stand-in MCP servers for jobs (tests). |
+| `CHITRAGUPTA_MCP_OVERRIDE` | JSON file of stand-in MCP servers for jobs (tests). Every call still goes through the full safety guard; nothing turns the guard off. |
 | `CHITRAGUPTA_MCP_MANUAL` | `1` counts MCP jobs as manual runs, outside the daily budget. Set by the CLI. |
-| `CHITRAGUPTA_GUARD_ALLOW` | Alternative `allow.json` for the MCP guard. |
 | `CHITRAGUPTA_PRIVACY_SIMULATE` | `public` / `private` / `unknown`: skips the GitHub visibility check. |
 | `CHITRAGUPTA_SLACK_FAIL` | Forces Slack sends to fail. |
 | `CHITRAGUPTA_HOOK_TIMING` | Logs each hook's duration to `logs\hook-timing.log`. |

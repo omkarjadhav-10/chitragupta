@@ -55,7 +55,7 @@ No events are recorded and nothing is written. Run **`/cg:setup`**.
 - **The `Chitragupta` scheduled task.** If Task Scheduler refuses it, setup falls back to a Startup-folder launcher.
 - **The `chitragupta` recall skill.** It goes in `~/.claude/skills/chitragupta/`.
 - **The CLAUDE.md block.** It is added to `~/.claude/CLAUDE.md` between `<!-- chitragupta:start -->` and `<!-- chitragupta:end -->`. The file is backed up first.
-- **A doctor run** at the end.
+- **A doctor run** at the end. It includes **Safety: enforced**: every process, file write and tool call goes through the safety layer ([safety.md](safety.md)). It needs Claude Code 2.1.295 or newer for fail-closed hooks.
 
 Setup is idempotent: re-running it repairs or upgrades an install and never changes recorded data. When it finishes, start a new session so the recall skill and the CLAUDE.md block load, then try `/cg:today`.
 
@@ -86,8 +86,8 @@ Slack is used for one thing: the 20:00 Jira-worklog message, sent to you as a di
 **Background jobs only.** Setup never adds Slack to your global Claude Code config, because that would load Slack's tools into every session. Instead `setup add-slack`:
 
 1. Creates `<home>\.worklog\slack-sender\` and runs `git init` in it. That gives Claude Code a project folder to attach the server to.
-2. Adds Slack's hosted MCP server (`https://mcp.slack.com/mcp`) in **local scope of that folder only**. Slack's hosted MCP has no dynamic client registration, so setup passes the client id Slack publishes for Claude, with callback port **3118**. You can override both with `jira_worklog.slack.server.client_id` and `callback_port`.
-3. Prints the **one-time sign-in**: open a terminal in `<home>\.worklog\slack-sender`, run `claude`, type `/mcp`, choose `slack`, select Authenticate, and finish the sign-in in the browser.
+2. Prints the one command that adds Slack's hosted MCP server (`https://mcp.slack.com/mcp`) in **local scope of that folder only**: `claude mcp add --transport http --scope local --client-id … --callback-port 3118 slack https://mcp.slack.com/mcp`. **You run it yourself**, in a terminal in that folder: Chitragupta never writes Claude Code's settings (`~/.claude.json`). Slack's hosted MCP has no dynamic client registration, so the command carries the client id Slack publishes for Claude, with callback port **3118**. You can override both with `jira_worklog.slack.server.client_id` and `callback_port`.
+3. Prints the **one-time sign-in**: in the same terminal in `<home>\.worklog\slack-sender`, run `claude`, type `/mcp`, choose `slack`, select Authenticate, and finish the sign-in in the browser.
 
 Then run `/cg:setup` again, or this command:
 
@@ -95,7 +95,7 @@ Then run `/cg:setup` again, or this command:
 py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" setup slack-user [you@acme.test]
 ```
 
-It looks up your Slack user ID and the send tool, and stores both in config. Sends then reuse the token from that sign-in. Each send is one short `claude -p` call that is allowed to use only the send tool.
+It looks up your Slack user ID and the send tool, and stores both in config. Sends then reuse the token from that sign-in. Each send is one short `claude -p` call that is allowed to use only the send tool, and the safety guard checks the call itself: only to your own user ID, plain text, no threads, files or scheduling.
 
 To check it end to end, send yourself one short test DM (nothing else changes):
 
@@ -161,8 +161,8 @@ All of them run through the stable launcher, `py -3 "$env:USERPROFILE\.chitragup
 | `setup check [--json] [--no-mcp]` | Requirements, data home, detections and MCP status, without changing anything |
 | `setup apply --home DIR [--prefixes A,B] [--repos P,…] [--bruno P,…] [--github-remote URL] [--no-task]` | What `/cg:setup` runs |
 | `setup mcp-status [--json] [--cached]` | Slack / Jira / database MCP status |
-| `setup add-slack [--client-id ID] [--callback-port N]` | Add Slack for background jobs (see above) |
-| `doctor [--json] [--fast]` | Health checks; exits 1 if any check fails; never repairs |
+| `setup add-slack [--client-id ID] [--callback-port N]` | Prepare Slack for background jobs and print the `claude mcp add` command to run (see above) |
+| `doctor [--json] [--fast]` | Health checks, including **Safety: enforced** and the blocks in `security.log` ([safety.md](safety.md)); exits 1 if any check fails; never repairs |
 | `runtime status` / `runtime install [--force]` | Inspect or refresh the stable runtime |
 | `install --status` | Scheduled-task status |
 | `uninstall` | Remove the task, runtime, recall skill, CLAUDE.md block and home pointer; keeps data |

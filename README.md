@@ -67,13 +67,19 @@ Run `/cg:dashboard`, use the **Chitragupta** shortcut setup adds to the Start me
 
 <kbd>Ctrl</kbd> <kbd>K</kbd> opens a command palette from anywhere and <kbd>?</kbd> lists the keyboard shortcuts. The page updates live, works offline, is checked against WCAG 2.2 AA in both themes, and listens only on `127.0.0.1`. See [docs/dashboard.md](docs/dashboard.md).
 
+## What Chitragupta will never do
+
+Chitragupta only reads your work. It never edits a codebase, never runs a git command that changes history or branches in a work repo, never creates, approves, comments on, merges or closes a PR, never changes a branch, pipeline, Azure resource or Jira issue, and never writes to a database (one `SELECT` at a time, on QA). Its one Slack action is a DM to you. It writes only to its own folders, never to Claude Code's settings.
+
+This is enforced in code, not just promised: one safety layer checks every process, file write, query and tool call against an allowlist, fails closed, logs every block to `security.log` (shown on Health and by `/cg:doctor`), and has no off switch. Your own sessions are never affected outside a `/cg:` command. See [docs/safety.md](docs/safety.md).
+
 ## Privacy
 
 - **Local by default.** Raw events, ticket notes, the knowledge base and the config never leave the machine.
 - **What can be pushed.** If you set a GitHub remote, only `daily/**`, `README.md`, `.gitignore` and `.gitattributes` are pushed. They go only after a check confirms the repository is private, and only after a public redaction pass.
 - **Masking.** Secrets and personal data are masked when captured, before any model call and before any commit.
-- **Model calls.** These run as `claude -p` with hooks disabled. MCP jobs are read-only and go through a guard that allows only `SELECT`-style reads on QA connections.
-- **Your work repos are only read.** Branch tracking runs read-only git through one allowlisted wrapper; its only network calls are `git fetch` into remote-tracking refs (never pruning) and your Git host's own CLI (`gh`, `glab`, `az`) with its own sign-in.
+- **Model calls.** These run as `claude -p` with no built-in tools, nothing pre-approved but the job's read tools, and a fail-closed guard on every tool call. MCP jobs are read-only: only `SELECT`-style reads on QA connections.
+- **Your work repos are only read.** Branch tracking runs hardened read-only git through the safety layer; its only network calls are `git fetch` into remote-tracking refs (never pruning) and your Git host's own CLI (`gh`, `glab`, `az`) with its own sign-in.
 - **Known limit.** Names written in free text are not reliably masked. Review the daily notes before you push them anywhere shared.
 
 Details are in [docs/privacy.md](docs/privacy.md).
@@ -92,7 +98,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

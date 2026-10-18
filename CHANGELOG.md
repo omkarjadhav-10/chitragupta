@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
+### Security
+- **Chitragupta only reads, enforced in code** ([docs/safety.md](docs/safety.md)). A new package, `chitragupta/safety/`, is the only code that starts a process, changes a file or opens a network connection, and nothing turns it off:
+  - **Command guard:** every process goes through `run(argv, purpose)` with an allowlist per purpose. Work-repo git is read-only (rule 2) and hardened so a repo's own config can't make a read run a program (pager, external diff, textconv, fsmonitor, `ext::`, hooks). `fetch` updates only `refs/remotes/<remote>/*`, writes no `FETCH_HEAD`, and is skipped while git holds a lock. `gh` / `glab` do list and view only, `api` with GET only. `az` gets a five-command allowlist with `--output json`. The data-home sync never forces a push and stages only the push paths.
+  - **Path guard:** writes only under Chitragupta's own roots (the full list is in the docs). `..`, UNC and device paths, alternate data streams and junctions out of a root are refused.
+  - **Query guard:** one classifier for every statement, with Unicode look-alikes and zero-width tricks normalised first. Newly refused: `EXPLAIN ANALYZE`, `pg_try_advisory_*`, `lo_*` and more side-effect functions.
+  - **MCP tool guard:** read tools from `allow.json` only, plus a floor the allowlist can't lift (a tool named like a write is never a read). Slack can send only to your own user ID: no threads, drafts, files or scheduling, at most 8,000 characters.
+  - **Internal calls:** one builder for every `claude -p`. No built-in tools, an explicit `--allowedTools`, `--permission-mode dontAsk --permission-prompts none`, only the job's MCP server, the sandbox folder, and a PreToolUse guard with `onFailure: block`, so a guard error denies the call. Needs Claude Code 2.1.295 or newer.
+  - **`/cg:` commands:** each skill registers a fail-closed session guard. While a `/cg:` command runs, only read tools and Chitragupta's own helper pass. Outside one, your own work is never blocked.
+  - **Violations:** every block goes to `%USERPROFILE%\.chitragupta\logs\security.log`. It is counted on Health and reported by `/cg:doctor`, which now shows **Safety: enforced**.
+- The MCP guard used to fail open: a crash let the tool call through. It now denies.
+- The Slack sender had no tool guard (hooks were off). It now has one, with the recipient checked in code.
+
 ### Added
 - **Dashboard 2.0, read side** ([docs/dashboard.md](docs/dashboard.md)): a new look and layout (navigation, a side list per page, the page), live updates, and these pages:
   - **Today**: time against the day's target, the day lane by lane per ticket with commits, delivery alerts across all tickets, tonight's Jira entries with a copy button per field; **past days** at `#/day/<date>`
@@ -19,13 +33,22 @@ All notable changes to this project are documented here. The format follows [Kee
 - `scripts/ui/`: browser checks on a synthetic home (axe, keyboard, palette, layouts, no outgoing requests).
 
 ### Changed
+- `setup add-slack` prints the `claude mcp add --scope local …` command for you to run. Chitragupta never writes Claude Code's settings (`~/.claude.json`).
+- The recall skill no longer runs `replay.sh` itself (it sends real requests); it shows you the command.
+- `replay.sh` and `bruenv` keep their temp files in `<home>/.worklog/tmp` (pruned after two days) instead of the system temp folder.
+- New settings: `git.allow_fetch` (default `true`), `mcp.database.read_only_login` (Health warns until it's `true`).
+- `mermaid_check` no longer runs `mmdc`.
 - The page is now ES modules under `chitragupta/dashboard/app/` with a vendored Preact (MIT), and a stricter Content-Security-Policy: no inline script at all. `page.html` is gone.
 - A ticket export is the new page with its scripts and styles inlined; it keeps the tabs, opens offline and carries its own CSP that blocks every request.
 - The dashboard still writes nothing: settings and actions come in the next update.
 
+### Removed
+- `CHITRAGUPTA_GUARD_ALLOW` (it pointed the guard at another allowlist).
+
 ### Fixed
 - Health read an MCP status field nothing wrote; it now reads the cached `claude mcp list` result.
 - Ticket page: the DB-flow tables can be scrolled from the keyboard, and dark mode meets contrast everywhere.
+
 ## [0.2.1] - 2026-10-18
 
 ### Fixed

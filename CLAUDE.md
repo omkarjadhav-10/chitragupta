@@ -27,9 +27,47 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
 9. **Dashboard is read-only and local**: 127.0.0.1 only, Host header checked, GET/HEAD only, no CORS, no external requests.
 10. **Never write to a user's real data home in tests or dev.** Tests use temp dirs via `CHITRAGUPTA_HOME`; dev uses `.dev-home/`.
 
+## Safety rules — Chitragupta only reads
+
+1. **No codebase changes.** Chitragupta never creates, edits, moves or deletes a file outside its own folders: the data home, `%USERPROFILE%\.chitragupta\`, its plugin folder and its temp/sandbox folder. Work repos and every other folder are read-only.
+2. **Git is read-only in work repos.**
+   - Allowed: `rev-parse`, `for-each-ref`, `log`, `rev-list`, `merge-base`, `cherry`, `patch-id`, `show` (metadata), `reflog`, `branch --list` / `--contains`, `ls-remote`, `remote get-url`, `config --get`, and `fetch` of remote-tracking refs only.
+   - Never: `commit`, `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `checkout`, `switch`, `restore`, `stash`, `pull`, `push`, `tag`, `branch -d/-D/-m`, `clean`, `gc`, `prune`, `am`, `apply`, `worktree`, `submodule update`, or any config write.
+   - The one exception: committing and pushing daily files in Chitragupta's own data-home repo.
+3. **Git hosts are read-only.**
+   - `gh`, `glab`, `az` and any Git-host MCP may list and view PRs, branches and work items.
+   - Never create, edit, approve, comment on, merge, close or complete a PR.
+   - Never create, delete or lock a branch or ref, run a pipeline, or call a raw API with anything but GET.
+4. **Azure CLI: an allowlist, nothing else.** Only `az repos pr list|show`, `az repos ref list`, `az repos list|show`, `az boards work-item show` and `az account show`. Every other `az` command group is blocked, because it can change cloud resources.
+5. **Databases are read-only.**
+   - Allowed: one `SELECT` or `WITH … SELECT`, catalog reads, `EXPLAIN` without `ANALYZE`, and read-only metadata procedures.
+   - Never: `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `UPSERT`, `TRUNCATE`, `DROP`, `ALTER`, `CREATE`, `GRANT`, `REVOKE`, `EXEC` of any other procedure, `SELECT … INTO`, locking hints, sequence changes, functions with side effects, transactions, or more than one statement.
+   - MongoDB: only `find`, `aggregate` without `$out`/`$merge`, `count`, `distinct` and list operations.
+6. **Jira is read-only. Slack has exactly one action:** a direct message to my own Slack user ID.
+7. **No other tools.** No database CLIs (`psql`, `sqlcmd`, `mysql`, `mongosh`), no `kubectl`, `docker`, `helm`, `terraform`, no build or publish tools, no `ssh`/`scp`, no PowerShell commands that change anything.
+8. **Internal Claude calls never get write tools,** never use a bypass or skip-permissions mode, and always run in Chitragupta's sandbox folder.
+9. **When unsure, refuse.** Unknown commands, tools and statements count as writes. They're blocked, logged and shown on the Health page.
+10. **No off switch.** No setting, flag or environment variable turns these rules off.
+
+### Chitragupta's own writes — the complete list
+
+- files in the data home and in `%USERPROFILE%\.chitragupta\`
+- `~/.claude/skills/chitragupta/` and the `chitragupta` block in `~/.claude/CLAUDE.md` (plus its one backup, `CLAUDE.md.chitragupta.bak`)
+- the `Chitragupta` scheduled task (setup and doctor repair only); when Task Scheduler refuses it, the one hidden launcher `Chitragupta.vbs` in your Startup folder
+- the dashboard's `Chitragupta.url` shortcut in the Start menu (and on the Desktop when you ask for it)
+- the nightly backup `worklog-kb-<day>.zip` in `storage.local_backup_dir`, when you set one (and pruning the older ones there)
+- deleting the large tool-result copies Claude Code saves under `~/.claude/projects/<sandbox folder>/` for Chitragupta's own MCP jobs, so QA data lives only in the knowledge base
+- commit and push of daily files in the data-home repo
+- the Slack DM to my own ID
+- `fetch` of remote-tracking refs in work repos
+
+Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.
+
+Enforced by `chitragupta/safety/` (see `docs/safety.md`): it is the only code that starts a process, changes a file or opens a connection; `tests/test_safety_static.py` keeps it that way and `tests/test_safety_redteam.py` proves the blocks. New code goes through `safety.commands.run(argv, purpose)`, `safety.paths.*` and `safety.net.*`, never around them.
+
 ## Layout
 - `.claude-plugin/` manifests · `hooks/` hooks.json + run.py launcher · `skills/` one folder per `/cg:` command (explicit-only) · `user-skill/chitragupta/` model-invoked recall skill (installed by setup)
-- `chitragupta/` engine package (+ `prompts/`, `dashboard/`) · `tests/` unittest · `docs/` · `examples/` · `third_party/` · `scripts/`
+- `chitragupta/` engine package (+ `safety/` the only side-effect code, `prompts/`, `dashboard/`) · `tests/` unittest · `docs/` · `examples/` · `third_party/` · `scripts/`
 - `notes/` is git-ignored working memory (inventory, deny-list, progress).
 
 ## Commands
