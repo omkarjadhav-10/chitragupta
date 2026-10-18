@@ -38,11 +38,11 @@ function DbTab({ k, table }) {
   if (!k.tables.length) return html`<${Empty} title="No tables recorded yet" icon="db">Tables, columns and links appear as you investigate with the database MCP or read schema code.</${Empty}>`;
   const verified = k.relations.filter((r) => r.verified).length;
   if (!t) {
-    return html`<p class="lede">${plural(k.tables.length, 'table')} and ${plural(k.relations.length, 'link')} from your investigations; ${verified} verified against QA${k.linkmap ? ' (link map from ' + (k.linkmap.env || 'QA') + (k.linkmap.fetched_at ? ', ' + fmtDay(String(k.linkmap.fetched_at).slice(0, 10), true) : '') + ')' : ''}. Pick a table in the side list to see its neighbourhood.</p>
+    return html`<p class="lede">${plural(k.tables.length, 'table')} and ${plural(k.relations.length, 'link')} from your investigations; ${verified} verified against QA${k.linkmap ? ' (link map from ' + (k.linkmap.env || 'QA') + (k.linkmap.fetched_at ? ', ' + fmtDay(String(k.linkmap.fetched_at).slice(0, 10), true) : '') + ')' : ''}. Pick a table in the side list to see its neighbourhood, or open the <a href="#/db">DB map</a> for databases, schemas, columns and saved queries.</p>
       <${Diagram} code=${mapSource(k.tables, k.relations, null)} label="Map of all tables" alt=${html`<${RelTable} rels=${k.relations} />`} />`;
   }
   const rels = k.relations.filter((r) => sameTable(r.from, t.name) || sameTable(r.to, t.name));
-  return html`<div class="sec-head"><h2>${t.name}</h2><span class="muted small">${t.db || ''}</span><span class="grow"></span><button type="button" class="btn quiet" onClick=${() => setParams({ table: '' })}><${Icon} name="left" size=${15} />Whole map</button></div>
+  return html`<div class="sec-head"><h2>${t.name}</h2><span class="muted small">${t.db || ''}</span><span class="grow"></span><a class="btn quiet" href=${'#/db/' + encodeURIComponent(t.name.toLowerCase())}><${Icon} name="db" size=${15} />In the DB map</a><button type="button" class="btn quiet" onClick=${() => setParams({ table: '' })}><${Icon} name="left" size=${15} />Whole map</button></div>
     ${t.purpose ? html`<p class="lede">${t.purpose}</p>` : null}
     <dl class="kv" style="margin-bottom:16px">
       ${(t.key_columns || []).length ? html`<dt>Key columns</dt><dd>${t.key_columns.map((c) => html`<code key=${c}>${c}</code> `)}</dd>` : null}

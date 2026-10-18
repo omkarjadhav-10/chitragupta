@@ -10,6 +10,7 @@ import { TodayPage } from './pages/today.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
 import { TimesheetPage } from './pages/timesheet.js';
 import { KnowledgePage } from './pages/knowledge.js';
+import { DbPage } from './pages/db.js';
 import { SearchPage } from './pages/search.js';
 import { HealthPage } from './pages/health.js';
 import { SetupPage } from './pages/setup.js';
@@ -150,7 +151,7 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then f', 'Search'],
+  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'],
   ['g then h', 'Health'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide navigation labels'], ['Esc', 'Close a dialog'],
 ];
@@ -219,6 +220,7 @@ function Page() {
     case 'tickets': return r.arg ? html`<${TicketPage} key=${'t-' + r.arg} route=${r} />` : html`<${TicketsPage} route=${r} />`;
     case 'timesheet': return html`<${TimesheetPage} route=${r} />`;
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
+    case 'db': return html`<${DbPage} route=${r} />`;
     case 'search': return html`<${SearchPage} route=${r} />`;
     case 'health': return html`<${HealthPage} route=${r} />`;
     case 'setup': return html`<${SetupPage} route=${r} />`;

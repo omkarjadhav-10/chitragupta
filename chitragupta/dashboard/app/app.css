@@ -460,3 +460,11 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
 .switch.on .knob::after { transform: translateX(16px); }
 .switch[disabled] { opacity: .55; cursor: not-allowed; }
 @media (max-width: 720px) { .setrow { grid-template-columns: 1fr; } }
+
+/* DB map */
+.dbgroup { margin: 0 0 8px; }
+.dbgroup > summary { display: flex; gap: 6px; align-items: center; font-weight: 600; padding: 8px; min-height: 36px; cursor: pointer; border-radius: var(--r-row); }
+.dbgroup > summary:hover { background: var(--sunk); }
+.dbschema { margin: 6px 8px 2px; font-size: 12.5px; color: var(--ink-3); }
+.dblist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.dbname { display: inline-flex; gap: 8px; align-items: center; }

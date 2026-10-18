@@ -125,7 +125,7 @@ export function useApi(path, opts) {
 }
 
 // ------------------------------------------------------------------ routing (hash URLs)
-export const PAGES = ['today', 'tickets', 'timesheet', 'knowledge', 'search', 'health', 'setup', 'settings', 'day'];
+export const PAGES = ['today', 'tickets', 'timesheet', 'knowledge', 'search', 'health', 'setup', 'settings', 'day', 'db'];
 export function parseRoute(hash) {
   if (EXPORT) return { name: 'tickets', arg: String(EXPORT.key || ''), params: {} };
   const raw = (hash == null ? location.hash : hash).replace(/^#\/?/, '');

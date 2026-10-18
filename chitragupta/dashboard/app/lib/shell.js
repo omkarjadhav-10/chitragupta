@@ -10,6 +10,7 @@ export const NAV = [
   { id: 'tickets', label: 'Tickets', icon: 'tickets', key: 'k' },
   { id: 'timesheet', label: 'Timesheet', icon: 'timesheet', key: 's' },
   { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', key: 'n' },
+  { id: 'db', label: 'DB map', icon: 'db', key: 'b' },
   { id: 'search', label: 'Search', icon: 'search', key: 'f' },
   { id: 'health', label: 'Health', icon: 'health', key: 'h' },
 ];

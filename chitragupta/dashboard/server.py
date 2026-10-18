@@ -460,6 +460,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             from .. import settings
             return self.send_json(settings.describe())
+        if path == "/api/db":
+            from . import dbmap
+            return self.send_json(dbmap.tree())
+        if path == "/api/db/graph":
+            from . import dbmap
+            return self.send_json(dbmap.graph())
+        if path == "/api/db/table":
+            from . import dbmap
+            data = dbmap.table(q("key")[:200], 2 if q("hops") == "2" else 1)
+            return self.send_json(data) if data else self.send_json({"error": "unknown table"}, 404)
         if path == "/api/setup":
             return self.send_json(api.setup())
         if path == "/api/tickets":
