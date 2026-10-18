@@ -12,7 +12,7 @@ const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/t
   ['ticket-branches', '#/tickets/ABC-1001?tab=branches'], ['ticket-dbflow', '#/tickets/ABC-1001?tab=dbflow'],
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
-  ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders']];
+  ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders'], ['team', '#/team']];
 let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 

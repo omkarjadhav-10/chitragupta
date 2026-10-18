@@ -7,6 +7,7 @@ import { useStore, useApi, write, runAction, toast, fmtTs } from '../lib/core.js
 import { Icon, Status, PageHead, Dialog, Load, Empty, themeMode, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys, appearance } from '../lib/shell.js';
 import { McpStatusPanel } from '../lib/mcpstatus.js';
+import { SchedulerPanel } from '../lib/scheduler.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -30,6 +31,20 @@ function problem(it, v) {
     case 'prefixes': return (v || []).every((p) => PREFIX.test(p)) ? null : 'Use uppercase project keys of 2 to 10 letters or digits, starting with a letter.';
     case 'paths': return (v || []).every((p) => /^([A-Za-z]:[\\/]|\/)/.test(p)) ? null : 'Use full paths, one per line.';
     case 'envs_narrow': return (v || []).length ? null : 'Keep at least one environment.';
+    case 'name': return typeof v === 'string' && v.length <= 80 && !/[\x00-\x1f]/.test(v) ? null : 'Use one line of at most 80 characters.';
+    case 'share_targets': {
+      const names = new Set();
+      for (let i = 0; i < (v || []).length; i++) {
+        const t = v[i];
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(t.name || '')) return 'Target ' + (i + 1) + ': a name of letters, digits, - or _.';
+        if (names.has(t.name)) return 'Target ' + (i + 1) + ': the name ' + t.name + ' is used twice.';
+        names.add(t.name);
+        if (t.kind === 'folder' && !/^([A-Za-z]:[\\/]|\/)/.test(t.path || '')) return 'Target ' + (i + 1) + ': a full folder path.';
+        if (t.kind === 'git' && !(t.url || '').trim()) return 'Target ' + (i + 1) + ': the repo URL.';
+        if (/slack/i.test((t.url || '') + (t.path || ''))) return 'Target ' + (i + 1) + ': sharing never posts to Slack.';
+      }
+      return null;
+    }
     case 'bases': {
       const bad = Object.keys(v || {}).find((r) => !(v[r] || []).length || v[r].some((p) => !BRANCH.test(p)));
       return bad ? bad + ': use branch names or patterns (letters, digits, . _ / * -), separated by commas.' : null;
@@ -72,6 +87,31 @@ function BasesEditor({ it, value, onChange, common }) {
     ${it.roles.map((r) => html`<label key=${r} class="baserow"><span class="small">${r}</span>
       <${ListInput} class="mono" value=${[].concat(v[r] || [])} aria-label=${it.repo + ' ' + r + ' branch names'}
         onChange=${(list) => onChange(Object.assign({}, v, { [r]: list }))} /></label>`)}</fieldset>`;
+}
+
+function ShareTargetsEditor({ it, value, onChange, common }) {
+  const rows = value || [];
+  const put = (i, patch) => onChange(rows.map((r, j) => {
+    if (j !== i) return r;
+    const n = Object.assign({}, r, patch);
+    if (n.kind === 'folder') { delete n.url; delete n.branch; } else { delete n.path; }
+    Object.keys(n).forEach((k) => { if (n[k] === '' && k !== 'name') delete n[k]; });
+    return n;
+  }));
+  const lab = (i, f) => 'Share target ' + (i + 1) + ': ' + f;
+  return html`<fieldset class="reledit" ...${common}><legend class="sr">${it.label}</legend>
+    ${rows.length ? html`<ol class="targetlist">${rows.map((r, i) => html`<li key=${i}>
+      <input type="text" class="mono" aria-label=${lab(i, 'name')} placeholder="name" value=${r.name || ''} onInput=${(e) => put(i, { name: e.currentTarget.value.trim() })} />
+      <select aria-label=${lab(i, 'kind')} value=${r.kind} onChange=${(e) => put(i, { kind: e.currentTarget.value })}>
+        <option value="folder">Folder</option><option value="git">Git repo</option></select>
+      ${r.kind === 'git'
+        ? html`<input type="text" class="mono" aria-label=${lab(i, 'repo URL')} placeholder="repo URL" value=${r.url || ''} onInput=${(e) => put(i, { url: e.currentTarget.value.trim() })} />
+          <input type="text" class="mono" aria-label=${lab(i, 'branch')} placeholder="main" value=${r.branch || ''} onInput=${(e) => put(i, { branch: e.currentTarget.value.trim() })} />`
+        : html`<input type="text" class="mono wide" aria-label=${lab(i, 'folder')} placeholder="full folder path" value=${r.path || ''} onInput=${(e) => put(i, { path: e.currentTarget.value.trim() })} />`}
+      <button type="button" class="btn quiet icon" aria-label=${'Remove share target ' + (i + 1)} onClick=${() => onChange(rows.filter((_, j) => j !== i))}><${Icon} name="close" size=${15} /></button></li>`)}</ol>`
+      : html`<p class="muted small">None yet: /cg:share needs one.</p>`}
+    <div class="btnline"><button type="button" class="btn" onClick=${() => onChange(rows.concat([{ name: rows.length ? 'target' + (rows.length + 1) : 'team', kind: 'folder', path: '' }]))}>
+      <${Icon} name="plus" size=${15} />Add a target</button></div></fieldset>`;
 }
 
 function RelationsEditor({ it, value, onChange, common }) {
@@ -128,6 +168,9 @@ function Control({ it, value, onChange, err }) {
       return html`<fieldset class="daypick" ...${common}><legend class="sr">${it.label}</legend>${(it.value || []).map((env) => html`<label key=${env} class="check">
         <input type="checkbox" checked=${(value || []).indexOf(env) >= 0} onChange=${(e) => onChange((it.value || []).filter((x) => (x === env ? e.currentTarget.checked : (value || []).indexOf(x) >= 0)))} />${env}</label>`)}</fieldset>`;
     case 'bases': return html`<${BasesEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
+    case 'share_targets': return html`<${ShareTargetsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
+    case 'name':
+      return html`<input type="text" ...${common} maxlength="80" value=${value || ''} onInput=${(e) => onChange(e.currentTarget.value)} />`;
     case 'relations': return html`<${RelationsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
     case 'prefixes': case 'paths':
       return html`<textarea ...${common} rows=${Math.min(6, Math.max(2, (value || []).length + 1))} spellcheck="false"
@@ -140,8 +183,8 @@ function Control({ it, value, onChange, err }) {
 function Item({ it, value, onChange, err }) {
   const id = 'set-' + it.key.replace(/[^a-z0-9]/gi, '-');
   const changed = !same(value, it.value);
-  return html`<div class=${'setrow' + (changed ? ' changed' : '') + (it.type === 'relations' ? ' stack' : '')}>
-    <div class="setlab"><label for=${['days', 'envs_narrow', 'bases', 'relations'].indexOf(it.type) >= 0 || !it.editable ? null : id} id=${id + '-lab'}>${it.repo ? cap(it.label.slice(it.repo.length + 2)) : it.label}</label>
+  return html`<div class=${'setrow' + (changed ? ' changed' : '') + (it.type === 'relations' || it.type === 'share_targets' ? ' stack' : '')}>
+    <div class="setlab"><label for=${['days', 'envs_narrow', 'bases', 'relations', 'share_targets'].indexOf(it.type) >= 0 || !it.editable ? null : id} id=${id + '-lab'}>${it.repo ? cap(it.label.slice(it.repo.length + 2)) : it.label}</label>
       ${it.help ? html`<p class="muted small" id=${id + '-help'}>${it.help}</p>` : null}
       ${it.available === false ? html`<p class="small"><${Status} kind="off" quiet>Set this up with /cg:setup first</${Status}></p>` : null}
       ${!it.editable ? html`<p class="small muted">Change with /cg:setup.</p>` : null}</div>
@@ -230,7 +273,7 @@ export function SettingsPage() {
     write('POST', '/api/settings/undo', {}).then(() => { toast('Undid the last change', 'ok'); res.reload(); },
       (e) => toast(e.message, 'bad')).finally(() => setBusy(false));
   };
-  const rail = d ? html`<h2>Groups</h2><ul class="rlist">${d.groups.concat([{ id: 'mcp', label: 'MCP status' }, { id: 'appearance', label: 'Appearance' }, { id: 'history', label: 'Change history' }]).map((g) => html`<li key=${g.id}>
+  const rail = d ? html`<h2>Groups</h2><ul class="rlist">${d.groups.concat([{ id: 'mcp', label: 'MCP status' }, { id: 'scheduler', label: 'Background job' }, { id: 'appearance', label: 'Appearance' }, { id: 'history', label: 'Change history' }]).map((g) => html`<li key=${g.id}>
     <a href=${'#g-' + g.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('g-' + g.id); if (el) { el.scrollIntoView({ block: 'start' }); el.querySelector('h2').focus(); } }}>
       <span class="sw" style=${{ background: g.items && g.items.some((it) => keys.indexOf(it.key) >= 0) ? 'var(--accent)' : 'var(--rule)' }}></span>
       <span class="k" style="font-weight:500">${g.label}</span><span class="m"></span></a></li>`)}</ul>` : null;
@@ -251,6 +294,8 @@ export function SettingsPage() {
             onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}</div>`)}</section>`)}
       <section class="sec setgroup" id="g-mcp" aria-labelledby="h-mcp"><h2 id="h-mcp" tabindex="-1">MCP status</h2>
         ${st.data ? html`<${McpStatusPanel} mc=${st.data.mcp || {}} onChecked=${st.reload} headingLevel=${3} />` : null}</section>
+      <section class="sec setgroup" id="g-scheduler" aria-labelledby="h-scheduler"><h2 id="h-scheduler" tabindex="-1">Background job</h2>
+        <p class="muted small">Status and Repair only: setup registers it, uninstall removes it.</p><${SchedulerPanel} /></section>
       <${Appearance} />
       <${History} rows=${d.history || []} onUndo=${undo} busy=${busy} />`}</${Load}>
     <${Dialog} open=${review} title="Review changes" onClose=${() => setReview(false)} wide>

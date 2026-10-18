@@ -5,6 +5,7 @@ import { html } from '../lib/html.js';
 import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT, parseDay, isoDay } from '../lib/core.js';
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
+import { ShareButton } from '../lib/share.js';
 
 // ------------------------------------------------------------------ list
 const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days']];
@@ -291,7 +292,8 @@ export function TicketPage({ route }) {
         </div></div>
         ${EXPORT ? html`<p class="exportline">Exported ${String((t.export || {}).at || '').replace('T', ' ').slice(0, 16)} · ${(t.export || {}).mode || 'full'}</p>`
           : html`<div class="pagehead-act"><a class="btn" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=full'} download title="Everything as recorded, for your own use"><${Icon} name="download" size=${16} />Export</a>
-            <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a></div>`}
+            <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a>
+            <${ShareButton} k=${t.key} /></div>`}
         </div></div>
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>

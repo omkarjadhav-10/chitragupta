@@ -12,6 +12,7 @@ export const NAV = [
   { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', key: 'n' },
   { id: 'db', label: 'DB map', icon: 'db', key: 'b' },
   { id: 'search', label: 'Search', icon: 'search', key: 'f' },
+  { id: 'team', label: 'Team notes', icon: 'chat', key: 'm' },
   { id: 'health', label: 'Health', icon: 'health', key: 'h' },
 ];
 export const NAV_END = [

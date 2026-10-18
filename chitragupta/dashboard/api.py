@@ -994,6 +994,7 @@ def status(cfg=None, now=None, server=None):
         "errors": recent_errors(h),
         "dashboard": server or {},
         "search": _search_stats(),
+        "pr_sources": h.get("pr_sources") or [],
         "safety": _safety(cfg),
     }
 
@@ -1118,3 +1119,39 @@ def changes(cfg=None, max_age=2.0):
     value = h.hexdigest()[:16]
     _cursor_cache.update(at=now, value=value, home=home)
     return {"cursor": value}
+
+
+# --------------------------------------------------------------------------- team sharing (read-only views)
+
+def share_info(cfg=None):
+    """What the Share dialog needs: the sections, levels, targets (each with its problem) and the default level."""
+    from .. import share
+    cfg = cfg or common.load_config()
+    return {"sections": share.sections(), "levels": list(share.LEVELS), "default_level": share.default_level(cfg),
+            "targets": [{k: t.get(k) for k in ("name", "kind", "path", "url", "branch", "default_level", "problem")}
+                        for t in share.targets(cfg)],
+            "never": list(share.NEVER)}
+
+
+def share_preview(key, sections=None, level=None):
+    """share.preview(): the bundle as it would be shared; writes nothing. {"error"} for a bad request."""
+    from .. import share
+    try:
+        return share.preview(key, sections or None, level or None)
+    except share.ShareError as e:
+        return {"error": str(e)}
+
+
+def team_notes():
+    from .. import share
+    notes = share.team_notes()
+    return {"notes": [{k: n.get(k) for k in ("target", "key", "title", "level", "sections", "at", "by", "mine", "dir")}
+                      for n in notes], "targets": [t.get("name") for t in share.targets() if not t.get("problem")]}
+
+
+def team_note(target, rel):
+    from .. import share
+    got = share.read_note(target, rel)
+    if not got:
+        return None
+    return {"markdown": got["markdown"], "html_file": got["html"]}

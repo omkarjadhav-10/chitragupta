@@ -169,3 +169,38 @@ def search_rebuild(body):
         return 502, {"error": "The index couldn't be rebuilt: %s" % (str(e)[:200] or e.__class__.__name__)}
     record_action("search-rebuild", True)
     return 200, {"ok": True, "stats": searchidx.stats(), "result": res if isinstance(res, dict) else None}
+
+
+@action("scheduler-repair", cap=256)
+def scheduler_repair(body):
+    """Re-register the background job when it is missing or differs (the same as `setup scheduler --repair`)."""
+    from .. import scheduler
+    try:
+        res = scheduler.repair(common.load_config())
+    except Exception as e:  # noqa: BLE001
+        record_action("scheduler-repair", False, str(e)[:200])
+        return 502, {"error": "The repair couldn't run: %s" % (str(e)[:200] or e.__class__.__name__)}
+    record_action("scheduler-repair", res.get("ok"), res.get("detail"))
+    return (200 if res.get("ok") else 502), dict(res, status=scheduler.status(common.load_config()))
+
+
+@action("share-ticket", cap=2048)
+def share_ticket(body):
+    """Share a ticket: the same as `cli share KEY --yes`. The bundle is written only when the scan passes."""
+    from .. import share
+    key, level, target = body.get("key"), body.get("level"), body.get("target")
+    sections = body.get("sections")
+    if not isinstance(key, str) or not isinstance(sections, (list, type(None))) or \
+            not all(isinstance(x, (str, type(None))) for x in (level, target)):
+        return 400, {"error": "Give key, sections (a list), level and target."}
+    if sections is not None and not all(isinstance(s, str) for s in sections):
+        return 400, {"error": "sections must be names"}
+    try:
+        res = share.share(key, sections or None, level or None, target or None)
+    except share.ShareError as e:
+        return 400, {"error": str(e)}
+    record_action("share-ticket", bool(res.get("ok")), "%s %s -> %s%s" % (
+        res.get("key"), res.get("level"), res.get("target"), " (blocked by the scan)" if res.get("blocked") else ""))
+    out = {k: res.get(k) for k in ("ok", "blocked", "hits", "problems", "path", "committed", "pushed", "push_error",
+                                   "key", "level", "sections", "target")}
+    return 200, out

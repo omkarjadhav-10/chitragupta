@@ -211,6 +211,18 @@ _REL_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.{1,2}/[^'"]+)
 _ABS_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(?\s*)(['"])(/(?:app|vendor)/[^'"]+)\2""")
 
 
+# An export only ever shows the ticket page: these modules become stubs that keep their exported names (main.js
+# imports them) and render nothing; the ones only stubbed pages import are left out.
+_STUBBED = {"/app/pages/" + p + ".js" for p in ("today", "timesheet", "knowledge", "db", "team", "search", "health",
+                                               "setup", "settings")} | {"/app/lib/share.js"}
+_UNUSED = {"/app/lib/mcpstatus.js", "/app/lib/scheduler.js"}
+_EXPORTED = re.compile(r"^export\s+(?:function|const|let)\s+(\w+)", re.M)
+
+
+def _stub(src):
+    return "".join("export function %s() { return null; }\n" % n for n in _EXPORTED.findall(src))
+
+
 def app_modules():
     """{"@cg/app/…js" | "@cg/vendor/…js": source} — every ES module the page loads, each import rewritten to those bare
     names so an import map can point every one at a blob: URL (the export has no server to resolve paths against)."""
@@ -223,10 +235,16 @@ def app_modules():
                 continue
             key = "/app/" + os.path.relpath(os.path.join(root, fn), app).replace(os.sep, "/")
             base = posixpath.dirname(key)
+            if key in _UNUSED:
+                continue
+            src = common.read_text(os.path.join(root, fn))
+            if key in _STUBBED:
+                mods[key] = _stub(src)
+                continue
 
             def absolute(m, base=base):
                 return m.group(1) + m.group(2) + posixpath.normpath(posixpath.join(base, m.group(3))) + m.group(2)
-            mods[key] = _REL_IMPORT.sub(absolute, common.read_text(os.path.join(root, fn)))
+            mods[key] = _REL_IMPORT.sub(absolute, src)
     for path, (sub, name) in server.VENDOR.items():
         p = server.vendor_path(sub, name)
         mods[path] = common.read_text(p) if p else ""

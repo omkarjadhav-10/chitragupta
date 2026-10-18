@@ -62,6 +62,8 @@ The dashboard reads with GET and HEAD. It writes only through a short allowlist 
 | `search-rebuild` | Rebuilds the search index (a cache in the data home) | no |
 | `relations-detect` | Proposes base relations from a watched repo's local refs (read-only git, no fetch); saves nothing | no |
 | `capture-pause`, `capture-resume` | Creates or removes the `PAUSED` file in the data home | no |
+| `scheduler-repair` | Re-registers Chitragupta's own background job when it is missing or differs (the same as `setup scheduler --repair`) | no |
+| `share-ticket` | Shares a ticket: writes the redacted bundle to your share target, only when the scan passes (the same as `cli share KEY --yes`) | no |
 
 Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.
 

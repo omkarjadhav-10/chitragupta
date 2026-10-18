@@ -6,6 +6,7 @@ import { useApi, fmtTs, fmtDay, ago, plural, runAction, toast } from '../lib/cor
 import { Icon, Status, CopyButton, Empty, Load, PageHead, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { McpStatusPanel } from '../lib/mcpstatus.js';
+import { SchedulerPanel } from '../lib/scheduler.js';
 
 function Card({ title, status, big, lines, id }) {
   return html`<section class="card" aria-labelledby=${id}><h2 id=${id}>${title}${status}</h2>${big != null ? html`<div class="big">${big}</div>` : null}
@@ -73,7 +74,6 @@ export function HealthPage() {
       const live = (mc.live && (mc.live.servers || mc.live.rows)) || [];
       const sf = s.safety || {};
       const blocks = sf.blocks_24h || 0;
-      const task = setup.data && setup.data.items.find((i) => /task/i.test(i.id + ' ' + i.label));
       const budgetHit = mc.budget && mc.calls_today >= mc.budget;
       return html`
       <${PageHead} title="Health" sub=${fmtDay(s.day) + ' · checked ' + fmtTs(s.now)}>
@@ -83,14 +83,13 @@ export function HealthPage() {
         <${Card} id="h-cap" title="Capture" status=${s.paused ? html`<${Status} kind="warn">Paused</${Status}>` : hk == null ? html`<${Status} kind="bad">No events</${Status}>` : hk <= 24 * 60 ? html`<${Status} kind="ok">Recording</${Status}>` : html`<${Status} kind="warn">Quiet</${Status}>`}
           big=${hk == null ? '—' : ago(hk)} lines=${[s.hooks.last_event ? 'Last captured event ' + fmtTs(s.hooks.last_event) : 'No hook event captured yet. Start a Claude Code session in a repo.']} />
         <${Card} id="h-tick" title="Background runs" status=${tk == null ? html`<${Status} kind="bad">Never ran</${Status}>` : tk <= 15 ? html`<${Status} kind="ok">Running</${Status}>` : tk <= 60 ? html`<${Status} kind="warn">Late</${Status}>` : html`<${Status} kind="bad">Stopped</${Status}>`}
-          big=${tk == null ? '—' : ago(tk)} lines=${[s.tick.last_tick ? 'Last run ' + fmtTs(s.tick.last_tick) : '', s.tick.last_tick_ok ? 'Last good run ' + fmtTs(s.tick.last_tick_ok) : '', tk != null && tk > 60 ? 'Check the scheduled task below, or run /cg:doctor.' : '']} />
+          big=${tk == null ? '—' : ago(tk)} lines=${[s.tick.last_tick ? 'Last run ' + fmtTs(s.tick.last_tick) : '', s.tick.last_tick_ok ? 'Last good run ' + fmtTs(s.tick.last_tick_ok) : '', tk != null && tk > 60 ? 'Check the background job below, or run /cg:doctor.' : '']} />
         <${Card} id="h-push" title="Daily push" status=${!pu.remote_set ? html`<${Status} kind="off">Off</${Status}>` : pu.error ? html`<${Status} kind="bad">Failing</${Status}>` : pu.minutes_ago == null ? html`<${Status} kind="wait">Not yet</${Status}>` : html`<${Status} kind="ok">Working</${Status}>`}
           big=${pu.minutes_ago == null ? '—' : ago(pu.minutes_ago)} lines=${[!pu.remote_set ? 'No GitHub remote set; everything stays on this machine.' : '', pu.error || '', pu.last_commit ? 'Last commit ' + fmtTs(pu.last_commit) : '']} />
         <${Card} id="h-slack" title="Slack worklog" status=${html`<${Status} kind=${ss[0]}>${ss[1]}</${Status}>`} big=${last ? fmtDay(last.day, true) + ' · ' + (last.status || '—') : '—'}
           lines=${[sl.send_at ? 'Sends at ' + sl.send_at : '', last && last.sent_at ? 'Sent ' + fmtTs(last.sent_at) : '', sl.send_warning || '', last && last.last_error ? last.last_error : '',
             ss[1] === 'Not connected' ? "Slack isn't connected; the worklog is still written to the daily file. Connect it with /cg:setup." : '']} />
-        <${Card} id="h-task" title="Scheduled task" status=${task ? html`<${Status} kind=${task.status}>${task.status === 'ok' ? 'Registered' : task.status === 'off' ? 'Off' : 'Needs attention'}</${Status}>` : html`<${Status} kind="wait">Checking</${Status}>`}
-          lines=${[task ? task.detail : '', task && task.fix && task.fix.text && task.status !== 'ok' ? 'Fix: ' + task.fix.text : '']} />
+        <${SchedulerPanel} card />
         <${Card} id="h-safe" title="Safety" status=${!sf.enforced ? html`<${Status} kind="bad">Not enforced</${Status}>` : blocks ? html`<${Status} kind="warn">${plural(blocks, 'blocked action')}</${Status}>` : html`<${Status} kind="ok">Enforced</${Status}>`}
           big=${sf.enforced ? 'Read-only' : '—'}
           lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h; latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
@@ -98,6 +97,12 @@ export function HealthPage() {
         <${SearchCard} st=${s.search} onDone=${res.reload} />
       </div>
 
+      ${(s.pr_sources || []).length ? html`<section class="sec" aria-labelledby="h-prs"><div class="sec-head"><h2 id="h-prs">Pull-request data</h2>
+        <p class="sub">Where each watched repo's PRs come from</p></div>
+        <${Scroll} label="PR sources"><table><caption class="sr">PR source per repo</caption>
+          <thead><tr><th scope="col">Repo</th><th scope="col">Source</th><th scope="col">Last refresh</th><th scope="col">Problem</th></tr></thead>
+          <tbody>${s.pr_sources.map((r) => html`<tr key=${r.repo}><td class="mono small">${r.repo}</td><td>${r.label}${r.pref && r.pref !== 'auto' ? html` <span class="muted small">(set to ${r.pref})</span>` : null}</td>
+            <td class="nowrap">${r.refreshed_at ? fmtTs(r.refreshed_at) : '—'}</td><td class="small">${r.error ? String(r.error).replace(/^\S+ /, '') : '—'}</td></tr>`)}</tbody></table></${Scroll}></section>` : null}
       <section class="sec" aria-labelledby="h-mcp"><div class="sec-head"><h2 id="h-mcp">MCP servers</h2>
         <p class="sub">Live status and what the last background job saw</p></div>
         <${McpStatusPanel} mc=${mc} onChecked=${res.reload} headingLevel=${3} />

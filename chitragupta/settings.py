@@ -40,7 +40,8 @@ def _i(key, label, help_, type_, group, **kw):
 
 GROUPS = [("capture", "Capture"), ("worklog", "Daily worklog & Slack"), ("jira", "Jira"), ("database", "Database MCP"),
           ("branching", "Branches & PRs"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
-          ("models", "Models & budget"), ("data", "Data"), ("dashboard", "Dashboard"), ("safety", "Locked")]
+          ("models", "Models & budget"), ("data", "Data"), ("share", "Team sharing"), ("dashboard", "Dashboard"),
+          ("safety", "Locked")]
 
 STATIC = [
     _i("ticket_prefixes", "Ticket prefixes", "Jira project keys that count as tickets, for example ABC.", "prefixes", "capture",
@@ -105,6 +106,14 @@ STATIC = [
        "int", "data", min=7, max=365),
     _i("reminders.mcp", "Weekly connect reminder", "A line at session start when Slack or Jira isn't connected.", "bool",
        "data"),
+    _i("share.targets", "Share targets", "Where /cg:share writes bundles: an existing folder (bundles go under its "
+       "shares/ folder) or a team Git repo (only shares/ is committed and pushed, never forced). Never Slack.",
+       "share_targets", "share", default_value=[]),
+    _i("share.default_level", "Default level", "team keeps SQL, hosts, internal names and PR links; public removes "
+       "them too and needs a deny-list.", "choice", "share", choices=[["team", "team"], ["public", "public"]],
+       default_value="team"),
+    _i("share.author", "Your name on shared notes", "Shown as \"by\" on your bundles; Team notes uses it to tell yours "
+       "apart.", "name", "share", default_value=""),
     _i("dashboard.preview_buttons", "Preview buttons", "Show Refresh from Jira and Preview exactly on Today. Each "
        "press is one read-only call within the daily MCP budget.", "bool", "dashboard", default_value=True),
     _i("dashboard.autostart", "Start the dashboard automatically", "From the scheduled task and session start.", "bool",
@@ -145,7 +154,8 @@ def _repo_items(cfg):
                       kinds=[["cut_from", "is cut from"], ["merges_into", "merges into"], ["syncs_from", "syncs from"]]))
         out.append(_i("branching.repos.%s.pr_source" % n, "%s: PR information from" % n, "Where open and merged PRs are "
                       "read.", "choice", "branching", repo=n,
-                      choices=[["", "Automatic (host CLI, else merge commits)"],
+                      choices=[["", "Automatic (host CLI, else the host's MCP, else merge commits)"],
+                               ["cli", "The host's CLI only"], ["mcp", "The host's read-only MCP only"],
                                ["git", "Merge commits only"]]))
     return out
 
@@ -240,6 +250,30 @@ def check(it, value, current):
                     return "%s isn't a branch name or pattern." % p
             if r["from"] in r["to"]:
                 return "%s can't relate to itself." % r["from"]
+        return None
+    if t == "name":
+        if not isinstance(value, str) or len(value) > 80 or any(ord(c) < 32 for c in value):
+            return "Use one line of at most 80 characters."
+        return None
+    if t == "share_targets":
+        from .safety import commands, paths as sp
+        if not isinstance(value, list) or len(value) > 10:
+            return "Use a list of at most 10 targets."
+        names = set()
+        for i, tg in enumerate(value):
+            why = commands.share_target_reason(tg)
+            if why:
+                return "Target %d: %s." % (i + 1, why)
+            if tg["name"] in names:
+                return "Target %d: the name %s is used twice." % (i + 1, tg["name"])
+            names.add(tg["name"])
+            if set(tg) - {"name", "kind", "path", "url", "branch", "default_level"}:
+                return "Target %d: unknown fields %s." % (i + 1, ", ".join(sorted(set(tg) - {"name", "kind", "path", "url",
+                                                                                            "branch", "default_level"})))
+            if tg["kind"] == "folder" and not sp.share_folder_roots({"share": {"targets": [tg]}}):
+                return "Target %d: %s isn't an existing folder (a full path)." % (i + 1, tg.get("path"))
+            if tg.get("default_level") not in (None, "team", "public"):
+                return "Target %d: the level must be team or public." % (i + 1)
         return None
     if t == "envs_narrow":
         cur = current if isinstance(current, list) else []

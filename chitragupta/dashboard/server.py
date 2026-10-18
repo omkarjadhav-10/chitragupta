@@ -356,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
             body = writes.parse(data)
         except writes.WriteError as e:
             if not read:  # an unread body is dropped (small ones only) so Windows answers instead of resetting
-                self._drain_body(limit=writes.DEFAULT_CAP)
+                self._drain_body(limit=256 * 1024)  # up to 256 KB, so a body just over a cap still gets its 413
             log("write refused (%s %s): %d %s" % (self.command, name, e.status, e))
             return self.send_json({"error": str(e)}, e.status)
         try:
@@ -462,6 +462,19 @@ class Handler(BaseHTTPRequestHandler):
                                                     to=q("to") or None, limit=_int(q("limit"), 40)))
             except ValueError as e:
                 return self.send_json({"error": str(e)[:200]}, 400)
+        if path == "/api/scheduler":
+            from .. import scheduler
+            return self.send_json(scheduler.status())
+        if path == "/api/share":
+            return self.send_json(api.share_info())
+        if path == "/api/share/preview":
+            data = api.share_preview(q("key")[:20], q("sections")[:300], q("level")[:10])
+            return self.send_json(data, 400 if "error" in data else 200)
+        if path == "/api/team-notes":
+            return self.send_json(api.team_notes())
+        if path == "/api/team-notes/note":
+            data = api.team_note(q("target")[:40], q("dir")[:200])
+            return self.send_json(data) if data else self.send_json({"error": "not found"}, 404)
         if path == "/api/settings":
             from .. import settings
             return self.send_json(settings.describe())

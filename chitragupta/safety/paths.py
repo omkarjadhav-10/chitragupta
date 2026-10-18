@@ -30,8 +30,14 @@ LAYER = "path"
 BACKUP_PATTERN = "worklog-kb-*.zip*"
 
 
+_DELETED = re.compile(r"(?i)^(?:\\\\\?\\)?[a-z]:\\\$extend\\\$deleted\\")
+
+
 def _real(p):
-    r = os.path.realpath(os.path.abspath(p))
+    a = os.path.abspath(p)
+    r = os.path.realpath(a)
+    if _DELETED.match(r):  # Windows: a file another thread is deleting right now resolves into NTFS's $Deleted folder;
+        r = os.path.join(os.path.realpath(os.path.dirname(a)), os.path.basename(a))  # its folder is what counts
     if r.startswith("\\\\?\\"):
         r = r[4:]
     return os.path.normcase(r)

@@ -246,6 +246,23 @@ class WriteProtectionTests(td.Base):
             other.server_close()
 
 
+class DeletePendingPath(unittest.TestCase):
+    def test_a_file_being_deleted_still_counts_as_in_its_folder(self):
+        """Windows resolves a file another thread is deleting into NTFS's $Extend\$Deleted folder; the path guard
+        judges it by its folder instead (otherwise a concurrent config write is refused)."""
+        from unittest import mock
+        from chitragupta.safety import paths
+        real = os.path.realpath
+        d = os.path.abspath("C:/data/home/.worklog") if os.name == "nt" else "/data/home/.worklog"
+        f = os.path.join(d, "config.lock")
+
+        def fake(p, *a, **k):
+            return r"\\?\C:\$Extend\$Deleted\0aa3000000002a7d" if p == f else real(p, *a, **k)
+        with mock.patch.object(paths.os.path, "realpath", side_effect=fake):
+            self.assertEqual(paths._real(f), os.path.normcase(os.path.join(real(d), "config.lock")))
+        self.assertNotIn("$deleted", paths._real(f).lower())
+
+
 class ActionsDocumented(unittest.TestCase):
     def test_every_action_is_in_the_safety_doc(self):
         """The allowlist in docs/safety.md is the user's view of what the dashboard may do: it lists every action."""

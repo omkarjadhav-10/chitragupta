@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Health shows the search index** (entries, build and update times) with **Rebuild index**.
 - **Search page filters:** ticket, repo and date range (kept in the address); repo chips on results; tables and DB links open in the DB map.
 - **Mark a day from the Timesheet page** (leave, half day, holiday, extra workday, or remove the mark), and **`clear: <day>`** in `inbox.md` / `/cg:log` to undo a mark.
+- **Share from the dashboard and read your team's notes:** a ticket's **Share…** dialog (preview, then share), the Team notes page (`#/team`), and Settings for share targets, level and your name. Settings and Health show the background job for this OS with **Repair**, and Health lists each repo's PR source and last refresh.
 - **DB map page** (`#/db`): databases → schemas → tables in the side list, with search; per table its columns (type, keys, personal-data flag), its links with how well each was verified in QA (verified, likely or not verified, with the sampled-row counts), who reads and writes it, its tickets and saved queries, and a direct or two-hop neighbourhood diagram with a table version. The whole map is drawn only on request.
 - **Search index** ([docs/search.md](docs/search.md)): one persistent SQLite index (`.worklog\cache\search.sqlite`) for the dashboard, `/cg:search` and the MCP server. It now also covers saved and captured requests, branches, PRs and DB links; each result names the data-home file to read. Updated incrementally after every render (by content hash), rebuilt on a schema change or with `/cg:search --rebuild`. Filters by type, ticket, repo and date range (`/api/search?q=&type=&ticket=&repo=&from=&to=&limit=`).
 - **`/cg:search <words> [--rebuild]`**: the top results with the file to read for each.
@@ -28,6 +29,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - **`resend:` can be repeated.** Every new copy of a `resend:` line sends the day again (other inbox lines are still read once); `/cg:log resend: <day>` always adds one. Each send, resends included, is kept in the day's history. Migration `inbox-counts` converts the inbox state, backing up `state.json` first.
 
 ### Fixed
+- The path guard could refuse a write in the data home on Windows when another thread was deleting a file there at the same moment (Windows resolves such a file into NTFS's `$Deleted` folder); it now judges the file by its folder.
+- Ticket exports are smaller: pages an export never shows are left out (about 170 KB instead of 310 KB without diagrams).
 - The date pickers (Today's "Go to a day", the Timesheet month) now show the focus ring on each part, including the browser's calendar button.
 - `agent worklog-show` could make a model call while labelled read-only.
 - GitHub and GitLab repos passed the local folder to `gh` / `glab --repo` instead of `owner/repo`; the host path is now kept apart (`remote_path` in `repo.json`).
