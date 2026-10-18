@@ -1,0 +1,16 @@
+#!/bin/sh
+# Chitragupta's launcher for its hooks and /cg: commands: runs hooks/run.py with the first Python 3 found.
+# macOS / Linux: python3, then python. Windows (Git Bash, which runs Claude Code's shell-form hooks): py -3 first.
+# PowerShell without Git Bash runs bin/cg-hook.cmd instead. Hooks fail open: with no Python, `hook` exits 0.
+run="${0%/*}/../hooks/run.py"
+if [ "${OS:-}" = "Windows_NT" ] && command -v py >/dev/null 2>&1; then
+  exec py -3 "$run" "$@"
+fi
+for py in python3 python; do
+  if command -v "$py" >/dev/null 2>&1; then
+    exec "$py" "$run" "$@"
+  fi
+done
+[ "${1:-}" = "hook" ] && exit 0
+echo "Chitragupta: Python 3 not found (tried python3, python)" >&2
+exit 127

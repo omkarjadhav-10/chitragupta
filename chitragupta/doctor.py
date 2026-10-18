@@ -188,8 +188,10 @@ def run(probe=True, task_expected=True, mcp=None):
                      "%s current=%s, package %s%s" % (rt["path"], rt["current"], __version__,
                                                       "" if rt["current_ok"] and rt["launcher_exists"]
                                                       else ": re-run `setup apply` (or start a new session)")))
-    ts = install.task_status()
-    rows.append(_row("task", ts["installed"] or not task_expected, ts["detail"]))
+    from . import scheduler
+    ts = scheduler.status(cfg)
+    rows.append(_row("task", (ts["installed"] and ts["current"] is not False) or not task_expected,
+                     ts["detail"] + ("" if ts["installed"] or not task_expected else ": re-run `/cg:setup`")))
     sk = setup.skill_installed()
     rows.append(_row("recall skill", sk["installed"], sk["path"] + ("" if sk["installed"] else
                      (" belongs to another skill (name: %s)" % sk.get("name") if os.path.exists(sk["path"])

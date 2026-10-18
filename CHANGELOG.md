@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **The background run on macOS and Linux** ([docs/scheduling.md](docs/scheduling.md)): a launchd LaunchAgent on macOS, a systemd user timer on Linux (catch-up after sleep), and one marked crontab line where systemd user units aren't available, behind one interface with Windows' Task Scheduler task. Setup registers it, `setup scheduler [--repair]` shows and repairs it, doctor reports whether it is current, uninstall removes it. The command guard allows `launchctl`, `systemctl --user` and `crontab` for Chitragupta's own job only; a crontab change must leave every other line as it was. The hooks still start with `py -3` until the `bin/cg-hook` launcher is switched in.
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

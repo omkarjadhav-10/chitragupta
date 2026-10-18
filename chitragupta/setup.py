@@ -11,6 +11,9 @@
     python -m chitragupta setup add-slack [--client-id ID] [--callback-port N]
     python -m chitragupta setup slack-user [email]
     python -m chitragupta setup use-database <server>
+    python -m chitragupta setup scheduler [--repair] [--json]
+        The background job for this OS (Task Scheduler, launchd, systemd timer or cron): its status, or register it
+        again when it is missing or differs from what setup would write.
 
 Slack runs only for background jobs: the server is added in *local* scope of <home>/.worklog/slack-sender/ (its own
 git root), never user scope. Jira jobs are written for the `mcp-atlassian` server. The database MCP is whichever
@@ -80,8 +83,9 @@ def environment(cfg=None):
     git = (cfg or {}).get("paths", {}).get("git") or shutil.which("git") or "git"
     ok, d = _version_of([git, "--version"], purpose="git-probe")
     rows.append({"name": "git", "ok": ok, "detail": d if ok else "git not found: %s" % d})
-    rows.append({"name": "windows", "ok": os.name == "nt", "detail": "Windows" if os.name == "nt" else
-                 "not Windows: the scheduled task is Windows-only"})
+    from . import scheduler
+    label = scheduler.method_label(cfg)
+    rows.append({"name": "os", "ok": not label.startswith("Linux, but"), "detail": label})
     from . import extract
     exe = _claude_exe(cfg)
     if exe:
@@ -98,7 +102,8 @@ def environment(cfg=None):
     if py:
         ok, d = _version_of([py, "-3", "--version"])
     else:
-        ok, d = False, "`py` launcher not on PATH (the plugin's hooks run `py -3`)"
+        ok, d = False, "`py` launcher not on PATH (the plugin's hooks run `py -3`%s)" % (
+            "" if os.name == "nt" else "; on macOS and Linux they need the bin/cg-hook launcher, not switched yet")
     rows.append({"name": "py -3", "ok": ok, "detail": d})
     return rows
 
@@ -410,8 +415,8 @@ def block_installed():
 
 
 def installed(cfg=None):
-    from . import install, runtime
-    return {"runtime": runtime.status(), "task": install.task_status(), "skill": skill_installed(),
+    from . import runtime, scheduler
+    return {"runtime": runtime.status(), "task": scheduler.status(), "skill": skill_installed(),
             "claude_md_block": block_installed()}
 
 
@@ -648,8 +653,8 @@ def apply(home, prefixes=(), repos=(), bruno=(), task=True, github_remote=None, 
             step("runtime", False, "runtime install failed: %s" % e)
 
         if task:
-            from . import install
-            t = install.register_task(common.load_config())
+            from . import scheduler
+            t = scheduler.register(common.load_config())
             step("task", t["ok"], t["detail"])
         else:
             step("task", True, "skipped (--no-task)")
@@ -836,6 +841,11 @@ def main(argv):
     if cmd == "slack-user":
         pos = [a for a in rest if not a.startswith("--")]
         return slack_user(pos[0] if pos else None)
+    if cmd == "scheduler":
+        from . import scheduler
+        res = scheduler.repair(common.load_config()) if "--repair" in rest else scheduler.status(common.load_config())
+        print(json.dumps(res, indent=1) if as_json else res["detail"])
+        return 0 if res.get("ok", res.get("installed")) else 1
     if cmd == "use-database":
         pos = [a for a in rest if not a.startswith("--")]
         if not pos:

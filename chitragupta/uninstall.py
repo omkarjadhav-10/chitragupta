@@ -23,7 +23,8 @@ from .safety import paths
 def run():
     out = []
     home = common.home()
-    out += install.unregister_task()
+    from . import scheduler
+    out += scheduler.unregister()
     out += install.remove_shortcuts()
 
     rt = plugin.runtime_dir()

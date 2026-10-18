@@ -1,5 +1,6 @@
-"""Windows integration that setup reuses: the `Chitragupta` scheduled task (and its Startup-folder fallback),
-plus settings.json hook helpers for running the engine without the plugin (development and the e2e self-test).
+"""Windows integration that setup reuses: the `Chitragupta` scheduled task and its Startup-folder fallback (the
+Windows backend of scheduler.py), plus settings.json hook helpers for running the engine without the plugin
+(development and the e2e self-test).
 
     python -m chitragupta install --task        (re)register the scheduled task (or the Startup fallback)
     python -m chitragupta install --task-xml    print the task XML, change nothing
@@ -227,22 +228,33 @@ def unregister_task():
     return out
 
 
-def task_status():
-    """-> {installed, method: task|startup|none, status, last_result, last_run, next_run, detail}"""
-    res = {"installed": False, "method": "none", "status": "", "last_result": "", "last_run": "", "next_run": ""}
+def _cmdline_key(s):
+    return re.sub(r"\s+", " ", (s or "").replace('"', "")).strip().lower()
+
+
+def task_status(cfg=None):
+    """-> {installed, method: task|startup|none, current, status, last_result, last_run, next_run, detail}
+    `current`: the task runs what task_action() gives now (None when unknown)."""
+    res = {"installed": False, "method": "none", "current": None, "status": "", "last_result": "", "last_run": "",
+           "next_run": ""}
     if _scheduler():
         rc, so, se = _run(["schtasks", "/query", "/tn", TASK_NAME, "/fo", "LIST", "/v"], timeout=30)
         if rc == 0:
             res.update(installed=True, method="task")
             for key, field in (("status", "Status"), ("last_result", "Last Result"), ("last_run", "Last Run Time"),
-                               ("next_run", "Next Run Time")):
+                               ("next_run", "Next Run Time"), ("task_to_run", "Task To Run")):
                 m = re.search(r"^%s:\s*(.*)$" % re.escape(field), so, re.M)
                 if m:
                     res[key] = m.group(1).strip()
+            if res.get("task_to_run"):
+                exe, arguments = task_action(cfg)
+                res["current"] = _cmdline_key(res["task_to_run"]) == _cmdline_key(exe + " " + arguments)
     if not res["installed"] and os.path.exists(startup_launcher_path()):
         res.update(installed=True, method="startup")
     if res["method"] == "task":
-        res["detail"] = "task %s: %s, last result %s" % (TASK_NAME, res["status"] or "?", res["last_result"] or "?")
+        res["detail"] = "task %s: %s, last result %s%s" % (TASK_NAME, res["status"] or "?", res["last_result"] or "?",
+                                                          " (runs an older command: repair)" if res["current"] is False
+                                                          else "")
     elif res["method"] == "startup":
         res["detail"] = "Startup-folder launcher %s (Task Scheduler unavailable)" % startup_launcher_path()
     else:

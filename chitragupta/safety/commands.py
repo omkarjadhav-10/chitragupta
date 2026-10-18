@@ -11,6 +11,9 @@ before anything starts. Anything not listed is blocked, logged to security.log a
   claude     `claude --version`, `claude mcp list`, and `claude -p` calls built by safety.claude (checked again here)
   self       this Python running Chitragupta's own launcher (maintenance, dashboard)
   task       schtasks for the `Chitragupta` task only
+  launchd    launchctl print / bootout / bootstrap for Chitragupta's own LaunchAgent only (macOS)
+  systemd    systemctl --user for Chitragupta's own units only (Linux)
+  cron       crontab -l, and crontab - with a table whose other lines are exactly the current ones (Linux)
   probe      py -3 --version
 """
 import json
@@ -436,6 +439,60 @@ def _task_reason(argv):
     return "schtasks %s is not allowed" % " ".join(argv[1:2])
 
 
+def _launchd_reason(argv):
+    """launchctl only for the LaunchAgent scheduler.py writes: print / bootout gui/<uid>/<label>, bootstrap gui/<uid>
+    <its plist>."""
+    from .. import scheduler
+    from .paths import allowed
+    a, svc, dom = argv[1:], "gui/%s/%s" % (scheduler.uid(), scheduler.LABEL), "gui/%s" % scheduler.uid()
+    if len(a) == 2 and a[0] in ("print", "bootout") and a[1] == svc:
+        return None
+    if len(a) == 3 and a[0] == "bootstrap" and a[1] == dom and _norm(a[2]) == _norm(scheduler.plist_path()):
+        return None if allowed(a[2]) is None else "LaunchAgent outside the write roots"
+    return "launchctl only for the %s LaunchAgent" % scheduler.LABEL
+
+
+def _systemd_reason(argv):
+    """systemctl --user only for Chitragupta's units (and daemon-reload after writing them); never system units."""
+    from .. import scheduler
+    a = argv[1:]
+    if a[:1] != ["--user"]:
+        return "systemctl only with --user"
+    a = a[1:]
+    if a == ["daemon-reload"]:
+        return None
+    if len(a) == 2 and a[0] in ("enable", "start", "stop", "disable", "is-enabled", "is-active", "status") and \
+            a[1] in scheduler.UNITS:
+        return None
+    return "systemctl --user only for %s" % ", ".join(scheduler.UNITS)
+
+
+def _cron_reason(argv):
+    a = argv[1:]
+    if a in (["-l"], ["-"]):
+        return None
+    return "crontab: only -l, and - for Chitragupta's own line"
+
+
+def cron_input_reason(table):
+    """`crontab -` replaces the whole table: allowed only when every line that isn't Chitragupta's is exactly the
+    current table's (read here, from crontab -l) and at most one marked line remains."""
+    from .. import scheduler
+    try:
+        p = subprocess.run(["crontab", "-l"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=30, env=_env(None))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "crontab -l failed before a change: %s" % e
+    if p.returncode != 0 and "no crontab" not in ((p.stderr or "") + (p.stdout or "")).lower():
+        return "crontab -l failed before a change"
+    current = p.stdout if p.returncode == 0 else ""
+    if scheduler.others(table or "") != scheduler.others(current):
+        return "the new crontab changes lines that aren't Chitragupta's"
+    if sum(1 for ln in (table or "").splitlines() if scheduler.is_ours(ln)) > 1:
+        return "more than one Chitragupta crontab line"
+    return None
+
+
 def _probe_reason(argv):
     e, a = exe_name(argv[0]), argv[1:]
     if (e in ("git", "claude") and a == ["--version"]) or (e == "py" and a == ["-3", "--version"]):
@@ -481,6 +538,12 @@ def reason(argv, purpose, cwd=None, cfg=None):
         return _task_reason(argv) if e == "schtasks" else "task: only schtasks"
     if purpose == "probe":
         return _probe_reason(argv)
+    if purpose == "launchd":
+        return _launchd_reason(argv) if e == "launchctl" else "launchd: only launchctl"
+    if purpose == "systemd":
+        return _systemd_reason(argv) if e == "systemctl" else "systemd: only systemctl"
+    if purpose == "cron":
+        return _cron_reason(argv) if e == "crontab" else "cron: only crontab"
     return "unknown purpose %r" % purpose
 
 
@@ -511,6 +574,10 @@ def _env(env_extra):
 def run(argv, purpose, cwd=None, input_text=None, timeout=120, env_extra=None, cfg=None):
     """Check, then run hidden, never through a shell. Returns (rc, stdout, stderr). Raises Blocked."""
     check(argv, purpose, cwd, cfg)
+    if purpose == "cron" and list(argv[1:]) == ["-"]:
+        why = cron_input_reason(input_text)
+        if why:
+            block(LAYER, why, "crontab -", purpose, _caller())
     if purpose == "git-work":
         env_extra = dict(GIT_ENV, **(env_extra or {}))
     try:

@@ -65,6 +65,12 @@ def roots():
         out += [("file", os.path.join(d, install.SHORTCUT_FILE)) for d in install.shortcut_dirs(desktop=True)]
     except Exception:  # noqa: BLE001
         pass
+    try:  # macOS / Linux: the scheduler's own LaunchAgent and systemd user units, nothing else in those folders
+        from .. import scheduler
+        out += [("file", p) for p in scheduler.own_files()]
+        out += [("mkdir", d) for d in (scheduler.launch_agents_dir(), scheduler.systemd_user_dir())]
+    except Exception:  # noqa: BLE001
+        pass
     bd = _backup_dir()
     if bd:
         out.append(("pattern", bd))
@@ -108,7 +114,7 @@ def _syntax(raw):
 
 
 def allowed(path, op="write"):
-    """None when `path` may be changed by `op` (write | delete), else the reason."""
+    """None when `path` may be changed by `op` (write | delete | mkdir), else the reason."""
     raw = os.fspath(path) if path is not None else ""
     bad = _syntax(raw)
     if bad:
@@ -125,6 +131,8 @@ def allowed(path, op="write"):
             return None
         if kind == "delete" and op == "delete" and real.startswith(rr.rstrip(os.sep) + os.sep):
             return None
+        if kind == "mkdir" and op == "mkdir" and (real == rr or rr.startswith(real.rstrip(os.sep) + os.sep)):
+            return None  # create that folder (and its parents) only; nothing else is written there
     return "outside Chitragupta's write roots"
 
 
@@ -140,7 +148,8 @@ def check(path, op="write", caller=""):
 
 def makedirs(p, caller=""):
     if p and not os.path.isdir(p):
-        check(p, caller=caller)
+        if allowed(p, "mkdir") is not None:
+            check(p, caller=caller)
         os.makedirs(p, exist_ok=True)
 
 

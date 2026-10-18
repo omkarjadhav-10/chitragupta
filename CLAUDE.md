@@ -53,7 +53,7 @@ Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude C
 
 - files in the data home and in `%USERPROFILE%\.chitragupta\`
 - `~/.claude/skills/chitragupta/` and the `chitragupta` block in `~/.claude/CLAUDE.md` (plus its one backup, `CLAUDE.md.chitragupta.bak`)
-- the `Chitragupta` scheduled task (setup and doctor repair only); when Task Scheduler refuses it, the one hidden launcher `Chitragupta.vbs` in your Startup folder
+- Setup, doctor and uninstall may create, repair or remove Chitragupta's own scheduled job only: on Windows the `Chitragupta` task (when Task Scheduler refuses it, the one hidden launcher `Chitragupta.vbs` in your Startup folder), on macOS the LaunchAgent `dev.chitragupta.tick` in `~/Library/LaunchAgents/`, on Linux the user units `chitragupta.service`/`chitragupta.timer` in `~/.config/systemd/user/`, or one crontab line marked `# chitragupta`. `launchctl`, `systemctl --user` and `crontab` may be run only for those. See `docs/scheduling.md`.
 - the dashboard's `Chitragupta.url` shortcut in the Start menu (and on the Desktop when you ask for it)
 - the nightly backup `worklog-kb-<day>.zip` in `storage.local_backup_dir`, when you set one (and pruning the older ones there)
 - deleting the large tool-result copies Claude Code saves under `~/.claude/projects/<sandbox folder>/` for Chitragupta's own MCP jobs, so QA data lives only in the knowledge base
