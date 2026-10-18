@@ -1,9 +1,9 @@
 // Today (and any past day at #/day/<date>): progress toward the day's target, the day lane by lane, delivery alerts
 // and tonight's Jira entries with a copy button per field.
-import { useEffect, useMemo } from '/vendor/hooks.module.js';
+import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtMin, clock, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay } from '../lib/core.js';
-import { Icon, Status, CopyButton, Empty, Load, PageHead, TicketLink, Scroll } from '../lib/ui.js';
+import { useApi, fmtMin, clock, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction } from '../lib/core.js';
+import { Icon, Status, CopyButton, Empty, Load, PageHead, TicketLink, Scroll, Dialog } from '../lib/ui.js';
 import { Desk, pageKeys, paletteOpen } from '../lib/shell.js';
 
 const SAVED_WORD = { sent: 'Sent to Slack', nudged: 'Reminder sent', failed: 'Send failed', composed: 'Composed, not sent yet', none: 'Nothing to send' };
@@ -20,6 +20,10 @@ function hhmm(ts) { return ts && ts.length >= 16 ? ts.slice(11, 16) : ts || ''; 
 
 function Lanes({ lanes, commits, slots }) {
   const all = lanes.flatMap((l) => l.spans || []);
+  if (!all.length && lanes.some((l) => l.minutes > 0)) {  // totals in the day file, but no activity left to place them in the day
+    return html`<p class="muted small">The times of day aren't available for this day, only the totals.</p>
+      <ul class="other-list">${lanes.map((l) => html`<li key=${l.ticket || 'other'}><span>${l.ticket ? html`<${TicketLink} k=${l.ticket} /> ${l.title || ''}` : 'Other work'}</span><span>${fmtMin(l.minutes)}</span></li>`)}</ul>`;
+  }
   if (!all.length) return html`<${Empty} title="No time recorded for this day" icon="today">Work in a repo with Claude Code and it appears here within a few minutes.</${Empty}>`;
   let lo = Math.min(...all.map((s) => mins(hhmm(s[0])))), hi = Math.max(...all.map((s) => mins(hhmm(s[1]))));
   lo = Math.min(8 * 60, Math.floor(lo / 60) * 60); hi = Math.max(18 * 60, Math.ceil(hi / 60) * 60);
@@ -45,7 +49,24 @@ function Lanes({ lanes, commits, slots }) {
     </table></${Scroll}></details>`;
 }
 
-function Entries({ d }) {
+// Refresh from Jira / Preview exactly: each is one read-only call within the daily MCP budget, run on request.
+function PreviewButtons({ d, pv, onDone }) {
+  const [busy, setBusy] = useState('');
+  if (!d.preview_buttons || pv.kind !== 'message' || !(d.jira_on || pv.pending_condense)) return null;
+  const run = (name, done) => {
+    setBusy(name);
+    runAction(name, { day: d.day }).then((r) => { toast(r.ok ? done(r) : 'Not run: ' + r.skipped + '.', r.ok ? 'ok' : 'info'); onDone(); },
+      (e) => toast(e.message, 'bad')).finally(() => setBusy(''));
+  };
+  return html`<div class="btnline" style="margin-top:12px">
+    ${d.jira_on ? html`<button type="button" class="btn" disabled=${!!busy} onClick=${() => run('worklog-refresh', () => 'Jira data refreshed')}
+      title="One read-only Jira call within the daily MCP budget"><${Icon} name="reset" size=${15} />${busy === 'worklog-refresh' ? 'Reading Jira…' : 'Refresh from Jira'}</button>` : null}
+    ${pv.pending_condense ? html`<button type="button" class="btn" disabled=${!!busy} onClick=${() => run('worklog-exact', (r) => r.model_calls ? 'Descriptions condensed as at 20:00' : 'Already exact')}
+      title="One condensing call within the daily MCP budget; the 20:00 message reuses its lines"><${Icon} name="check" size=${15} />${busy === 'worklog-exact' ? 'Condensing…' : 'Preview exactly'}</button>` : null}
+    <span class="muted small">One call per press, within the daily MCP budget.</span></div>`;
+}
+
+function Entries({ d, onReload }) {
   const saved = d.worklog_saved, pv = d.worklog_preview || {};
   const useSaved = saved && saved.entries && saved.entries.length;
   const entries = useSaved ? saved.entries : (pv.entries || []);
@@ -53,7 +74,7 @@ function Entries({ d }) {
   const total = entries.reduce((a, e) => a + (e.minutes || 0), 0);
   let state;
   if (useSaved) state = html`<${Status} kind=${saved.status === 'sent' || saved.status === 'nudged' ? 'ok' : saved.status === 'failed' ? 'bad' : 'info'}>${SAVED_WORD[saved.status] || saved.status}${saved.sent_at ? ' at ' + fmtTs(saved.sent_at) : ''}</${Status}>`;
-  else if (pv.kind === 'message') state = html`<${Status} kind="wait">Preview · composed at ${pv.send_at || '20:00'}</${Status}>`;
+  else if (pv.kind === 'message') state = html`<${Status} kind="wait">Preview · sends at ${pv.send_at || '20:00'}</${Status}>`;
   else state = null;
   let body;
   if (!entries.length) {
@@ -66,13 +87,15 @@ function Entries({ d }) {
         <div class="fld"><span class="lab">Start</span><div class="val"><span>${e.start}</span><${CopyButton} text=${e.start} quiet what=${'start ' + what} /></div></div>
         <div class="fld"><span class="lab">Duration</span><div class="val"><span>${e.duration}</span><${CopyButton} text=${e.duration} quiet what=${'duration ' + what} /></div></div>
         <div class="fld desc"><span class="lab"><${TicketLink} k=${e.ticket} />${e.manual ? ' · logged by hand' : ''} · description</span>
-          <div class="val txt"><span>${e.description}</span><${CopyButton} text=${e.description} quiet what=${'description ' + what} /></div></div></div>`;
+          <div class="val txt"><span>${e.description}${!useSaved && e.pending_condense ? html` <span class="chip small" title="This line is shortened by the model when the message is composed at 20:00">condensed at ${pv.send_at || '20:00'}</span>` : null}</span><${CopyButton} text=${e.description} quiet what=${'description ' + what} /></div></div></div>`;
     })}</div>
-    <div class="entry-foot"><span class="muted small">${useSaved ? 'Version ' + (saved.version || 1) + '. ' : 'Descriptions are the recorded lines, before the evening condensing. '}Copy each value into Jira; nothing is sent from this page.</span>
+    <div class="entry-foot"><span class="muted small">${useSaved ? 'Version ' + (saved.version || 1) + '. '
+      : 'The message the sender would send now' + (pv.facts_as_of ? ' · ' + pv.facts_as_of : ' · no Jira data yet, so time already in Jira isn\'t subtracted') + (pv.pending_condense ? ' · marked lines are condensed at ' + (pv.send_at || '20:00') : '') + '. '}Copy each value into Jira; nothing is sent from this page.</span>
       ${text ? html`<${CopyButton} text=${text} label="Copy all" what="the whole Jira message" primary kbd="c" />` : null}</div>
     ${text ? html`<details class="more"><summary>Show the full message</summary><pre tabindex="0">${text}</pre></details>` : null}`;
   }
-  body = html`${body}<${SendHistory} saved=${saved} />`;
+  if (!useSaved) body = html`${body}<${PreviewButtons} d=${d} pv=${pv} onDone=${onReload} />`;
+  body = html`${body}<${SendHistory} saved=${saved} day=${d.day} />`;
   return html`<section class="sec" aria-labelledby="sec-jira"><div class="sec-head"><h2 id="sec-jira">${d.is_today === false ? 'Jira entries' : "Tonight's Jira entries"}</h2>
     <p class="sub">${entries.length ? fmtMin(total) + ' in ' + plural(entries.length, 'entry', 'entries') : ''}${pv.target ? ' · target ' + fmtMin(pv.target) : ''}</p><span class="grow"></span>${state}</div>${body}</section>`;
 }
@@ -84,14 +107,34 @@ function DayEvents({ events }) {
       ${e.repo ? html` <span class="muted">(${e.repo})</span>` : null}</span><span class="muted small">${e.kind === 'pr' ? 'PR' : 'branch'}</span></li>`)}</ul></section>`;
 }
 
-function SendHistory({ saved }) {
+const STATE_WORD = { not_connected: 'Slack not connected', off: 'Slack switched off' };
+function rid() { try { return crypto.randomUUID(); } catch (e) { return Date.now().toString(36) + Math.random().toString(36).slice(2); } }
+
+function SendAgain({ day }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [id, setId] = useState('');
+  const send = () => {
+    setBusy(true);
+    runAction('worklog-resend', { day, request_id: id }).then((r) => { toast(r.duplicate ? 'Already asked; it goes out once' : 'Queued: the next background run sends it', 'ok'); setOpen(false); },
+      (e) => toast(e.message, 'bad')).finally(() => setBusy(false));
+  };
+  return html`<button type="button" class="btn" onClick=${() => { setId(rid()); setOpen(true); }}><${Icon} name="chat" size=${15} />Send again</button>
+    <${Dialog} open=${open} title="Send this day's message again?" onClose=${() => setOpen(false)}>
+      <p>The next background run (within a few minutes) composes ${fmtDay(day)} again and sends it to you on Slack as a new version. Nothing goes to Jira.</p>
+      <div class="pagehead-act" style="margin-top:16px;justify-content:flex-end"><button type="button" class="btn" onClick=${() => setOpen(false)}>Cancel</button>
+        <button type="button" class="btn primary" disabled=${busy} onClick=${send}>${busy ? 'Queuing…' : 'Send again'}</button></div></${Dialog}>`;
+}
+
+function SendHistory({ saved, day }) {
   const h = (saved && saved.history) || [];
   if (!h.length) return null;
-  return html`<details class="more" style="margin-top:12px"><summary>Send history (${plural(h.length, 'version')})</summary>
+  return html`<div class="btnline" style="margin-top:12px"><${SendAgain} day=${day} /></div>
+    <details class="more" style="margin-top:12px"><summary>Send history (${plural(h.length, 'version')})</summary>
     <${Scroll} label="Send history"><table><caption class="sr">Every version of this day's message</caption>
       <thead><tr><th scope="col">Version</th><th scope="col">When</th><th scope="col">Why</th><th scope="col">Slack</th></tr></thead>
       <tbody>${h.map((x) => html`<tr key=${x.v}><td>${x.v}</td><td class="nowrap">${fmtTs(x.at)}</td><td>${x.why || x.kind || 'first'}</td>
-        <td>${x.sent ? html`<${Status} kind="ok" quiet>Sent</${Status}>` : x.error ? html`<${Status} kind="bad" quiet>${x.error}</${Status}>` : html`<${Status} kind="off" quiet>Not sent</${Status}>`}</td></tr>`)}</tbody>
+        <td>${x.sent ? html`<${Status} kind="ok" quiet>Sent</${Status}>` : x.error ? html`<${Status} kind="bad" quiet>${x.error}</${Status}>` : html`<${Status} kind="off" quiet>${STATE_WORD[x.state] || 'Not sent'}</${Status}>`}</td></tr>`)}</tbody>
     </table></${Scroll}></details>`;
 }
 
@@ -171,7 +214,7 @@ export function TodayPage({ route }) {
       <section class="sec" aria-labelledby="sec-day"><div class="sec-head"><h2 id="sec-day">The day, ticket by ticket</h2>
         <p class="sub">${fmtMin(d.total_minutes)} tracked${d.other && d.other.length ? ', ' + fmtMin(d.other.reduce((a, o) => a + o.minutes, 0)) + ' without a ticket' : ''}</p></div>
         <${Lanes} lanes=${lanes} commits=${d.commit_list || []} slots=${slots} /></section>
-      <${Entries} d=${Object.assign({ is_today: isToday }, d)} />`}
+      <${Entries} d=${Object.assign({ is_today: isToday }, d)} onReload=${res.reload} />`}
       <${DayEvents} events=${d.branch_events} />
       ${d.other && d.other.length ? html`<section class="sec" aria-labelledby="sec-other"><div class="sec-head"><h2 id="sec-other">Other work</h2><p class="sub">Repos and branches with no ticket</p></div>
         <ul class="other-list">${d.other.map((o) => html`<li key=${o.group}><span>${o.group}</span><span>${fmtMin(o.minutes)}</span></li>`)}</ul></section>` : null}

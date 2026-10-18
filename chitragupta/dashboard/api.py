@@ -15,6 +15,7 @@ import re
 import threading
 
 from .. import common
+from .. import configstore
 
 TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
@@ -383,7 +384,8 @@ def saved_worklog(day):
             "last_error": sh.get("last_error"), "version": v.get("v"), "text": v.get("text") or "",
             "target": sh.get("target"), "entries": [_entry(e) for e in sh.get("entries") or []],
             "history": [{"v": x.get("v"), "at": x.get("at"), "kind": x.get("kind"), "why": x.get("why") or "",
-                         "sent": bool((x.get("slack") or {}).get("ok")), "error": (x.get("slack") or {}).get("error") or ""}
+                         "sent": bool((x.get("slack") or {}).get("ok")), "error": (x.get("slack") or {}).get("error") or "",
+                         "state": "sent" if (x.get("slack") or {}).get("ok") else (x.get("slack") or {}).get("state") or ""}
                         for x in vs]}
 
 
@@ -401,36 +403,15 @@ def worklog_preview(day, cfg):
 
 
 def _preview(day, cfg):
-    """(preview, activity blocks): the blocks are the ones the preview was composed from ([] on failure), so the
-    day view draws its lanes without building a second Agent."""
-    bl = []
+    """(preview, activity blocks): the message the sender would send now, from the sender's own builder
+    (jiraworklog.preview: the cached Jira facts and condensed lines, no Jira or model call, nothing written), and the
+    blocks it was built from, so the day view draws its lanes without building a second Agent."""
     try:
-        from .. import agent as agentmod
         from .. import jiraworklog
-        from .. import timesheet as T
-        from ..redact import redact
-        a = agentmod.Agent()
-        j = a.jwl
-        now = common.now()
-        today = common.workday(now, a.cfg)
-        until = now if day == today else None  # a past day is composed whole
-        cal = jiraworklog.load_cal()
-        bl = j.blocks(day, until)
-        manual = j.manual_for(day, cal)
-        res = T.compose(day, today, bl, manual, cal, j.ts, describe=lambda es: j.describe(es, condense=False, facts=None))
-        out = {"kind": res.get("kind"), "reason": res.get("reason"), "note": res.get("note") or "",
-               "target": res.get("target"), "tracked": res.get("tracked") or {}, "day_kind": res.get("day_kind")}
-        text = res.get("text") or ""
-        out["text"] = redact(text, mode="public") if res.get("kind") == "message" else text
-        out["entries"] = [_entry(e) for e in res.get("entries") or []]
-        if res.get("kind") == "message":  # descriptions get the same public masking as the message
-            for e in out["entries"]:
-                e["description"] = redact(e["description"], mode="public")
-        out["send_at"] = j.ts.get("send_at")
-        return out, bl
+        out = jiraworklog.preview(day, with_blocks=True)
+        return out, out.pop("blocks", None) or []
     except Exception as e:  # noqa: BLE001
-        return ({"kind": "error", "reason": "preview unavailable: %s" % (str(e) or e.__class__.__name__)[:200], "entries": []},
-                bl)
+        return {"kind": "error", "reason": "preview unavailable: %s" % (str(e) or e.__class__.__name__)[:200], "entries": []}, []
 
 
 def _lanes(blocks):
@@ -505,7 +486,9 @@ def _day_view(day, cfg, preview=True):
            "summary": dd.get("summary") or "", "tickets": rows, "other": other,
            "total_minutes": sum(r["minutes"] for r in rows) + sum(r["minutes"] for r in other),
            "commits": len(dd.get("commits") or []), "worklog_saved": saved,
-           "commit_list": _commit_list(dd), "sessions": _sessions(dd)}
+           "commit_list": _commit_list(dd), "sessions": _sessions(dd),
+           "preview_buttons": configstore.on(cfg, "dashboard.preview_buttons"),
+           "jira_on": bool(((cfg.get("mcp") or {}).get("jira") or {}).get("enabled"))}
     blocks, pv = [], {}
     if preview:
         pv, blocks = _preview(day, cfg)

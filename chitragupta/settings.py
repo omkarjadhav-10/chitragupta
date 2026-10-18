@@ -105,6 +105,8 @@ STATIC = [
        "int", "data", min=7, max=365),
     _i("reminders.mcp", "Weekly connect reminder", "A line at session start when Slack or Jira isn't connected.", "bool",
        "data"),
+    _i("dashboard.preview_buttons", "Preview buttons", "Show Refresh from Jira and Preview exactly on Today. Each "
+       "press is one read-only call within the daily MCP budget.", "bool", "dashboard", default_value=True),
     _i("dashboard.autostart", "Start the dashboard automatically", "From the scheduled task and session start.", "bool",
        "dashboard"),
     # shown, never editable here
