@@ -37,7 +37,7 @@ Two layers make this hold:
 - Setup, doctor and uninstall may create, repair or remove Chitragupta's own scheduled job only: on Windows the `Chitragupta` task (when Task Scheduler refuses it, the one hidden launcher `Chitragupta.vbs` in your Startup folder), on macOS the LaunchAgent `dev.chitragupta.tick` in `~/Library/LaunchAgents/`, on Linux the user units `chitragupta.service`/`chitragupta.timer` in `~/.config/systemd/user/`, or one crontab line marked `# chitragupta`. `launchctl`, `systemctl --user` and `crontab` may be run only for those. (See [scheduling.md](scheduling.md).)
 - the dashboard's `Chitragupta.url` shortcut in the Start menu (and on the Desktop when you ask for it)
 - the nightly backup `worklog-kb-<day>.zip` in `storage.local_backup_dir`, when you set one (and pruning the older ones there)
-- deleting the large tool-result copies Claude Code saves under `~/.claude/projects/<sandbox folder>/` for Chitragupta's own MCP jobs, so QA data lives only in the knowledge base
+- deleting the large tool-result copies Claude Code saves under `~/.claude/projects/<sandbox folder>/` for Chitragupta's own MCP jobs, so QA data lives only in the knowledge base (when the path guard refuses a delete, the copy stays, the refusal is logged once and the job still uses the text it read)
 - commit and push of daily files in the data-home repo
 - the Slack DM to my own ID
 - Sharing writes redacted bundles to my configured share target, only when I ask. A bundle that fails the deny-list or secret scan is not written. If the target is a team Git repo, Chitragupta commits and pushes only files inside its share folder, never force-pushes and never rewrites history. Sharing never posts to Slack.

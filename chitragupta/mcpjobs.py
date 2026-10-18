@@ -133,10 +133,18 @@ def _persisted(content):
     p = m.group(1)
     try:
         txt = common.read_text(p)
-        paths.delete(p, caller="mcpjobs.persisted")
-        return txt
     except OSError:
         return None
+    try:
+        paths.delete(p, caller="mcpjobs.persisted")
+    except OSError as e:  # a refused delete (safety.Blocked is a PermissionError) must not lose the text already read
+        if not _DELETE_REFUSED:
+            _DELETE_REFUSED.append(p)
+            common.log("mcp", "saved tool result kept (delete refused: %s): %s" % (str(e)[:160], p))
+    return txt
+
+
+_DELETE_REFUSED = []  # the refusal is logged once per process
 
 
 def unwrap(x):
