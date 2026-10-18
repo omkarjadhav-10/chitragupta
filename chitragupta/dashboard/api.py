@@ -925,7 +925,9 @@ def mcp_live():
         if isinstance(r, dict):
             servers.append({"role": role, "server": r.get("server") or "", "status": r.get("status") or "unknown",
                             "detail": _cut(r.get("detail"), 400)})
-    return {"checked_at": st.get("checked") or st.get("checked_at"), "probed": bool(st.get("probed")), "servers": servers}
+    run = read_json_cached(common.wl("cache", "mcp-check.json")) or {}
+    return {"checked_at": st.get("checked") or st.get("checked_at"), "probed": bool(st.get("probed")), "servers": servers,
+            "seconds": run.get("seconds"), "check_error": run.get("error") or "", "check_at": run.get("at")}
 
 
 def _slack(h, cfg):

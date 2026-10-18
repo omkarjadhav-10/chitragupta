@@ -5,6 +5,7 @@ import { html } from '../lib/html.js';
 import { useApi, fmtTs, fmtDay, ago, plural } from '../lib/core.js';
 import { Icon, Status, CopyButton, Empty, Load, PageHead, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
+import { McpStatusPanel } from '../lib/mcpstatus.js';
 
 function Card({ title, status, big, lines, id }) {
   return html`<section class="card" aria-labelledby=${id}><h2 id=${id}>${title}${status}</h2>${big != null ? html`<div class="big">${big}</div>` : null}
@@ -80,16 +81,9 @@ export function HealthPage() {
       </div>
 
       <section class="sec" aria-labelledby="h-mcp"><div class="sec-head"><h2 id="h-mcp">MCP servers</h2>
-        <p class="sub">${mc.live && mc.live.checked_at ? 'Connection check from ' + fmtTs(mc.live.checked_at) + ' (claude mcp list, no model call)' : 'No connection check cached yet; /cg:doctor runs one'}</p></div>
-        <div class="grid">${(mc.configured || []).map((c) => {
-          const lv = live.find((x) => (x.name || x.server) === c.server);
-          const job = (mc.servers || []).find((x) => x.server === c.server);
-          const st = !c.enabled ? ['off', 'Switched off'] : lv ? (lv.status === 'connected' ? ['ok', 'Connected'] : /sign|auth/i.test(lv.status) ? ['warn', 'Signed out'] : ['bad', lv.status]) : ['off', 'Missing'];
-          return html`<section class="card" key=${c.role} aria-labelledby=${'mc-' + c.role}><h2 id=${'mc-' + c.role}>${c.role === 'database' ? 'Database MCP' : 'Jira'}<${Status} kind=${st[0]}>${st[1]}</${Status}></h2>
-            <dl class="kv"><dt>Server</dt><dd class="mono">${c.server || '—'}</dd>
-              <dt>Last job</dt><dd>${job ? job.job + ', ' + fmtTs(job.at) + ' (' + job.status + ')' : 'none yet'}</dd></dl>
-            ${st[0] === 'warn' ? html`<p>Sign in again: run <code>/mcp</code> in Claude Code and pick this server.</p>` : null}</section>`;
-        })}
+        <p class="sub">Live status and what the last background job saw</p></div>
+        <${McpStatusPanel} mc=${mc} onChecked=${res.reload} headingLevel=${3} />
+        <div class="grid" style="margin-top:12px">
         <section class="card" aria-labelledby="mc-use"><h2 id="mc-use">Today's use${budgetHit ? html`<${Status} kind="warn">Budget reached</${Status}>` : html`<${Status} kind="ok">Within budget</${Status}>`}</h2>
           <div class="big">${mc.calls_today || 0}${mc.budget ? ' of ' + mc.budget : ''} jobs</div>
           <p>${(mc.tokens_in_today || 0).toLocaleString()} tokens in · ${(mc.tokens_out_today || 0).toLocaleString()} out${mc.cost_today ? ' · about $' + mc.cost_today : ''}</p>

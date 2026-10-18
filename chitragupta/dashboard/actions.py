@@ -34,8 +34,10 @@ def mcp_check(body):
     try:
         st = setup.mcp_status(common.load_config(), probe=True)
     except Exception as e:  # noqa: BLE001
+        common.write_json(common.wl("cache", "mcp-check.json"), {"at": common.now_iso(), "error": str(e)[:300]})
         record_action("mcp-check", False, str(e)[:200])
         return 502, {"error": "The check couldn't run: %s" % (str(e)[:200] or e.__class__.__name__)}
     took = round(time.monotonic() - t0, 1)
+    common.write_json(common.wl("cache", "mcp-check.json"), {"at": common.now_iso(), "seconds": took})
     record_action("mcp-check", True, "%.1f s" % took)
     return 200, {"ok": True, "seconds": took, "status": st}

@@ -216,6 +216,26 @@ class WriteProtectionTests(td.Base):
         self.assertIn("action:capture-pause", keys)
         self.assertIn("action:capture-resume", keys)
 
+    def test_live_mcp_check_is_doctors_check(self):
+        from chitragupta import setup
+        from chitragupta.dashboard import api
+        calls = []
+        real = setup.mcp_status
+
+        def fake(cfg, probe=False):
+            calls.append(probe)
+            return {"jira": {"status": "connected", "server": "mcp-atlassian"}, "checked": common.now_iso(), "probed": probe}
+        setup.mcp_status = fake
+        try:
+            st, out = self.write("/api/actions/mcp-check", {}, method="POST", token=self.token())
+        finally:
+            setup.mcp_status = real
+        self.assertEqual(st, 200, out)
+        self.assertEqual(calls, [True], "the same probe /cg:doctor runs")
+        self.assertIsNotNone(out["seconds"])
+        api._cache.clear()
+        self.assertIsNotNone(api.mcp_live() is None or api.mcp_live().get("seconds") is not None)
+
     def test_token_changes_per_server_start(self):
         from chitragupta.dashboard import server
         other, _ = server.start_in_thread(0)

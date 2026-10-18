@@ -6,6 +6,7 @@ import { html } from '../lib/html.js';
 import { useStore, useApi, write, toast, fmtTs } from '../lib/core.js';
 import { Icon, Status, PageHead, Dialog, Load, Empty, themeMode, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys, appearance } from '../lib/shell.js';
+import { McpStatusPanel } from '../lib/mcpstatus.js';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -127,6 +128,7 @@ function History({ rows, onUndo, busy }) {
 
 export function SettingsPage() {
   const res = useApi('/api/settings');
+  const st = useApi('/api/status');
   const [pending, setPending] = useState({});
   const [errors, setErrors] = useState({});
   const [review, setReview] = useState(false);
@@ -163,7 +165,7 @@ export function SettingsPage() {
     write('POST', '/api/settings/undo', {}).then(() => { toast('Undid the last change', 'ok'); res.reload(); },
       (e) => toast(e.message, 'bad')).finally(() => setBusy(false));
   };
-  const rail = d ? html`<h2>Groups</h2><ul class="rlist">${d.groups.concat([{ id: 'appearance', label: 'Appearance' }, { id: 'history', label: 'Change history' }]).map((g) => html`<li key=${g.id}>
+  const rail = d ? html`<h2>Groups</h2><ul class="rlist">${d.groups.concat([{ id: 'mcp', label: 'MCP status' }, { id: 'appearance', label: 'Appearance' }, { id: 'history', label: 'Change history' }]).map((g) => html`<li key=${g.id}>
     <a href=${'#g-' + g.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('g-' + g.id); if (el) { el.scrollIntoView({ block: 'start' }); el.querySelector('h2').focus(); } }}>
       <span class="sw" style=${{ background: g.items && g.items.some((it) => keys.indexOf(it.key) >= 0) ? 'var(--accent)' : 'var(--rule)' }}></span>
       <span class="k" style="font-weight:500">${g.label}</span><span class="m"></span></a></li>`)}</ul>` : null;
@@ -178,6 +180,8 @@ export function SettingsPage() {
         <h2 id=${'h-' + g.id} tabindex="-1">${g.label}</h2>
         ${g.items.map((it) => html`<${Item} key=${it.key} it=${it} value=${it.key in pending ? pending[it.key] : it.value}
           onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}</section>`)}
+      <section class="sec setgroup" id="g-mcp" aria-labelledby="h-mcp"><h2 id="h-mcp" tabindex="-1">MCP status</h2>
+        ${st.data ? html`<${McpStatusPanel} mc=${st.data.mcp || {}} onChecked=${st.reload} headingLevel=${3} />` : null}</section>
       <${Appearance} />
       <${History} rows=${d.history || []} onUndo=${undo} busy=${busy} />`}</${Load}>
     <${Dialog} open=${review} title="Review changes" onClose=${() => setReview(false)} wide>
