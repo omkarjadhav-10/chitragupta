@@ -121,6 +121,10 @@ class Isolated:
         # which wins over NO_TASK).
         os.environ["CHITRAGUPTA_NO_TASK"] = "1"
         os.environ["CHITRAGUPTA_STARTUP_DIR"] = os.path.join(self.user_dir, "startup")
+        # nor the real LaunchAgents / systemd user folders (macOS / Linux scheduler backends)
+        sched = tempfile.mkdtemp(prefix="cg-sched-")  # outside every write root, like the real folders
+        os.environ["CHITRAGUPTA_LAUNCH_AGENTS_DIR"] = os.path.join(sched, "LaunchAgents")
+        os.environ["CHITRAGUPTA_SYSTEMD_USER_DIR"] = os.path.join(sched, "systemd-user")
         clear_caches()
         self.forbidden = []
         self._patch_tripwires()

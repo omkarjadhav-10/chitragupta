@@ -31,7 +31,7 @@ Launcher: `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py"`
 
 !`py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup check --json`
 
-Summarise in a short list: requirements (Python 3.10+, git, Windows, Claude Code version, `py -3`) with anything failing first; the current data home if one is set; detected ticket prefixes, repos and Bruno collections; Slack / Jira / database / Git-host MCP status; what is already installed. If a requirement fails, say how to fix it and stop.
+Summarise in a short list: requirements (Python 3.10+, git, the OS and its scheduler backend, Claude Code version, `py -3`) with anything failing first; the current data home if one is set; detected ticket prefixes, repos and Bruno collections; Slack / Jira / database / Git-host MCP status; what is already installed. If a requirement fails, say how to fix it and stop.
 
 ## 2. Ask only what can't be detected
 
