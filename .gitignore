@@ -18,6 +18,7 @@ bruno/
 _drop/
 inbox.md
 *.jsonl
+!tests/fixtures/**/*.jsonl
 .env
 .env.*
 !.env.example
