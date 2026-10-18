@@ -47,6 +47,25 @@ export function api(path) {
     () => { throw new ApiError("The dashboard server isn't answering. Start it with /cg:dashboard.", 0); });
 }
 
+// Writes: JSON only, with the per-start token the server put in the page (see dashboard/writes.py).
+function pageToken() { const m = document.querySelector('meta[name="cg-token"]'); return m ? m.getAttribute('content') : ''; }
+export function write(method, path, body) {
+  if (EXPORT) return Promise.reject(new ApiError('An exported file is read-only', 0));
+  return fetch(path, {
+    method, cache: 'no-store', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Chitragupta-Token': pageToken() },
+    body: JSON.stringify(body || {}),
+  }).then((r) => r.json().catch(() => ({})).then((j) => {
+    if (!r.ok) {
+      const e = new ApiError(j.error || 'The dashboard answered ' + r.status, r.status);
+      e.fields = j.fields || null;
+      throw e;
+    }
+    return j;
+  }), () => { throw new ApiError("The dashboard server isn't answering. Start it with /cg:dashboard.", 0); });
+}
+export function runAction(name, body) { return write('POST', '/api/actions/' + name, body); }
+
 // ------------------------------------------------------------------ live updates (SSE, polling fallback)
 // One cursor for the whole page: it moves when any file the dashboard reads changes. Pages refetch when it moves.
 export const cursor = store(null);

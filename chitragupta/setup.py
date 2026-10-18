@@ -557,31 +557,20 @@ def merged_config(existing, home, prefixes=(), repos=(), bruno=(), github_remote
 
 def read_raw_config():
     """(cfg or None, error). Missing file -> ({}, None)."""
-    p = common.wl("config.json")
-    if not os.path.exists(p):
-        return {}, None
-    try:
-        with open(p, encoding="utf-8-sig") as f:
-            cfg = json.load(f)
-    except (OSError, ValueError) as e:
-        return None, "%s does not parse: %s" % (p, e)
-    if not isinstance(cfg, dict):
-        return None, "%s is not a JSON object" % p
-    return cfg, None
+    from . import configstore
+    return configstore.read_raw()
 
 
-def write_raw_config(cfg, before):
+def write_raw_config(cfg, before, source="setup"):
+    """Through the one config write path (lock, backup, history). None when nothing changed, else the backup path
+    or "new"."""
+    from . import configstore
     p = common.wl("config.json")
-    if before == cfg and os.path.exists(p):
-        return None
-    backup = None
-    if os.path.exists(p):
-        dest = common.wl("backups", "chitragupta-setup-" + time.strftime("%Y%m%d-%H%M%S"))
-        common.ensure_dir(dest)
-        backup = os.path.join(dest, "config.json")
-        sp.copy(p, backup)
-    common.write_json(p, cfg)
-    return backup or "new"
+    existed = os.path.exists(p)
+    res = configstore.write(cfg, before if existed else None, source)
+    if not res["changes"]:
+        return None if existed else "new"
+    return res["backup"] or "new"
 
 
 # --------------------------------------------------------------------------- apply
@@ -859,9 +848,8 @@ def main(argv):
         if not os.path.isfile(path):
             print("Chitragupta isn't set up yet (no %s)" % path, file=sys.stderr)
             return 1
-        cfg = common.read_json(path)
-        cfg.setdefault("reminders", {})["mcp"] = pos[0] == "on"
-        common.write_json(path, cfg)
+        from . import configstore
+        configstore.update({"reminders.mcp": pos[0] == "on"}, "setup")
         print("weekly reminder to connect Slack/Jira: %s" % pos[0])
         return 0
     print(__doc__)

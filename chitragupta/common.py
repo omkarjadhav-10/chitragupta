@@ -143,8 +143,16 @@ def load_config():
     return cfg
 
 
-def save_config(cfg):
-    write_json(wl("config.json"), cfg)
+def save_config(cfg, source="engine", base=None):
+    """Save config changes through the one config write path (configstore: lock, backup, history). With `base` (the
+    config as loaded) only the keys that changed since are written, onto the current file, so a change made
+    elsewhere in the meantime (the dashboard, setup) is never overwritten."""
+    from . import configstore
+    if base is None:
+        raw, _ = configstore.read_raw()
+        return configstore.write(cfg, raw, source)
+    diff = configstore.flat_diff(base, cfg)
+    return configstore.update({d["key"]: d["new"] for d in diff}, source) if diff else None
 
 
 # --------------------------------------------------------------------------- atomic I/O

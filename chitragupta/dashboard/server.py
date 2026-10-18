@@ -45,6 +45,8 @@ from .. import APP
 from .. import common
 from ..safety import paths
 from . import api
+from . import writes
+from . import actions  # noqa: F401 — registers the allowlisted actions
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -138,6 +140,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.cfg = cfg if cfg is not None else common.load_config()
         self.started_at = common.now_iso()
         self.token = secrets.token_urlsafe(24)
+        self.page_token = secrets.token_urlsafe(32)  # sent to the page in a <meta>; every write must echo it
+        self.limiter = writes.Limiter()
         self.home = common.home()
         self.stopping = threading.Event()  # set on shutdown: open event streams end within a poll
         self.streams = 0
@@ -256,6 +260,11 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(self.headers, "defects", None):  # e.g. a header line without a colon
                 self.send_error(400, "malformed headers")
                 return
+            if self.command in ("POST", "PATCH") and writes.is_write_path(urllib.parse.urlsplit(self.path).path):
+                self.close_connection = True
+                self.handle_write()
+                self.wfile.flush()
+                return
             if self.command not in ("GET", "HEAD"):
                 self._drain_body()  # closing with unread bytes makes Windows send RST instead of our 405
                 self._send(405, _json_bytes({"error": "method not allowed"}), "application/json; charset=utf-8",
@@ -333,6 +342,51 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
+    # ------------------------------------------------------------------ writes (see writes.py for every check)
+    def handle_write(self):
+        path = urllib.parse.urlsplit(self.path).path
+        name = path[len("/api/actions/"):] if path.startswith("/api/actions/") else path
+        read = False
+        try:
+            if not self.host_ok():
+                raise writes.WriteError(403, "forbidden host")
+            handler, cap = writes.route(self.command, path)
+            n = writes.check(self.headers, self.server.allowed_hosts(), self.server.page_token, self.server.limiter, cap)
+            data, read = (self.rfile.read(n) if n else b""), True
+            body = writes.parse(data)
+        except writes.WriteError as e:
+            if not read:  # an unread body is dropped (small ones only) so Windows answers instead of resetting
+                self._drain_body(limit=writes.DEFAULT_CAP)
+            log("write refused (%s %s): %d %s" % (self.command, name, e.status, e))
+            return self.send_json({"error": str(e)}, e.status)
+        try:
+            status, obj = handler(body)
+        except Exception as e:  # noqa: BLE001 — a failed write answers, it never takes the server down
+            log("write failed (%s): %s" % (name, traceback.format_exc()))
+            msg = "blocked by the safety layer: %s" % e if e.__class__.__name__ == "Blocked" else "it failed: %s" % e
+            return self.send_json({"error": "Nothing was changed; " + msg[:300]}, 500)
+        return self.send_json(obj, status)
+
+    def page(self):
+        """index.html with this server's write token in a <meta> tag (the page sends it back on every write)."""
+        try:
+            with open(PAGE, encoding="utf-8") as f:
+                html = f.read()
+        except OSError:
+            return self.send_json({"error": "not found"}, 404)
+        body = html.replace("<!-- cg:token -->", '<meta name="cg-token" content="%s">' % self.server.page_token, 1).encode("utf-8")
+        etag = '"%s"' % hashlib.sha1(body).hexdigest()[:20]
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            for k, v in SECURITY_HEADERS:
+                self.send_header(k, v)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        return self._send(200, body, "text/html; charset=utf-8", [("ETag", etag)], cache="no-cache")
+
     # ------------------------------------------------------------------ routes
     def dispatch(self):
         if not self.host_ok():
@@ -352,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
             return (qs.get(name) or [default])[0]
 
         if path in ("/", "/index.html"):
-            return self.send_file(PAGE, "text/html; charset=utf-8", "no-cache")
+            return self.page()
         if path.startswith("/app/"):
             p = static_map().get(path)
             if not p:
@@ -403,6 +457,9 @@ class Handler(BaseHTTPRequestHandler):
             from . import search
             types = [t for t in re.split(r"[,\s]+", q("type")) if t] or None
             return self.send_json(search.search(q("q"), types, _int(q("limit"), 40)))
+        if path == "/api/settings":
+            from .. import settings
+            return self.send_json(settings.describe())
         if path == "/api/setup":
             return self.send_json(api.setup())
         if path == "/api/tickets":

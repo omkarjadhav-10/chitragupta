@@ -49,7 +49,14 @@ The installed app window and the shortcuts only work on this machine: the server
 | `#/search?q=` | Everything at once: tickets, findings, queries, APIs, tables, artifacts and daily notes, grouped by type with the matching words marked. <kbd>↑</kbd> <kbd>↓</kbd> move through the results. |
 | `#/health` | Capture, background runs, the daily push, Slack, the scheduled task, **Safety** (enforced or not, and every action the safety layer blocked in the last 24 h and 7 days, from `security.log`; see [safety.md](safety.md)), each configured MCP server (connected, signed out, missing or switched off, from the last cached `claude mcp list`), today's MCP jobs and tokens against the budget, warnings and recent errors. *Copy diagnostics* copies all of it as text. |
 | `#/setup` | The `/cg:doctor` checks as a checklist, each with what to run to fix it |
-| `#/settings` | Appearance: theme, density and motion, saved in this browser |
+| `#/settings` | Every setting Chitragupta lets you change from here, grouped (capture, daily worklog & Slack, Jira, database MCP, branches & PRs, artifacts, push, models & budget, data, dashboard), plus the locked items shown read-only and Appearance (per browser). Edits collect into a review (now → after saving) before **Save changes**; the change history lists every change and **Undo last change** reverts the newest one from this page. |
+
+## Settings
+
+- **One write path.** A save goes through `chitragupta/configstore.py`, the same code `/cg:setup` and the engine use: a lock (so two writers can't interleave), a backup of `config.json` under `.worklogackups\`, an atomic write, and one history line per changed key in `%USERPROFILE%\.chitragupta\settings-history.jsonl` (values of secret-looking keys are written as "(hidden)"). The engine saves only the keys it changed itself, onto the current file, so it never overwrites a change you just made.
+- **One rulebook.** `chitragupta/settings.py` holds each setting's label, help, type and limits. The page checks as you type with the same rules, and the server checks again; anything not in the schema, or locked, is refused.
+- **Locked, shown only:** the safety rules, MCP tools and their read/write class, secrets, the data folder, the GitHub repo, the backup folder and the MCP server names. `/cg:setup` changes those.
+- **Undo** reverts the newest change made from this page, and refuses when any of its settings changed again since.
 
 ## Command palette
 
@@ -111,6 +118,10 @@ The page uses these endpoints. Every one is GET/HEAD and returns JSON unless not
 | `/api/timesheet.csv?period=` | CSV in long format (`period,ticket,title,minutes,hours`), UTF-8 with BOM. Values that look like spreadsheet formulas are escaped. |
 | `/api/status` | Health page data, including `mcp.live` (the last `claude mcp list` check that setup, doctor or maintenance cached; the dashboard never runs it) and `search` (index engine, size and build time) |
 | `/api/changes` | A cursor that changes when any file the page reads changes |
+| `/api/settings` | The settings schema with current values, grouped, plus the last 20 history lines |
+| `PATCH /api/settings` | `{"changes": {"dotted.key": value}}` → 200 `{"id", "changes"}`, or 422 `{"error", "fields": {key: message}}` with nothing saved |
+| `POST /api/settings/undo` | Reverts the newest change from the dashboard; 409 when there is none or it would overwrite a newer change |
+| `POST /api/actions/<name>` | `capture-pause`, `capture-resume`, `mcp-check` (the live `claude mcp list` check `/cg:doctor` runs; no model call) |
 
 ## Security model
 
@@ -118,7 +129,8 @@ The dashboard shows your worklog, so it is locked to your own browser on your ow
 
 - **Bound to `127.0.0.1` only**, with exclusive address use, so it is never reachable from the network.
 - **Host header check.** A request is answered only when its `Host` is exactly `127.0.0.1:<port>` or `localhost:<port>`. A missing Host is rejected. That blocks DNS-rebinding attacks. If an `Origin` header is present, it must match too.
-- **Read-only.** Only GET and HEAD are accepted; any other method gets 405. There is no endpoint that writes data.
+- **Reads are GET/HEAD.** Every other method gets 405, except on the few write routes below.
+- **Writes are an allowlist** (`chitragupta/dashboard/writes.py`): `PATCH /api/settings`, `POST /api/settings/undo` and `POST /api/actions/<name>` for the listed actions (pause/resume capture, the live MCP check). Each one must pass, in order: Host; an `Origin` that is this server (missing or `null` is refused); the `X-Chitragupta-Token` header carrying the random token minted when the server started (the page receives it in a `<meta>` tag, and other sites can't read the page); `Content-Type: application/json`; a `Content-Length` within the route's cap (16 KB); at most 30 writes a minute; a body that is a JSON object. Everything a write changes goes through the safety layer and is recorded in the settings history.
 - **No CORS.** Other sites can't read responses.
 - **Headers on every response, errors included:** a strict Content-Security-Policy, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cross-Origin-Resource-Policy: same-origin`.
 - **Scripts only from the server itself.** The Content-Security-Policy allows no inline script, no `eval`, no workers, no plugins and no external origins. Preact escapes every value it renders; the only raw HTML is the page's own Markdown renderer, which escapes its input first, and Mermaid's SVG (`securityLevel: strict`).
@@ -143,7 +155,6 @@ The same file comes from `/cg:ticket <KEY> --export [--mode shareable]`, which s
 
 ## Known gaps
 
-- **Read only for now.** Settings, marking leave and holidays, pausing capture, sending a test message and the Fix buttons on Setup arrive in the next update, together with the write protections they need. Until then use `/cg:setup`, `/cg:log` and `/cg:pause`.
 - **MCP status is the last cached check.** Health shows the last `claude mcp list` result that setup, doctor or maintenance (daily) cached, and what the last background job saw. `/cg:doctor` runs a fresh check.
 - **The Today preview is not the final message.** It isn't condensed, and time already in Jira isn't subtracted, so it can differ from what is sent at 20:00.
 - **The Markdown renderer is basic.** Links show as text.

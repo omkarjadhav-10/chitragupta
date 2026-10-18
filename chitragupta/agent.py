@@ -5,6 +5,7 @@
     agent render [--all]   re-render markdown from data/
     agent status           print health.json
 """
+import copy
 import datetime as _dt
 import json
 import os
@@ -162,6 +163,7 @@ class Agent:
     def __init__(self, force=False):
         self.force = force
         self.cfg = common.load_config()
+        self.cfg_base = copy.deepcopy(self.cfg)  # what changed since load is all a save writes (see save_config)
         self.state = common.read_json(common.wl("state.json"))
         self.health = common.read_json(common.wl("health.json"))
         self.store = Store()
@@ -936,7 +938,8 @@ class Agent:
             except Exception:
                 common.log("agent", "mcp jobs failed: " + traceback.format_exc())
         if self.cfg_dirty:
-            common.save_config(self.cfg)
+            common.save_config(self.cfg, base=self.cfg_base)
+            self.cfg_base = copy.deepcopy(self.cfg)
         self.store.save()
         self.update_health()
         changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets)
@@ -1119,7 +1122,7 @@ def cmd_worklog(cmd, args):
             if r.get("self_user_id") and r.get("send_tool"):
                 a.cfg.setdefault("jira_worklog", {}).setdefault("slack", {}).update(
                     self_user_id=r["self_user_id"], send_tool=r["send_tool"], mode=r["mode"], tools=r["tools"])
-                common.save_config(a.cfg)
+                common.save_config(a.cfg, base=a.cfg_base)
         elif cmd == "jira-card":
             for k in pos:
                 rec = mcpjobs.jira_card(k, a.cfg, a.health)

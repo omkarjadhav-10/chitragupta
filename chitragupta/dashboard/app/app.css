@@ -438,3 +438,25 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .top, nav.nav, .rail, .diagram-tools, .btn { display: none !important; }
   .desk { display: block; } .pane { padding: 0; }
 }
+
+/* ------------------------------------------------------------ Settings */
+.setgroup { max-width: 920px; }
+.setgroup > h2 { margin-bottom: var(--s2); }
+.setrow { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: var(--s4); padding: var(--s3) 0; border-top: 1px solid var(--rule); align-items: start; }
+.setrow.changed { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--s3); }
+.setlab label, .setlab > span { font-weight: 600; }
+.setlab p { margin: 2px 0 0; }
+.setctl { display: grid; gap: 6px; justify-items: start; min-width: 0; }
+.setctl input[type="number"], .setctl input[type="time"], .setctl select { min-width: 140px; }
+.setctl textarea { font: 13px var(--mono); width: 100%; min-height: 60px; color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong); border-radius: var(--r-control); padding: 6px 8px; }
+[aria-invalid="true"] { border-color: var(--bad) !important; }
+.field-err { display: flex; gap: 6px; align-items: center; color: var(--bad); font-size: var(--fs-s); margin: 0; }
+.locked { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); font-size: var(--fs-s); overflow-wrap: anywhere; }
+.daypick { display: flex; flex-wrap: wrap; gap: 2px 12px; border: 0; padding: 0; margin: 0; }
+.switch { display: inline-flex; align-items: center; gap: 8px; font: var(--fs-s) var(--sans); color: var(--ink); background: none; border: 0; padding: 2px 0; min-height: 28px; cursor: pointer; }
+.switch .knob { position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--rule-strong); transition: background var(--dur-1) var(--ease); }
+.switch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); transition: transform var(--dur-1) var(--ease); }
+.switch.on .knob { background: var(--accent); }
+.switch.on .knob::after { transform: translateX(16px); }
+.switch[disabled] { opacity: .55; cursor: not-allowed; }
+@media (max-width: 720px) { .setrow { grid-template-columns: 1fr; } }
