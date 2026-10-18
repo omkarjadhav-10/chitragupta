@@ -145,7 +145,7 @@ One builder makes the 20:00 message: blocks of activity (plus your Jira comments
 
 ### Inbox lines for the worklog
 
-`time:`, `leave:`, `half-day:`, `holiday:` and `workday:` lines are data: each distinct line is read once, however often it appears in `inbox.md`. `resend:` is an action: every new copy of the same line sends the day again, and `/cg:log resend: <day>` always adds one. Requests that arrive before the next tick go out as one send. Each send, resends included, is kept in the day's history in `data\timesheets\<day>.json` (`versions`: time, why, Slack's answer).
+`time:` lines and notes are data: each distinct line is read once, however often it appears in `inbox.md`. `resend:` and the calendar marks (`leave:`, `half-day:`, `holiday:`, `workday:`, `clear:`) are actions: every new copy of the same line counts, in file order, so you can mark a day, clear it and mark it again, and `/cg:log` always adds the line. A day has one mark: the newest line wins. `clear: <day>[..<day>]` removes the leave, half-day, holiday or extra-workday mark of those days; hours you logged with `time:` stay. `resend:` sends the day again. Requests that arrive before the next tick go out as one send. Each send, resends included, is kept in the day's history in `data\timesheets\<day>.json` (`versions`: time, why, Slack's answer).
 
 ### `jira_worklog.slack`
 

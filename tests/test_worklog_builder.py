@@ -173,12 +173,14 @@ class InboxCounting(BuilderCase):
     def test_action_lines_count_data_lines_dedupe(self):
         from chitragupta import sources
         st = {}
-        self.inbox("leave: 2026-10-20\nleave: 2026-10-20\nresend: 2026-10-16\nresend: 2026-10-16\nABC-1: a note\n", "w")
+        t = "time: 2026-10-16 1h ABC-1 call"  # a data line: read once however often it appears
+        self.inbox("leave: 2026-10-20\nleave: 2026-10-20\nresend: 2026-10-16\nresend: 2026-10-16\nABC-1: a note\n%s\n%s\n" % (t, t), "w")
         got = [n["text"] for n in sources.scan_inbox({}, st)]
-        self.assertEqual(got, ["leave: 2026-10-20", "resend: 2026-10-16", "resend: 2026-10-16", "a note"])
+        self.assertEqual(got, ["leave: 2026-10-20", "leave: 2026-10-20", "resend: 2026-10-16", "resend: 2026-10-16", "a note", t])
         self.assertEqual(sources.scan_inbox({}, st), [])
-        self.inbox("leave: 2026-10-20\nresend: 2026-10-16\nABC-1: a note\n")
-        self.assertEqual([n["text"] for n in sources.scan_inbox({}, st)], ["resend: 2026-10-16"])
+        self.inbox("clear: 2026-10-20\nleave: 2026-10-20\nresend: 2026-10-16\nABC-1: a note\n%s\n" % t)
+        self.assertEqual([n["text"] for n in sources.scan_inbox({}, st)],
+                         ["clear: 2026-10-20", "leave: 2026-10-20", "resend: 2026-10-16"])
         self.assertTrue(all(isinstance(v, int) for v in st["inbox_hashes"].values()))
         self.inbox("", "w")  # a file caught mid-save: counts never go down, so nothing replays afterwards
         self.assertEqual(sources.scan_inbox({}, st), [])
@@ -228,13 +230,24 @@ class InboxCounting(BuilderCase):
         with self.assertRaises(ValueError):
             jiraworklog.request_resend(D, "")
 
-    def test_cli_repeats_resend_only(self):
+    def test_cli_repeats_action_lines_only(self):
         from chitragupta import cli, common
-        for argv in (["resend:", D], ["resend:", D], ["leave:", "2026-10-20"], ["leave:", "2026-10-20"]):
+        for argv in (["resend:", D], ["resend:", D], ["leave:", "2026-10-20"], ["clear:", "2026-10-20"], ["leave:", "2026-10-20"],
+                     ["time:", D, "1h", "ABC-1", "call"], ["time:", D, "1h", "ABC-1", "call"]):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main(["log"] + argv), 0)
-        self.assertEqual(rd(common.hp("inbox.md")),
-                         "resend: %s\nresend: %s\nleave: 2026-10-20\n" % (D, D))
+        self.assertEqual(rd(common.hp("inbox.md")), "resend: %s\nresend: %s\nleave: 2026-10-20\nclear: 2026-10-20\n"
+                         "leave: 2026-10-20\ntime: %s 1h ABC-1 call\n" % (D, D, D))
+
+    def test_clear_undoes_a_mark(self):
+        from chitragupta import timesheet as T
+        cal = {}
+        for line in ("leave: 2026-10-20..2026-10-21", "half-day: 2026-10-21", "clear: 2026-10-20", "time: 2026-10-20 1h ABC-1 call"):
+            T.apply_directive(cal, T.parse_directive(line, D))
+        self.assertEqual((cal["leave"], cal["half_day"]), ({}, {"2026-10-21": True}))  # the newest mark wins; clear removes
+        self.assertEqual(len(cal["time"]["2026-10-20"]), 1)  # logged time is not a mark: clear keeps it
+        T.apply_directive(cal, T.parse_directive("clear: 2026-10-21", D))
+        self.assertEqual(T.day_kind("2026-10-21", cal, {"workdays": ["Mon", "Tue", "Wed", "Thu", "Fri"]}), "workday")
 
     def test_every_send_is_in_the_history(self):
         from chitragupta import jiraworklog, sources

@@ -7,7 +7,7 @@
   hours [--week|--month] [--date D] [--csv]   hours per ticket for a week (by day) or a month (by ISO week)
   search <query…> [--type T] [--ticket K] [--repo R] [--from D] [--to D] [--limit N] [--json] [--rebuild]
                                          the top search results with the file to read for each
-  log <directive…>                      append ONE time:/leave:/half-day:/holiday:/workday:/resend: line to inbox.md
+  log <directive…>                      append ONE time:/leave:/half-day:/holiday:/workday:/clear:/resend: line to inbox.md
   log --today                            print the current work day (for resolving "Monday", "yesterday")
   pause | resume | status                the PAUSED switch (<home>/.worklog/PAUSED)
 
@@ -36,6 +36,7 @@ GRAMMAR = """Accepted lines (one per call):
   half-day: YYYY-MM-DD
   holiday: YYYY-MM-DD [name]
   workday: YYYY-MM-DD
+  clear: YYYY-MM-DD[..YYYY-MM-DD]   (removes a leave/half-day/holiday/workday mark)
   resend: YYYY-MM-DD"""
 
 
@@ -612,7 +613,7 @@ def cmd_hours(a):
 def normalize_directive(words):
     line = " ".join(w for w in words if w is not None).strip()
     line = re.sub(r"^\s*[-*]\s*", "", line)
-    m = re.match(r"^(time|leave|half-day|holiday|workday|resend)\b\s*:?\s*", line, re.I)
+    m = re.match(r"^(time|leave|half-day|holiday|workday|clear|resend)\b\s*:?\s*", line, re.I)
     if m:  # "leave 2026-10-20" -> "leave: 2026-10-20"
         line = "%s: %s" % (m.group(1).lower(), line[m.end():].strip())
     return line.strip()
@@ -655,7 +656,7 @@ def cmd_log(a):
     if d["kind"] == "resend" and len(d["days"]) == 1 and line == "resend: " + d["days"][0]:
         import uuid  # an action line: every request counts, so a repeat is added (each command is its own request)
         jiraworklog.request_resend(d["days"][0], "cli-" + uuid.uuid4().hex)
-    elif d["kind"] == "resend":  # a range or a trailing note: the line as typed, repeats allowed too
+    elif d["kind"] in ("resend", "leave", "half-day", "holiday", "workday", "clear"):  # counted lines: repeats count
         _append_inbox(line, repeat=True)
     elif not _append_inbox(line):
         out("Already in inbox.md: `%s` (the agent ignores repeated lines, so nothing was added)." % line)

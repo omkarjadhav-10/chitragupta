@@ -32,6 +32,7 @@ Turn the request into ONE directive line. Resolve relative dates ("Monday", "yes
 | half day on Friday | `half-day: 2026-10-24` |
 | 9 Nov is a holiday (Festival) | `holiday: 2026-11-09 Festival` |
 | Saturday 25 Oct is a working day | `workday: 2026-10-25` |
+| Monday isn't leave after all (removes the mark) | `clear: 2026-10-20` |
 | resend today's worklog (each request sends again) | `resend: 2026-10-17` |
 
 `time:` details: duration `2h`, `1h 30m` or `45m`; the start time is optional; the text is their words as a short past-tense worklog line (no file paths, SQL or code identifiers).

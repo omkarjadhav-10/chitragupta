@@ -1,6 +1,7 @@
 """The dashboard's allowlisted actions (POST /api/actions/<name>). Each one does a single own thing through the same
 code the CLI uses. Only two run anything paid, both read-only and both within the daily MCP budget (the 20:00
 reserve is kept): worklog-refresh (one Jira read) and worklog-exact (one batched condensing call)."""
+import datetime as _dt
 import os
 import re
 
@@ -70,7 +71,13 @@ DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def _day(body):
     d = body.get("day")
-    return d if isinstance(d, str) and DAY.match(d) else None
+    if not isinstance(d, str) or not DAY.match(d):
+        return None
+    try:
+        _dt.date.fromisoformat(d)
+    except ValueError:
+        return None
+    return d
 
 
 def _preview_buttons():
@@ -126,3 +133,26 @@ def worklog_resend(body):
     res = jiraworklog.request_resend(day, rid[:100])
     record_action("worklog-resend", True, day + (" (duplicate)" if res["duplicate"] else ""))
     return 200, {"ok": True, "duplicate": res["duplicate"], "day": day}
+
+
+CAL_KINDS = ("leave", "half-day", "holiday", "workday", "clear")
+
+
+@action("calendar-mark", cap=512)
+def calendar_mark(body):
+    """Mark a day as leave, a half day, a holiday (with a name) or an extra workday, or clear its mark: one line in
+    inbox.md, the same as /cg:log; the next background run applies it to the calendar."""
+    from .. import jiraworklog
+    from .. import timesheet as T
+    day, kind = _day(body), body.get("kind")
+    if not day or kind not in CAL_KINDS:
+        return 400, {"error": "Give the day as YYYY-MM-DD and one of: " + ", ".join(CAL_KINDS) + "."}
+    name = body.get("name") if kind == "holiday" else ""
+    name = " ".join(str(name or "").split())[:60]  # one line, no control characters
+    line = ("%s: %s %s" % (kind, day, name)).strip()
+    d = T.parse_directive(line, common.workday(common.now(), common.load_config()))
+    if not d or d["kind"] in ("invalid", "time", "resend") or d["days"] != [day]:
+        return 400, {"error": "That mark couldn't be read."}
+    jiraworklog.append_inbox(line, repeat=True)
+    record_action("calendar-mark", True, line)
+    return 200, {"ok": True, "line": line}

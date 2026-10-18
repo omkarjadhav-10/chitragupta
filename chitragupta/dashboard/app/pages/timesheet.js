@@ -1,8 +1,8 @@
 // Timesheet: a month heatmap (hours against each day's target, with leave, half days and holidays marked in words),
 // weekly bars, the selected day's tickets, and hours per ticket by week or month with a CSV export.
-import { useEffect, useMemo } from '/vendor/hooks.module.js';
+import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtMin, fmtHours, fmtDay, setParams, isoDay, parseDay, monthName, pad, plural, addDays } from '../lib/core.js';
+import { useApi, fmtMin, fmtHours, fmtDay, setParams, isoDay, parseDay, monthName, pad, plural, addDays, runAction, toast } from '../lib/core.js';
 import { Icon, Status, Empty, Load, PageHead, TicketLink, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 
@@ -71,13 +71,38 @@ function WeekBars({ days }) {
     <span class="num">${fmtHours(weeks[k].m)}h <span class="muted">/ ${fmtHours(weeks[k].t)}h</span></span></div>`)}</div>`;
 }
 
+// Mark a day: one inbox line, the same as /cg:log; the next background run (within about 5 minutes) applies it.
+function MarkDay({ d }) {
+  const marked = ['leave', 'half_day', 'holiday', 'extra_workday'].indexOf(d.kind) >= 0;
+  const weekend = d.kind === 'weekend' || d.kind === 'extra_workday';
+  const opts = [['leave', 'Leave'], ['half-day', 'Half day'], ['holiday', 'Holiday']].concat(weekend ? [['workday', 'Extra workday']] : [])
+    .concat(marked ? [['clear', 'Remove the mark']] : []);
+  const [kind, setKind] = useState(marked ? 'clear' : 'leave');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState('');
+  const id = 'mark-' + d.date;
+  const save = (e) => {
+    e.preventDefault();
+    setBusy(true);
+    runAction('calendar-mark', { day: d.date, kind, name }).then((r) => { setDone(r.line); toast('Added to inbox.md: ' + r.line, 'ok'); },
+      (err) => toast(err.message, 'bad')).finally(() => setBusy(false));
+  };
+  return html`<form class="markday" onSubmit=${save}><label for=${id}>Mark this day</label>
+    <div class="btnline"><select id=${id} value=${kind} onChange=${(e) => setKind(e.currentTarget.value)}>${opts.map((o) => html`<option key=${o[0]} value=${o[0]}>${o[1]}</option>`)}</select>
+      ${kind === 'holiday' ? html`<input type="text" aria-label="Holiday name (optional)" placeholder="Name (optional)" maxlength="60" value=${name} onInput=${(e) => setName(e.currentTarget.value)} />` : null}
+      <button type="submit" class="btn" disabled=${busy}>${busy ? 'Saving…' : 'Save'}</button></div>
+    <p class="muted small" aria-live="polite">${done ? 'Added “' + done + '”; it shows here after the next background run (within about 5 minutes).' : 'Adds one line to inbox.md, the same as /cg:log. A sent day gets a corrected message.'}</p></form>`;
+}
+
 function DayPanel({ d }) {
   if (!d) return html`<${Empty} title="Pick a day" icon="day">Select a day in the calendar to see its tickets.</${Empty}>`;
   const ks = Object.keys(d.tickets || {}).sort((a, b) => d.tickets[b] - d.tickets[a]);
   return html`<div class="card"><h3>${fmtDay(d.date)}${d.kind && d.kind !== 'workday' ? html`<${Status} kind=${KINDI[d.kind] || 'off'}>${KINDW[d.kind] || d.kind}</${Status}>` : null}</h3>
     <p>${fmtMin(d.minutes)} recorded${d.target ? ' of ' + fmtMin(d.target) + ' target' : ''}${d.note ? ' · ' + d.note : ''}</p>
     ${ks.length ? html`<ul class="other-list" style="margin-top:12px">${ks.map((k) => html`<li key=${k}><span>${k ? html`<${TicketLink} k=${k} />` : 'Other work'}</span><span>${fmtMin(d.tickets[k])}</span></li>`)}</ul>` : null}
-    <p style="margin-top:12px"><a class="btn" href=${'#/day/' + d.date}><${Icon} name="day" size=${16} />Open this day</a></p></div>`;
+    <p style="margin-top:12px"><a class="btn" href=${'#/day/' + d.date}><${Icon} name="day" size=${16} />Open this day</a></p>
+    <${MarkDay} key=${d.date + d.kind} d=${d} /></div>`;
 }
 
 function PerTicket({ period }) {

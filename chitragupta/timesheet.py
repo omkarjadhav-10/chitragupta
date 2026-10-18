@@ -303,7 +303,8 @@ def nudge(day, send_day, example_ticket="ABC-1234"):
 
 _DATE = r"\d{4}-\d{2}-\d{2}"
 _DUR = r"(?:\d+(?:\.\d+)?\s*h(?:\s*\d+\s*m)?|\d+\s*m)"
-DIRECTIVE = re.compile(r"^\s*(?:[-*]\s*)?(time|leave|half-day|holiday|workday|resend)\s*:\s*(.*)$", re.I)
+DIRECTIVE = re.compile(r"^\s*(?:[-*]\s*)?(time|leave|half-day|holiday|workday|clear|resend)\s*:\s*(.*)$", re.I)
+MARKS = ("leave", "half_day", "holiday", "workday")  # the calendar marks a clear: line removes
 _TIME = re.compile(r"^(?:(" + _DATE + r")\s+)?(?:(\d{1,2}:\d{2})\s+)?(" + _DUR + r")\s+([A-Za-z][A-Za-z0-9]{1,9}-\d+)\s*:?\s*(.*)$", re.I)
 
 
@@ -364,7 +365,13 @@ def apply_directive(cal, d):
     elif kind in ("leave", "half-day", "holiday", "workday"):
         key = kind.replace("-", "_")
         for day in d["days"]:
+            for other in MARKS:  # one mark per day: the newest line wins
+                cal[other].pop(day, None)
             cal[key][day] = d.get("name") or True
+    elif kind == "clear":  # undo a mark; time: entries stay (they are hours you logged, not a mark)
+        for day in d["days"]:
+            for k in MARKS:
+                cal[k].pop(day, None)
     return d["days"]
 
 

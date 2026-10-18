@@ -52,5 +52,21 @@ class PreviewActions(td.Base):
         self.assertEqual(len(lines), 2)
 
 
+class CalendarMark(td.Base):
+    def test_lines(self):
+        from chitragupta.dashboard import actions
+        day = self.days["day"]
+        for body, line in (({"day": day, "kind": "leave"}, "leave: " + day),
+                           ({"day": day, "kind": "holiday", "name": "  Founders\n day  "}, "holiday: %s Founders day" % day),
+                           ({"day": day, "kind": "clear", "name": "ignored"}, "clear: " + day),
+                           ({"day": day, "kind": "leave"}, "leave: " + day)):
+            self.assertEqual(actions.calendar_mark(body), (200, {"ok": True, "line": line}))
+        lines = common.read_text(common.hp("inbox.md")).splitlines()
+        self.assertEqual(lines[-4:], ["leave: " + day, "holiday: %s Founders day" % day, "clear: " + day, "leave: " + day])
+        for bad in ({"day": day, "kind": "time"}, {"day": day, "kind": "resend"}, {"day": "2026-13-01", "kind": "leave"},
+                    {"day": day + "..2026-12-31", "kind": "leave"}, {"kind": "leave"}):
+            self.assertEqual(actions.calendar_mark(bad)[0], 400, bad)
+
+
 if __name__ == "__main__":
     unittest.main()

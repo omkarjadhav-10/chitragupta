@@ -487,3 +487,7 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
 .filtrow { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
 .filt { display: grid; gap: 2px; }
 .filt input { min-width: 150px; }
+
+/* Timesheet: mark a day */
+.markday { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--rule); display: grid; gap: 6px; }
+.markday > label { font-weight: 600; }

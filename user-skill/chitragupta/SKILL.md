@@ -120,6 +120,7 @@ relative dates against today (mind `day_starts_at`) and append ONE line to `inbo
 - "I'm on leave Monday" → `leave: 2026-10-20` · a range → `leave: 2026-10-20..2026-10-22`
 - "half day on Friday" → `half-day: 2026-10-24` · "holiday on 9 Nov" → `holiday: 2026-11-09 Festival`
 - "Saturday 25 Oct is a working day" → `workday: 2026-10-25`
+- "Monday isn't leave after all" → `clear: 2026-10-20` (removes that day's leave/half-day/holiday/workday mark)
 - "resend today's worklog" → `resend: <day>` (every request sends again, even the same line)
 A line for a day already messaged (up to 3 days back) makes the agent send one "Corrected update" 15 min later.
 "Show today's worklog" is a read-only preview of exactly what 20:00 sends, from the last Jira data and condensed
@@ -155,7 +156,7 @@ replay.sh or any other request against an API. If the user wants one of those, t
 
 ## The only writes allowed (only when the user explicitly asks)
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;
-  `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `resend:` lines for the Jira worklog, and
+  `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `clear:` / `resend:` lines for the Jira worklog, and
   `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking).
 - Create a file in `{{HOME}}\_drop\` whose name starts with the ticket ID, e.g. `ABC-1234_lock-analysis.md`
   ("save this analysis to the worklog for ABC-1234"); the agent files it under the ticket's artifacts.

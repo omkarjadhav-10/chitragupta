@@ -198,7 +198,8 @@ def scan_sql(cfg, state):
 
 _INBOX_TICKET = re.compile(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?([A-Z][A-Z0-9]{1,9}-\d+)\s*:\s*(.+)$")
 # action lines: every copy of an identical line is one more request (data lines are read once however often they appear)
-INBOX_ACTION = re.compile(r"^\s*(?:[-*]\s*)?resend\s*:", re.I)
+# counted per copy: sending again, and calendar marks (mark, clear, mark again must work; re-applying one is harmless)
+INBOX_ACTION = re.compile(r"^\s*(?:[-*]\s*)?(?:resend|leave|half-day|holiday|workday|clear)\s*:", re.I)
 
 
 def _inbox_lines(text):
@@ -229,8 +230,8 @@ def inbox_counts_from_legacy(hashes, text):
 
 def scan_inbox(cfg, state):
     """New non-template lines of inbox.md. state["inbox_hashes"] = {line hash: copies read}. A data line (a note,
-    time:, leave:, half-day:, holiday:, workday: ...) is read once however often it appears; an action line
-    (resend:) is counted, so each new copy of an identical line is read once more. Counts never go down (a file
+    time: ...) is read once however often it appears; an action line (resend:, and the calendar marks leave:,
+    half-day:, holiday:, workday:, clear:) is counted, so each new copy of an identical line is read once more. Counts never go down (a file
     caught mid-save can't replay old lines). The file itself is never rewritten."""
     path = common.hp("inbox.md")
     text = common.read_text(path)
