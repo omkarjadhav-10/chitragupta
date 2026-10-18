@@ -5,11 +5,14 @@
   ticket <KEY> [--json]                  a ticket's files and a short summary
   trace <KEY>                            the ticket's DB flow and its QA worked example
   hours [--week|--month] [--date D] [--csv]   hours per ticket for a week (by day) or a month (by ISO week)
-  log <directive…>                       append ONE time:/leave:/half-day:/holiday:/workday:/resend: line to inbox.md
+  search <query…> [--type T] [--ticket K] [--repo R] [--from D] [--to D] [--limit N] [--json] [--rebuild]
+                                         the top search results with the file to read for each
+  log <directive…>                      append ONE time:/leave:/half-day:/holiday:/workday:/resend: line to inbox.md
   log --today                            print the current work day (for resolving "Monday", "yesterday")
   pause | resume | status                the PAUSED switch (<home>/.worklog/PAUSED)
 
-Everything is read-only except `log` (one line appended to inbox.md) and `pause`/`resume`.
+Everything is read-only except `log` (one line appended to inbox.md), `pause`/`resume` and `search --rebuild`
+(rewrites the search index cache, .worklog/cache/search.sqlite).
 No command calls a model, Jira, Slack or the database MCP.
 """
 import argparse
@@ -667,6 +670,52 @@ def cmd_log(a):
     return 0
 
 
+# --------------------------------------------------------------------------- search
+
+def cmd_search(a):
+    from . import searchidx
+    q = " ".join(a.query).strip()
+    if a.rebuild:
+        res = searchidx.rebuild()
+        out("Search index rebuilt: %d units from %d sources in %.1f s (%s)." % (
+            res["units"], res["sources"], res["ms"] / 1000.0, os.path.join(common.wl("cache"), searchidx.DB_NAME)))
+        if not q:
+            return 0
+    if not q:
+        out("Nothing to search for. Usage: search <words> [--type ticket,finding,…] [--ticket KEY] [--repo NAME] "
+            "[--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--rebuild]")
+        return 0
+    types = [t for t in re.split(r"[,\s]+", a.type or "") if t] or None
+    bad = [t for t in types or [] if t not in searchidx.TYPE_ORDER]
+    if bad:
+        out("Unknown type %s. Types: %s." % (", ".join(bad), ", ".join(searchidx.TYPE_ORDER)))
+        return 2
+    try:
+        res = searchidx.search(q, types, ticket=a.ticket, repo=a.repo, frm=getattr(a, "from"), to=a.to, limit=a.limit)
+    except ValueError as e:
+        out(str(e))
+        return 2
+    if a.json:
+        out(json.dumps(res, indent=1, ensure_ascii=False))
+        return 0
+    if not res["total"]:
+        out("No results for %r." % q)
+        return 0
+    h = common.home()
+    out("%d result(s) for %r (%s, %d ms). Data home: %s" % (res["total"], q, res["engine"], res["took_ms"], h))
+    for g in res["groups"]:
+        out()
+        out("## %s (%d)" % (g["label"], g["count"]))
+        for r in g["results"]:
+            meta = " · ".join(x for x in (r["ticket"] if r["type"] != "ticket" else "", r["repo"], r["date"]) if x)
+            out("- %s%s" % (r["title"], "  (%s)" % meta if meta else ""))
+            if r["snippet"] and r["snippet"] != r["title"]:
+                out("  %s" % r["snippet"])
+            if r["path"]:
+                out("  file: %s" % os.path.join(h, *r["path"].split("/")))
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 
 def parser():
@@ -711,6 +760,17 @@ def parser():
     s.add_argument("--date")
     s.add_argument("--csv", action="store_true")
     s.set_defaults(fn=cmd_hours)
+    s = sub.add_parser("search")
+    s.add_argument("query", nargs="*")
+    s.add_argument("--type", default="")
+    s.add_argument("--ticket")
+    s.add_argument("--repo")
+    s.add_argument("--from", dest="from")
+    s.add_argument("--to")
+    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--rebuild", action="store_true")
+    s.set_defaults(fn=cmd_search)
     s = sub.add_parser("log")
     s.add_argument("--today", action="store_true")
     s.add_argument("directive", nargs=argparse.REMAINDER)

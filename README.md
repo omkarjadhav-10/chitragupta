@@ -45,6 +45,7 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy |
 | `/cg:timesheet [week\|month] [date] [csv]` | Hours per ticket by day (week) or by ISO week (month), with leave and holidays; optional CSV |
 | `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
+| `/cg:search <words> [--rebuild]` | Search everything recorded (tickets, findings, queries, requests, branches, PRs, tables, APIs, DB links, daily notes) with filters by type, ticket, repo and date; shows the file to read for each result |
 | `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |
 | `/cg:pause [resume\|status]` | Pause or resume capture |
 | `/cg:dashboard [day DATE \| ticket KEY \| page]` | Open the local dashboard in your browser, starting it first if needed |
