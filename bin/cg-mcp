@@ -1,0 +1,11 @@
+#!/bin/sh
+# Chitragupta's read-only MCP server (stdio), started by Claude Code from the plugin's .mcp.json.
+# macOS / Linux: the first of python3, python. Windows runs cg-mcp.cmd. Nothing but JSON-RPC goes to stdout.
+here=$(dirname "$0")
+for py in python3 python; do
+  if command -v "$py" >/dev/null 2>&1; then
+    exec "$py" "$here/../hooks/run.py" mcp "$@"
+  fi
+done
+echo "cg-mcp: Python 3 not found (tried python3, python)" >&2
+exit 127

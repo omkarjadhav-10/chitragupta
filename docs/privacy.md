@@ -114,6 +114,10 @@ The guard files are written only when an MCP job can actually run: Jira is enabl
 
 Jira results are cached locally in `data\jira\`. They can include colleagues' names from comments and worklogs. That cache is never pushed.
 
+## The worklog MCP server
+
+The plugin's own MCP server (`chitragupta`, see [mcp.md](mcp.md)) runs inside your Claude Code sessions. It reads the data home and returns what a tool asks for to that session, so that text reaches the model the same way it would if Claude opened the files itself. It writes nothing, opens no connection and is never started by Chitragupta's background calls.
+
 ## Network calls, all of them
 
 | Call | When |
