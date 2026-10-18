@@ -221,6 +221,10 @@ The tool mapped to `query` is SQL-checked by the guard. The guard reads the stat
 |---|---|---|---|
 | `reminders.mcp` | bool | `true` | The weekly SessionStart line when Slack or Jira isn't connected. `setup reminders off` sets this to `false`. |
 
+## `share`
+
+Team sharing: targets, level, author and deny-list. See [sharing.md](sharing.md) for every key.
+
 ## `dashboard`
 
 | Key | Type | Default | Meaning |

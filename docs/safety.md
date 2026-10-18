@@ -39,6 +39,7 @@ Two layers make this hold:
 - deleting the large tool-result copies Claude Code saves under `~/.claude/projects/<sandbox folder>/` for Chitragupta's own MCP jobs, so QA data lives only in the knowledge base
 - commit and push of daily files in the data-home repo
 - the Slack DM to my own ID
+- Sharing writes redacted bundles to my configured share target, only when I ask. A bundle that fails the deny-list or secret scan is not written. If the target is a team Git repo, Chitragupta commits and pushes only files inside its share folder, never force-pushes and never rewrites history. Sharing never posts to Slack.
 - `fetch` of remote-tracking refs in work repos
 
 Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.

@@ -125,10 +125,8 @@ def check_privacy(cfg, health, force=False):
 
 # --------------------------------------------------------------------------- commit / push
 
-def changed_files(cfg):
-    rc, so, _ = git(["status", "--porcelain", "-z", "--untracked-files=all"], cfg)
-    if rc != 0:
-        return []
+def parse_porcelain(so):
+    """Paths from `git status --porcelain -z` output (rename sources skipped)."""
     out, parts, i = [], so.split("\0"), 0
     while i < len(parts):
         p = parts[i]
@@ -139,6 +137,17 @@ def changed_files(cfg):
             out.append(path)
         i += 1
     return out
+
+
+def _home_runner(cfg):
+    return lambda args, timeout=120: git(args, cfg, timeout)
+
+
+def changed_files(cfg, run=None):
+    """Changed and untracked paths of the data-home repo — or of another guarded repo when `run` is given
+    (run(args, timeout=…) -> (rc, out, err), e.g. the team share repo)."""
+    rc, so, _ = (run or _home_runner(cfg))(["status", "--porcelain", "-z", "--untracked-files=all"])
+    return parse_porcelain(so) if rc == 0 else []
 
 
 HELD_PREFIXES = ("bruno/",)
@@ -201,13 +210,14 @@ def commit(cfg, message, health):
     return False
 
 
-def stage(cfg, files, held):
+def stage(cfg, files, held, run=None):
     """git add -- <the push-path files>, minus the held ones (never `add -A`)."""
+    run = run or _home_runner(cfg)
     keep = [f for f in files if f not in set(held or [])]
     for i in range(0, len(keep), 100):
-        git(["add", "--"] + keep[i:i + 100], cfg)
+        run(["add", "--"] + keep[i:i + 100])
     if held:
-        git(["reset", "-q", "--"] + held, cfg)
+        run(["reset", "-q", "--"] + held)
 
 
 def unpushed(cfg):
@@ -231,32 +241,56 @@ def push(cfg, health):
         health["push_blocked"] = health.get("privacy")
         return False
     health.pop("push_blocked", None)
-    rc, so, se = git(["ls-remote", "--heads", "origin", "main"], cfg, timeout=60)
-    if rc != 0:
-        return _push_failed(health, "ls-remote: " + se)
-    if so.strip():
-        rc, so2, se2 = git(["fetch", "-q", "origin", "main"], cfg, timeout=120)
-        if rc != 0:
-            return _push_failed(health, "fetch: " + se2)
-        rc, base, _ = git(["merge-base", "main", "origin/main"], cfg)
-        if rc != 0:  # unrelated history (remote created with README/licence)
-            rc, _, se3 = git(["merge", "-q", "--allow-unrelated-histories", "-X", "ours", "-m",
-                              "worklog: join existing remote history", "origin/main"], cfg)
-        else:
-            rc, _, se3 = git(["rebase", "-q", "origin/main"], cfg, timeout=120)
-            if rc != 0:
-                git(["rebase", "--abort"], cfg)
-                rc, _, se3 = git(["merge", "-q", "-X", "ours", "-m", "worklog: merge remote", "origin/main"], cfg)
-        if rc != 0:
-            git(["merge", "--abort"], cfg)
-            return _push_failed(health, "integrate remote: " + se3)
-    rc, so, se = git(["push", "-q", "-u", "origin", "main"], cfg, timeout=180)
-    if rc != 0:
-        return _push_failed(health, "push: " + se)
+    err = integrate_and_push(_home_runner(cfg))
+    if err:
+        return _push_failed(health, err)
     health["last_push"] = common.now_iso()
     health.pop("push_failing_since", None)
     health.pop("last_push_error", None)
     return True
+
+
+def integrate(run, branch="main", rebase=True, label="worklog"):
+    """Bring origin/<branch> into the local branch. None when done (or the remote is still empty), else the error.
+
+    rebase=True (the data home): rebase onto it, falling back to a merge that keeps ours; a remote created with its
+    own first commit is joined. rebase=False (the team share repo): a plain merge, never a rebase, never `-X ours`,
+    and an unrelated history is refused — nothing is rewritten or discarded.
+    """
+    rc, so, se = run(["ls-remote", "--heads", "origin", branch], timeout=60)
+    if rc != 0:
+        return "ls-remote: " + se
+    if not so.strip():
+        return None
+    rc, so2, se2 = run(["fetch", "-q", "origin", branch], timeout=120)
+    if rc != 0:
+        return "fetch: " + se2
+    rc, base, _ = run(["merge-base", branch, "origin/" + branch])
+    if rc != 0:  # unrelated history (remote created with README/licence)
+        if not rebase:
+            return "the remote branch has an unrelated history"
+        rc, _, se3 = run(["merge", "-q", "--allow-unrelated-histories", "-X", "ours", "-m",
+                          "%s: join existing remote history" % label, "origin/" + branch])
+    elif rebase:
+        rc, _, se3 = run(["rebase", "-q", "origin/" + branch], timeout=120)
+        if rc != 0:
+            run(["rebase", "--abort"])
+            rc, _, se3 = run(["merge", "-q", "-X", "ours", "-m", "%s: merge remote" % label, "origin/" + branch])
+    else:
+        rc, _, se3 = run(["merge", "-q", "-m", "%s: merge remote" % label, "origin/" + branch], timeout=120)
+    if rc != 0:
+        run(["merge", "--abort"])
+        return "integrate remote: " + se3
+    return None
+
+
+def integrate_and_push(run, branch="main", rebase=True, label="worklog"):
+    """integrate(), then `push -q -u origin <branch>` (never forced). None on success, else the error."""
+    err = integrate(run, branch, rebase, label)
+    if err:
+        return err
+    rc, so, se = run(["push", "-q", "-u", "origin", branch], timeout=180)
+    return "push: " + se if rc != 0 else None
 
 
 def _push_failed(health, msg):
@@ -282,3 +316,24 @@ def commit_message(day, delta, extra=""):
     if parts and extra:
         msg += " · " + extra
     return msg[:200]
+
+
+# --------------------------------------------------------------------------- the team share repo (share.py)
+# Git for Chitragupta's own clone of a team repo under <home>/share/<name>: purpose git-share, which allows only that
+# clone, adds and commits under shares/, and pushes that are never forced.
+
+def share_runner(repo_dir, cfg):
+    """run(args, timeout=120) -> (rc, out, err) for the share clone at `repo_dir`."""
+    exe = common.git_exe(cfg)
+    return lambda args, timeout=120: commands.run([exe, "-C", repo_dir] + commands.HARDEN + list(args), "git-share",
+                                                  timeout=timeout, cfg=cfg)
+
+
+def share_clone(url, repo_dir, cfg):
+    return commands.run([common.git_exe(cfg)] + commands.HARDEN + ["clone", "-q", "--", url, repo_dir], "git-share",
+                        timeout=300, cfg=cfg)
+
+
+def commit_paths(run, message, rels):
+    """Commit only these paths (already staged)."""
+    return run(["commit", "-q", "-m", message, "--"] + list(rels))

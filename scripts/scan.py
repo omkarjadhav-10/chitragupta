@@ -9,64 +9,25 @@ Usage:
 The deny-list is read from $CHITRAGUPTA_DENYLIST, else notes/denylist.txt.
 Plain lines match as case-insensitive substrings; lines starting with "re:"
 are Python regexes. Lines starting with "#" are comments. Exit 1 on any hit.
+The rules and the matching live in chitragupta/scanlib.py (shared with the share gate).
 """
 from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SECRET_RULES = [
-    ("aws-access-key", r"\bAKIA[0-9A-Z]{16}\b"),
-    ("github-token", r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
-    ("github-pat", r"\bgithub_pat_[A-Za-z0-9_]{50,}\b"),
-    ("slack-token", r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
-    ("atlassian-token", r"\bATATT[A-Za-z0-9_\-=]{20,}"),
-    ("anthropic-key", r"\bsk-ant-[A-Za-z0-9_\-]{20,}"),
-    ("openai-key", r"\bsk-[A-Za-z0-9]{32,}\b"),
-    ("private-key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    ("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    ("basic-auth", r"(?i)\bbasic\s+[A-Za-z0-9+/]{20,}={0,2}"),
-    ("bearer", r"(?i)\bbearer\s+[A-Za-z0-9._\-]{30,}"),
-    ("assigned-secret",
-     r"""(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret)\b["']?\s*[:=]\s*["'][^"'\s{}$<>%]{8,}["']"""),
-]
+sys.path.insert(0, str(ROOT))
+from chitragupta.scanlib import SECRET_RULES, scan_text, secret_rules  # noqa: E402,F401  (one implementation)
+from chitragupta import scanlib  # noqa: E402
 
 
-def load_denylist(path: Path | None) -> list[tuple[str, re.Pattern]]:
-    rules: list[tuple[str, re.Pattern]] = []
-    if path is None or not path.is_file():
-        return rules
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("re:"):
-            rules.append((line, re.compile(line[3:])))
-        else:
-            rules.append((line, re.compile(re.escape(line), re.IGNORECASE)))
-    return rules
-
-
-def secret_rules() -> list[tuple[str, re.Pattern]]:
-    return [(name, re.compile(rx)) for name, rx in SECRET_RULES]
-
-
-def scan_text(label: str, text: str, deny, secrets) -> list[str]:
-    hits = []
-    for no, line in enumerate(text.splitlines(), 1):
-        for name, rx in deny:
-            if rx.search(line):
-                hits.append(f"{label}:{no}: deny-list: {name}")
-        for name, rx in secrets:
-            if rx.search(line):
-                hits.append(f"{label}:{no}: secret: {name}")
-    return hits
+def load_denylist(path: Path | None):
+    return scanlib.load_denylist(str(path) if path else "")
 
 
 def git(*args: str) -> bytes:

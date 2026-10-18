@@ -6,6 +6,11 @@ before anything starts. Anything not listed is blocked, logged to security.log a
   git-work   read-only git in a work repo (rule 2), hardened against the repo's own config; `fetch` only into
              refs/remotes/<remote>/*, only in a watched repo, never while git holds a lock, git.allow_fetch
   git-home   the data-home repo's own sync: add (push paths only) / commit / fetch + rebase / push, never forced
+  git-share  the team share repo (share.targets, kind "git", cloned at <home>/share/<name>): clone of the configured
+             URL, fetch / merge of origin/<branch>, add + commit of shares/** only, push to the configured remote
+             only — never forced, never a rebase or reset (safety rule: "If the target is a team Git repo,
+             Chitragupta commits and pushes only files inside its share folder, never force-pushes and never
+             rewrites history.")
   git-probe  git --version
   host       gh / glab / az: list and view only; `api` with GET only; az with --output json
   claude     `claude --version`, `claude mcp list`, and `claude -p` calls built by safety.claude (checked again here)
@@ -264,6 +269,161 @@ def _check_git_home(argv, cwd, cfg):
     return "data-home git needs -C <data home>"
 
 
+# ----------------------------------------------------------------------------------------------- git (team share repo)
+
+SHARE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+SHARE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
+SHARE_PREFIX = "shares/"
+_SLACK = re.compile(r"(?i)(?:^|[/@.:])(?:[a-z0-9-]+\.)*slack\.com(?:[:/]|$)|hooks\.slack\.")
+
+
+def share_url_reason(url):
+    """None when `url` may be a team share repo's remote. Sharing never posts to Slack."""
+    if not isinstance(url, str) or not url.strip():
+        return "no URL"
+    u = url.strip()
+    if _SLACK.search(u):
+        return "sharing never posts to Slack"
+    if u.startswith("-") or "::" in u or any(c in u for c in "\r\n\x00 "):
+        return "not a plain git URL"
+    return None
+
+
+def share_target_reason(t):
+    """None for a well-formed share target {name, kind: folder|git, path|url, branch?}, else why it can't be used."""
+    if not isinstance(t, dict):
+        return "a share target must be an object"
+    kind = t.get("kind")
+    if kind not in ("folder", "git"):
+        if "slack" in str(kind).lower() or _SLACK.search(str(t.get("url") or t.get("path") or "")):
+            return "sharing never posts to Slack"
+        return "share target kind must be folder or git, not %r" % (kind,)
+    if not SHARE_NAME.match(str(t.get("name") or "")):
+        return "share target name must be letters, digits, - or _ (up to 40)"
+    if kind == "git":
+        why = share_url_reason(t.get("url"))
+        if why:
+            return why
+        br = str(t.get("branch") or "main")
+        if not SHARE_BRANCH.match(br) or ".." in br:
+            return "bad branch name"
+    elif _SLACK.search(str(t.get("path") or "")):
+        return "sharing never posts to Slack"
+    return None
+
+
+def share_repo_dir(name):
+    return os.path.join(common.home(), "share", name)
+
+
+def share_git_targets(cfg):
+    """[{name, url, branch, dir}] for every well-formed git share target."""
+    out = []
+    for t in ((cfg or {}).get("share") or {}).get("targets") or []:
+        if isinstance(t, dict) and t.get("kind") == "git" and share_target_reason(t) is None:
+            out.append({"name": t["name"], "url": t["url"].strip(), "branch": str(t.get("branch") or "main"),
+                        "dir": share_repo_dir(t["name"])})
+    return out
+
+
+def _repo_config_reason(repo, url):
+    """The clone's own .git/config: origin must be exactly the configured URL, with no pushurl or URL rewriting."""
+    gd = os.path.join(repo, ".git")
+    if not os.path.isdir(gd):
+        return "the team share repo has no .git folder"
+    text = common.read_text(os.path.join(gd, "config"))
+    if re.search(r"(?im)^\s*(?:pushurl|insteadof|pushinsteadof)\s*=", text):
+        return "the team share repo's config rewrites or redirects URLs"
+    section, origin = None, []
+    for line in text.splitlines():
+        m = re.match(r"^\s*\[\s*([^\]]+?)\s*\]", line)
+        if m:
+            section = m.group(1).replace('"', "").lower().split()
+            continue
+        m = re.match(r"(?i)^\s*url\s*=\s*(.*?)\s*$", line)
+        if m and section == ["remote", "origin"]:
+            origin.append(m.group(1).strip('"'))
+    if [o.replace("\\\\", "\\") for o in origin] != [url]:
+        return "origin of the team share repo is not the configured URL"
+    return None
+
+
+def git_share_reason(args, t):
+    """None when `args` (after the hardening prefix) is an allowed call in the team share repo `t`."""
+    a = list(args)
+    if not a:
+        return "empty git call"
+    sub, r, b = a[0], a[1:], t["branch"]
+    if sub == "status":
+        return None if set(r) <= {"--porcelain", "-z", "--untracked-files=all"} else "status flag not allowed"
+    if sub == "rev-parse":
+        return None if r in (["--verify", "-q", "HEAD"], ["--abbrev-ref", "HEAD"]) else "rev-parse: only HEAD"
+    if sub == "symbolic-ref":
+        return None if r in (["--short", "HEAD"], ["HEAD", "refs/heads/" + b]) else \
+            "symbolic-ref: only reading HEAD, or pointing an empty clone at the configured branch"
+    if sub == "remote":
+        return None if r == ["get-url", "origin"] else "share-repo git remote: only get-url origin"
+    if sub == "ls-remote":
+        return None if r == ["--heads", "origin", b] else "ls-remote: only --heads origin <branch>"
+    if sub == "fetch":
+        return None if r == ["-q", "origin", b] else "share-repo fetch: only -q origin <branch>"
+    if sub == "merge-base":
+        return None if r == [b, "origin/" + b] else "merge-base: only <branch> origin/<branch>"
+    if sub == "rev-list":
+        return None if r == ["--count", "origin/%s..%s" % (b, b)] else "rev-list: only the unpushed count"
+    if sub == "merge":
+        if r in (["--abort"], ["--ff-only", "-q", "origin/" + b]):
+            return None
+        if len(r) == 4 and r[:2] == ["-q", "-m"] and r[3] == "origin/" + b:
+            return None
+        return "share-repo merge: only origin/<branch> (fast-forward or a merge commit), or --abort"
+    if sub == "diff":
+        return None if r == ["--cached", "--name-only", "-z"] else "diff: only --cached --name-only -z"
+    from .. import gitsync
+    if sub == "add":
+        files = r[1:]
+        if r[:1] != ["--"] or not files:
+            return "share-repo git add: only `add -- shares/…`"
+        bad = [p for p in files if not _rel_ok(p) or not gitsync.allowed_path(p, (SHARE_PREFIX,))]
+        return "share-repo git add outside shares/: %s" % bad[:3] if bad else None
+    if sub == "commit":
+        files = r[4:]
+        if r[:2] != ["-q", "-m"] or len(r) < 5 or r[3] != "--":
+            return "share-repo git commit: only `commit -q -m <message> -- shares/…`"
+        bad = [p for p in files if not _rel_ok(p) or not gitsync.allowed_path(p, (SHARE_PREFIX,))]
+        return "share-repo git commit outside shares/: %s" % bad[:3] if bad else None
+    if sub == "push":
+        return None if r in (["-q", "origin", b], ["-q", "-u", "origin", b]) else \
+            "share-repo push: only `push -q [-u] origin <branch>` (never forced)"
+    return "git %s is not allowed in the team share repo" % sub
+
+
+def _check_git_share(argv, cfg):
+    targets = share_git_targets(cfg)
+    if not targets:
+        return "no team share repo is configured"
+    if len(argv) >= 3 and argv[1] == "-C":
+        t = next((x for x in targets if _norm(x["dir"]) == _norm(argv[2])), None)
+        if not t:
+            return "share-repo git outside <home>/share/<name> of a configured git target"
+        rest = argv[3:]
+        if rest[:len(HARDEN)] != HARDEN:
+            return "share-repo git without the hardening prefix"
+        return git_share_reason(rest[len(HARDEN):], t) or _repo_config_reason(argv[2], t["url"])
+    rest = argv[1:]
+    if rest[:len(HARDEN)] == HARDEN and rest[len(HARDEN):len(HARDEN) + 1] == ["clone"]:
+        r = rest[len(HARDEN) + 1:]
+        if len(r) != 4 or r[:2] != ["-q", "--"]:
+            return "share-repo clone: only `clone -q -- <configured URL> <home>/share/<name>`"
+        t = next((x for x in targets if x["url"] == r[2] and _norm(x["dir"]) == _norm(r[3])), None)
+        if not t:
+            return "clone only of a configured team share repo into <home>/share/<name>"
+        if os.path.exists(r[3]) and (not os.path.isdir(r[3]) or os.listdir(r[3])):
+            return "the clone folder is not empty"
+        return None
+    return "share-repo git needs -C <home>/share/<name> (or a clone of the configured URL)"
+
+
 # ----------------------------------------------------------------------------------------------- Git hosts
 
 _API_BODY = ("-f", "-F", "--field", "--raw-field", "--input")
@@ -468,6 +628,8 @@ def reason(argv, purpose, cwd=None, cfg=None):
         return _check_git_work(argv, cfg) if e == "git" else "git-work runs git only"
     if purpose == "git-home":
         return _check_git_home(argv, cwd, cfg) if e == "git" else "git-home runs git only"
+    if purpose == "git-share":
+        return _check_git_share(argv, cfg) if e == "git" else "git-share runs git only"
     if purpose == "git-probe":
         return None if e == "git" and argv[1:] == ["--version"] else "git-probe: only git --version"
     if purpose == "host":
@@ -511,7 +673,7 @@ def _env(env_extra):
 def run(argv, purpose, cwd=None, input_text=None, timeout=120, env_extra=None, cfg=None):
     """Check, then run hidden, never through a shell. Returns (rc, stdout, stderr). Raises Blocked."""
     check(argv, purpose, cwd, cfg)
-    if purpose == "git-work":
+    if purpose in ("git-work", "git-share"):
         env_extra = dict(GIT_ENV, **(env_extra or {}))
     try:
         p = subprocess.run(list(argv), cwd=cwd, input=input_text, capture_output=True, text=True, encoding="utf-8",

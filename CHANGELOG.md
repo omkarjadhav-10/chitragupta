@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- **Team sharing** ([docs/sharing.md](docs/sharing.md)): `/cg:share <KEY>` previews the sections you pick at the `team` (default) or `public` level, with what each section loses, then writes a bundle (`README.md` + `ticket.html`) to a share folder or a team Git repo. Nothing is written when the deny-list or secret scan finds anything. A git target commits and pushes `shares/` only, never forced, never rewriting history. `--notes` lists your team's bundles. `cli ticket --export --mode team`.
+
+### Fixed
+- A shareable export kept the ticket README's "My notes"; every shared level now removes them.
+
 ## [0.3.0] - 2026-10-18
 
 ### Security

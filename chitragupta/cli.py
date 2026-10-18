@@ -623,7 +623,7 @@ def parser():
     s.add_argument("key", nargs="?", default="")
     s.add_argument("--json", action="store_true")
     s.add_argument("--export", action="store_true", help="save the whole ticket page as one HTML file")
-    s.add_argument("--mode", choices=("full", "shareable"), default="full")
+    s.add_argument("--mode", choices=("full", "team", "shareable"), default="full")
     s.set_defaults(fn=cmd_ticket)
     s = sub.add_parser("branches")
     s.add_argument("key", nargs="?", default="")
@@ -650,9 +650,71 @@ def parser():
     s.add_argument("--today", action="store_true")
     s.add_argument("directive", nargs=argparse.REMAINDER)
     s.set_defaults(fn=cmd_log)
+    s = sub.add_parser("share")
+    s.add_argument("key", nargs="?", default="")
+    s.add_argument("--sections", default="", help="comma-separated: summary,findings,requests,queries,dbflow,"
+                                                 "branches,artifacts,timeline,notes, findings.<kind> or all")
+    s.add_argument("--level", choices=("team", "public"))
+    s.add_argument("--target")
+    s.add_argument("--yes", action="store_true", help="write the bundle (without it: a preview, nothing written)")
+    s.add_argument("--notes", action="store_true", help="list the team notes (read-only)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_share)
     for name, fn in (("pause", cmd_pause), ("resume", cmd_resume), ("status", cmd_status)):
         sub.add_parser(name).set_defaults(fn=fn)
     return p
+
+
+def cmd_share(a):
+    """`share KEY` previews the bundle (nothing written); `share KEY --yes` writes it to the share target, only when
+    the deny-list and secret scan pass; `share --notes` lists the team's bundles."""
+    from . import share
+    try:
+        if a.notes:
+            notes = share.team_notes(a.target)
+            if a.json:
+                out(json.dumps(notes, indent=1, ensure_ascii=False))
+                return 0
+            if not notes:
+                out("No team notes yet (targets: %s)." % (", ".join("%s%s" % (t.get("name"), " — " + t["problem"]
+                                                                              if t["problem"] else "")
+                                                                   for t in share.targets()) or "none configured"))
+            for n in notes:
+                out("%s  %s  %-6s %s%s  %s" % (n["at"].replace("T", " "), n["key"], n["level"], n["title"][:60],
+                                               " · " + n["by"] if n["by"] else "", n["readme"]))
+            return 0
+        if not a.key:
+            out("Name a ticket: share ABC-1001 [--sections …] [--level team|public] [--target NAME] [--yes]")
+            return 2
+        res = share.share(a.key, a.sections or None, a.level, a.target) if a.yes else \
+            share.preview(a.key, a.sections or None, a.level)
+    except share.ShareError as e:
+        out("Not shared: %s" % e)
+        return 2
+    if a.json:
+        out(json.dumps(res, indent=1, ensure_ascii=False, default=str))
+        return 0 if not res["blocked"] else 1
+    out("%s · level %s · sections: %s" % (res["key"], res["level"], ", ".join(res["sections"])))
+    for sid, text in res["removed_text"].items():
+        if text:
+            out("  removed from %s: %s" % (sid, text))
+    out("  never included: " + ", ".join(res["never"]))
+    if res["blocked"]:
+        out("BLOCKED, nothing written:")
+        for p in res["problems"]:
+            out("  - " + p)
+        for h in res["hits"][:20]:
+            out("  - %s %s line %s: %s (%s)" % (h["section"], h["file"], h["line"], h["kind"], h["rule"]))
+        return 1
+    if not a.yes:
+        out("")
+        out(res["markdown"])
+        out("Preview only; add --yes to write it to the share target.")
+        return 0
+    out("Written: %s" % res["path"])
+    if res.get("committed"):
+        out("Committed%s" % (" and pushed" if res["pushed"] else "; push failed: %s" % res["push_error"]))
+    return 0 if res["ok"] else 1
 
 
 def _check_date(s):

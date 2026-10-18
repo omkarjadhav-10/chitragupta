@@ -8,6 +8,9 @@ one of Chitragupta's own write roots:
            the one Startup-folder launcher (only used when Task Scheduler refuses the task) ·
            the dashboard's Chitragupta.url shortcut in the Start menu and on the Desktop
   pattern  worklog-kb-*.zip in storage.local_backup_dir (the nightly backup and its pruning)
+  share    <folder>/shares/ of each configured folder share target (share.targets, kind "folder"): sharing writes
+           redacted bundles there, only when you ask (safety rule: "Sharing writes redacted bundles to my configured
+           share target, only when I ask."). Never the folder itself or anything beside shares/.
   delete   <claude dir>/projects/<the sandbox's folder>/ : the tool-result copies of our own MCP jobs (delete only)
 
 Rejected before anything else: empty paths, UNC and device paths (\\\\server, \\\\?\\, \\\\.\\), NUL, `..` components,
@@ -68,27 +71,53 @@ def roots():
     bd = _backup_dir()
     if bd:
         out.append(("pattern", bd))
+    out += [("tree", d) for d in _cfg_roots()["shares"] if os.path.isdir(os.path.dirname(d))]
     return out
 
 
+SHARE_DIR = "shares"
 _BD = {}
 
 
-def _backup_dir():
-    """storage.local_backup_dir, re-read only when config.json changes."""
+def share_folder_roots(cfg, existing=True):
+    """<path>/shares for every folder share target whose path is an absolute folder (not a drive root) that exists
+    (existing=False: whether it exists or not; the existence check then happens at use)."""
+    out = []
+    for t in ((cfg or {}).get("share") or {}).get("targets") or []:
+        if not isinstance(t, dict) or t.get("kind") != "folder":
+            continue
+        p = t.get("path")
+        if not isinstance(p, str) or not p.strip() or _syntax(p.strip()) or not os.path.isabs(p.strip()):
+            continue
+        p = os.path.abspath(p.strip())
+        if os.path.dirname(p) == p or (existing and not os.path.isdir(p)):
+            continue
+        out.append(os.path.join(p, SHARE_DIR))
+    return out
+
+
+def _cfg_roots():
+    """Roots that come from config.json (backup dir, share folders), re-read only when the file changes."""
     p = common.wl("config.json")
     try:
         st = os.stat(p)
         key = (p, st.st_mtime_ns, st.st_size)  # size too: Windows file times can repeat within one clock tick
     except OSError:
-        return ""
+        return {"backup": "", "shares": []}
     if key not in _BD:
+        _BD.clear()
         try:
-            _BD.clear()
-            _BD[key] = ((common.read_json(p, {}).get("storage") or {}).get("local_backup_dir") or "").strip()
+            cfg = common.read_json(p, {}) or {}
+            _BD[key] = {"backup": ((cfg.get("storage") or {}).get("local_backup_dir") or "").strip(),
+                        "shares": share_folder_roots(cfg, existing=False)}
         except Exception:  # noqa: BLE001
-            _BD[key] = ""
+            _BD[key] = {"backup": "", "shares": []}
     return _BD[key]
+
+
+def _backup_dir():
+    """storage.local_backup_dir."""
+    return _cfg_roots()["backup"]
 
 
 def _syntax(raw):
