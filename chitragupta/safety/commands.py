@@ -523,8 +523,8 @@ def claude_reason(args, cwd):
     for x in a:
         if x.startswith(_CLAUDE_NEVER) or "bypassPermissions" in x:
             return "claude flag %s is never allowed" % x
-    if "-p" not in a and "--print" not in a:
-        return "claude without -p"
+    if a[:1] not in (["-p"], ["--print"]):  # anywhere else, `claude plugin install … -p` / `claude update … -p` would pass
+        return "claude without -p as its first argument"
     if _opt(a, "--permission-mode") != ["dontAsk"]:
         return "internal claude calls run with --permission-mode dontAsk"
     if _opt(a, "--permission-prompts") != ["none"]:

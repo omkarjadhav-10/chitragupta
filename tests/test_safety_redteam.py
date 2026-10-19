@@ -321,6 +321,25 @@ class CommandGuardTests(SafetyCase):
                 self.assertBlocked(lambda: commands.check(argv, "claude", cwd=sb, cfg=cfg), "command")
         self.assertBlocked(lambda: commands.check(good, "claude", cwd=self.repo, cfg=cfg), "command")
 
+    def test_claude_subcommand_with_print_elsewhere_is_blocked(self):
+        """-p only counts as the first argument: a subcommand that writes (plugin install, update …) with the builder's
+        flags and a trailing -p is refused, native exe or node + cli.js."""
+        from chitragupta.safety import claude as builder, commands, paths
+        cfg = self.cfg()
+        sb = paths.sandbox()
+        good = builder.build(["claude"], "x", "none", "haiku", cfg=cfg)
+        flags = good[3:]  # the builder's flags without "claude -p x"
+        cli = os.path.join(self.scratch, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+        for argv in (["claude", "plugin", "install", "x"] + flags + ["-p"], ["claude", "update"] + flags + ["--print"],
+                     ["claude", "plugin", "marketplace", "add", "o/r", "-p"] + flags,
+                     ["node", cli, "update"] + flags + ["-p"], ["claude", "x", "-p"] + flags):
+            with self.subTest(argv=argv[1:4]):
+                self.assertBlocked(lambda: commands.check(argv, "claude", cwd=sb, cfg=cfg), "command")
+        self.assertIsNone(commands.reason(["claude", "--print"] + good[2:], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["node", cli] + good[1:], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["claude", "--version"], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["claude", "mcp", "list"], "claude", cwd=sb, cfg=cfg))
+
 
 # ---------------------------------------------------------------------------------------------- path guard
 
