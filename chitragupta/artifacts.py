@@ -47,12 +47,13 @@ def is_text(path):
 
 
 def excluded(path, cfg=None):
-    """Not an artifact: build/vendor/IDE folders, temp/swap files, the Worklog folder, Claude's own config/memory."""
+    """Not an artifact: build/vendor/IDE folders, temp/swap files, the Worklog folder and Chitragupta's other folders
+    (runtime, plugin), Claude's own config/memory, and anything in a folder with `.worklog-ignore` (here or above)."""
     if not path:
         return True
     p = path.replace("\\", "/")
     pl = p.lower()
-    if common.path_within(p, common.home()):
+    if common.in_own_folder(p):  # the data home, the runtime and settings folder, the plugin
         return True
     parts = set(pl.split("/"))
     if parts & SKIP_PARTS:
@@ -67,7 +68,7 @@ def excluded(path, cfg=None):
         return True
     if pl.endswith(".bru") and "/environments/" in pl:
         return True  # Bruno environment files are configuration, not artifacts
-    return False
+    return common.path_ignored(os.path.dirname(p))  # an ignored checkout's files are never filed
 
 
 def file_sha(path):

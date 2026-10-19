@@ -177,6 +177,9 @@ class Features:
         purposes = self.state.get("artifact_purposes") or {}
         for key, it in list(q.items()):
             try:
+                if artmod.excluded(it.get("path"), self.cfg):  # queued before its folder was ignored
+                    del q[key]
+                    continue
                 if not it.get("ticket"):
                     self._unfiled(it["day"], it["path"], "Claude Code session " + (it.get("session") or "")[:8])
                     del q[key]
@@ -334,7 +337,7 @@ class Features:
         cutoff = common.now().timestamp() - 14 * 86400
         for key, info in list(known.items()):
             ts = common.parse_ts(info.get("seen"))
-            if not ts or ts.timestamp() < cutoff:
+            if not ts or ts.timestamp() < cutoff or artmod.excluded(key, self.cfg):
                 del known[key]
                 continue
             if os.path.isfile(key):

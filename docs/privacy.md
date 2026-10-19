@@ -21,7 +21,7 @@ The hooks never call a model and never touch the network. Only the SessionStart 
 ### What is not captured
 
 - **Sessions inside the data home**, such as asking Claude about your own worklog. Only a timestamp and the ticket you mention are recorded, so that the time counts, never the content.
-- **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, and the background transcript scan skips it too.
+- **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, the background transcript scan skips it too, and no file in it is filed as a ticket artifact, even when a session elsewhere edits it.
 - **Anything while capture is paused**, from `/cg:pause` until `/cg:pause resume`.
 - **Folders outside `capture_scope.include_paths`, or inside `capture_scope.exclude_paths`.**
 - **The engine's own `claude -p` and git processes.** They carry `CHITRAGUPTA_INTERNAL=1`, and the hooks ignore them.

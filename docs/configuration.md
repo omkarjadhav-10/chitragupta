@@ -100,7 +100,7 @@ Absolute paths to executables. Setup fills in any that are empty and replaces a 
 
 ## `artifacts`
 
-Files you produce (Write/Edit output, untracked repo files, published links, plans, `_drop\`) are filed under `tickets\<KEY>\artifacts\`.
+Files you produce (Write/Edit output, untracked repo files, published links, plans, `_drop\`) are filed under `tickets\<KEY>\artifacts\`. Files in a folder with `.worklog-ignore` (in it or above it), and Chitragupta's own files (the data home outside `_drop\` and the ticket folders, the runtime and settings folder, the plugin), are never filed.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|

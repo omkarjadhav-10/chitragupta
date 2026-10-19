@@ -231,5 +231,41 @@ class SafetyNetTests(ScopeCase):
         self.assertEqual({r["ticket"] for r in rows}, {"DEMO-1"})
 
 
+# --------------------------------------------------------------------------- FX-8 (d) artifacts
+
+class ArtifactScopeTests(ScopeCase):
+    def _file(self, path, text="# Notes\n\n" + "analysis line\n" * 10):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def test_excluded_covers_ignored_and_own_folders(self):
+        from chitragupta import artifacts, common
+        checkout = _repo(self.work, "checkout")
+        _touch(os.path.join(checkout, ".worklog-ignore"))
+        cfg = common.load_config()
+        for p in (os.path.join(checkout, "src", "deep", "notes.md"),            # in an ignored checkout
+                  os.path.join(checkout, ".dev-home", "tickets", "plan.md"),     # nested repo inside it
+                  os.path.join(self.home, "knowledge", "plan.md"),               # the data home
+                  os.path.join(self.user_dir, "runtime", "x", "notes.md"),       # runtime / settings folder
+                  os.path.join(os.path.dirname(common.PACKAGE_DIR), "docs", "notes.md")):  # the plugin itself
+            self.assertTrue(artifacts.excluded(p, cfg), p)
+        self.assertFalse(artifacts.excluded(os.path.join(self.work, "shop-api", "analysis.md"), cfg))
+
+    def test_session_edits_in_an_ignored_checkout_are_not_filed(self):
+        from chitragupta import agent, common
+        checkout = _repo(self.work, "checkout")
+        _touch(os.path.join(checkout, ".worklog-ignore"))
+        bad = self._file(os.path.join(checkout, "chitragupta", "notes.md"))
+        good = self._file(os.path.join(self.work, "out", "analysis.md"))
+        a = agent.Agent()
+        day, ts = common.workday(common.now(), a.cfg), common.now_iso()
+        for p in (bad, good):  # as queued by a session tagged DEMO-1 working from another folder
+            a.features.queue_artifact(p, "DEMO-1", day, "s1", ts, None, None, ts)
+        a.features.process_artifacts()
+        srcs = [r.get("source") for r in (a.store.ticket("DEMO-1").get("artifacts") or {}).values()]
+        self.assertEqual([common.norm_path(s) for s in srcs], [common.norm_path(good)])
+
 if __name__ == "__main__":
     unittest.main()
