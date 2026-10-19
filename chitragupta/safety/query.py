@@ -4,6 +4,12 @@ Allowed: exactly one SELECT / WITH … SELECT, catalog reads, EXPLAIN without AN
 read-only metadata procedure (sp_help …). Row reads carry TOP / LIMIT / FETCH FIRST <= max_rows.
 Before any keyword check: Unicode NFKC, look-alike letters mapped to ASCII, zero-width characters dropped, comments
 and string literals stripped, case folded. Anything non-ASCII left outside a literal is refused.
+The guard doesn't know the database's dialect, so syntax the dialects read differently is refused rather than guessed:
+MySQL / MariaDB executable comments (/*! */, /*M! */), a comment inside a comment, a backslash just before a closing
+quote, dollar quoting, a quote or comment inside [brackets], and a `#` or a `--` without a following space when the
+rest of that line holds a quote, bracket, ';' or comment start (a comment in one dialect, code in another). `--` +
+space is a comment up to the next CR or LF; `#` is otherwise an ordinary character (T-SQL temp tables).
+The catalog exemption from the row cap holds only when every FROM / JOIN / APPLY source is a catalog object.
 MongoDB: find, aggregate without $out / $merge, count, distinct and list operations; no write operator or option.
 """
 import json
@@ -29,10 +35,14 @@ DENY_FUNCS = ("nextval", "setval", "pg_sleep", "pg_terminate_backend", "pg_cance
               "get_lock", "release_lock", "sys_exec", "sys_eval")
 LOCK_HINT = re.compile(r"\bwith\s*\(\s*(?:nolock|readuncommitted|updlock|xlock|holdlock|rowlock|paglock|tablock|tablockx|"
                        r"serializable|readpast|repeatableread|readcommitted|nowait)\b")
-CATALOG = re.compile(r"\b(?:information_schema|pg_catalog|sys)\s*\.|\bpg_(?:class|attribute|index|constraint|proc|trigger|"
-                     r"namespace|views|tables|indexes|description|get_\w+)\b|\bsqlite_master\b")
 LIMIT = re.compile(r"\btop\s*\(?\s*(\d+)|\blimit\s+(\d+)|\bfetch\s+(?:first|next)\s+(\d+)\s+rows?\b")
 AGG_ONLY = re.compile(r"^\s*select\s+(?:count|sum|min|max|avg|count_big)\s*\(")
+CATALOG_SOURCE = re.compile(r"(?:[\w$#@]+\.)?(?:information_schema|pg_catalog|sys)\.[\w$#@]+|(?:pg_catalog\.)?(?:pg_(?:"
+                            r"class|attribute|index|constraint|proc|trigger|namespace|views|tables|indexes|description|"
+                            r"get_\w+)|sqlite_master)")
+_SOURCE_TOKEN = re.compile(r"\(|\)|,|[a-z_#@][a-z0-9_$#@]*(?:\s*\.\s*[a-z_#@][a-z0-9_$#@]*)*|\S")
+_FROM_END = {"where", "group", "having", "order", "limit", "offset", "fetch", "union", "intersect", "except", "window",
+             "qualify", "for", "select", "returning", "into"}
 
 # Cyrillic / Greek / other letters that look like Latin ones (NFKC leaves them alone)
 _CONFUSABLE = str.maketrans({
@@ -51,14 +61,138 @@ def normalise(text):
     return _ZERO_WIDTH.sub("", t).translate(_CONFUSABLE)
 
 
+_WS = " \t\r\n\f\v"
+_AMBIGUOUS_TAIL = re.compile(r"['\"`\[;]|/\*")  # what would change how the rest of the text is read
+_IDENT_CHAR = re.compile(r"[\w$#@]")
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
+
+
+def _eol(sql, i):
+    """Index of the CR or LF that ends the line at i (either one ends a `--` comment in some dialect)."""
+    ends = [j for j in (sql.find("\n", i), sql.find("\r", i)) if j >= 0]
+    return min(ends) if ends else len(sql)
+
+
+def _odd_backslashes_before(text, j):
+    k = j
+    while k > 0 and text[k - 1] == "\\":
+        k -= 1
+    return (j - k) % 2 == 1
+
+
+def _lex(sql):
+    """-> (scrubbed, None) or (None, reason). One left-to-right pass: comments dropped, literals -> 's', quoted
+    identifiers -> ident, case folded. Syntax the dialects read differently is refused (see the module doc)."""
+    out, i, n = [], 0, len(sql)
+    while i < n:
+        c, nxt = sql[i], sql[i + 1:i + 2]
+        if c == "-" and nxt == "-":
+            if i + 2 >= n or sql[i + 2] in _WS:
+                i = _eol(sql, i)  # the line break itself stays (batch separator check)
+                continue
+            if _AMBIGUOUS_TAIL.search(sql, i + 2, _eol(sql, i)):
+                return None, "'--' without a following space (a comment in some dialects, code in MySQL)"
+            out.append("--")
+            i += 2
+            continue
+        if c == "#":
+            if _AMBIGUOUS_TAIL.search(sql, i + 1, _eol(sql, i)):
+                return None, "'#' before a quote, bracket or ';' on the same line (a comment in MySQL)"
+            out.append("#")
+            i += 1
+            continue
+        if c == "/" and nxt == "*":
+            j = sql.find("*/", i + 2)
+            if j < 0:
+                return None, "unterminated comment"
+            body = sql[i + 2:j]
+            if body.startswith("!") or re.match(r"[Mm]!", body):
+                return None, "MySQL executable comment /*!"
+            if "/*" in body:
+                return None, "comment inside a comment (dialects disagree where it ends)"
+            out.append(" ")
+            i = j + 2
+            continue
+        if c in "'\"`":
+            j = i + 1
+            while True:
+                j = sql.find(c, j)
+                if j < 0:
+                    return None, "unbalanced quotes"
+                if c != "`" and _odd_backslashes_before(sql, j):
+                    return None, "backslash before a quote (dialects disagree where the literal ends)"
+                if sql[j + 1:j + 2] == c:  # doubled quote = an escaped one
+                    j += 2
+                    continue
+                break
+            if c == "'":
+                if out and out[-1] in tuple("NnEeBbXx") and (len(out) < 2 or not _IDENT_CHAR.match(out[-2][-1:])):
+                    out.pop()  # the N'..' / E'..' / B'..' / X'..' prefix
+                out.append(" 's' ")
+            else:
+                out.append(" ident ")
+            i = j + 1
+            continue
+        if c == "[":
+            j = sql.find("]", i + 1)
+            while j >= 0 and sql[j + 1:j + 2] == "]":  # ]] = an escaped ]
+                j = sql.find("]", j + 2)
+            if j < 0:
+                return None, "unbalanced brackets"
+            if re.search(r"['\"`;]|--|/\*", sql[i + 1:j]):
+                return None, "quote or comment inside [brackets] (dialects disagree)"
+            out.append(" ident ")
+            i = j + 1
+            continue
+        if c == "$" and not (out and _IDENT_CHAR.match(out[-1][-1:])) and _DOLLAR_TAG.match(sql, i):
+            return None, "dollar-quoted string (dialects disagree)"
+        out.append(c)
+        i += 1
+    return "".join(out).lower(), None
+
+
 def _scrub(sql):
-    """Lowercase, drop comments, replace literals and quoted identifiers by placeholders."""
-    s = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
-    s = re.sub(r"--[^\n]*|#[^\n]*", " ", s)
-    s = re.sub(r"(?s)\$([A-Za-z_]*)\$.*?\$\1\$", " 's' ", s)  # postgres dollar quoting
-    s = re.sub(r"[NnEeBbXx]?'(?:[^'\\]|''|\\.)*'", " 's' ", s)
-    s = re.sub(r"\"(?:[^\"]|\"\")*\"|\[[^\]]*\]|`[^`]*`", " ident ", s)
-    return s.lower()
+    """Lowercase, drop comments, replace literals and quoted identifiers by placeholders ("" when refused)."""
+    return _lex(sql)[0] or ""
+
+
+def _sources(s):
+    """FROM / JOIN / APPLY sources of a scrubbed statement, at every depth: [(name, is_function_call)]. A derived
+    table `( … )` is skipped here; its own FROM is found inside it. Comma lists (FROM a, b) count every item."""
+    toks = [re.sub(r"\s+", "", t) for t in _SOURCE_TOKEN.findall(s)]
+    out, listing, expect = [], [False], False
+    for k, t in enumerate(toks):
+        if t == "(":
+            listing.append(False)
+            expect = False
+            continue
+        if t == ")":
+            if len(listing) > 1:
+                listing.pop()
+            expect = False
+            continue
+        if expect:
+            if t in ("only", "lateral"):
+                continue
+            expect = False
+            if t != "(" and t != ",":
+                out.append((t, toks[k + 1:k + 2] == ["("]))
+            continue
+        if t in ("from", "join", "apply"):
+            listing[-1], expect = True, True
+        elif t == "," and listing[-1]:
+            expect = True
+        elif t in _FROM_END:
+            listing[-1] = False
+    return out
+
+
+def _catalog_only(s):
+    """True when the statement reads catalog objects only: every source is a catalog object or a CTE name."""
+    ctes = set(re.findall(r"([a-z_][a-z0-9_$#@]*)\s*(?:\([^()]*\))?\s+as\s*(?:not\s+)?(?:materialized\s*)?\(", s)) - {"ident"}
+    src = _sources(s)
+    cat = [n for n, _ in src if CATALOG_SOURCE.fullmatch(n)]
+    return bool(cat) and all(CATALOG_SOURCE.fullmatch(n) or (n in ctes and not fn) for n, fn in src)
 
 
 def sql_reason(sql, max_rows=20, require_limit=True):
@@ -66,11 +200,10 @@ def sql_reason(sql, max_rows=20, require_limit=True):
     if not isinstance(sql, str) or not sql.strip():
         return "empty statement"
     sql = normalise(sql)
-    if "/*" in re.sub(r"/\*.*?\*/", "", sql, flags=re.S):
-        return "unterminated comment"
-    if "'" in re.sub(r"[NnEeBbXx]?'(?:[^'\\]|''|\\.)*'", "", re.sub(r"--[^\n]*|/\*.*?\*/", "", sql, flags=re.S)):
-        return "unbalanced quotes"
-    s = _scrub(sql).strip()
+    scrubbed, why = _lex(sql)
+    if why:
+        return why
+    s = scrubbed.strip()
     if re.search(r"[^\x00-\x7f]", s):
         return "non-ASCII text outside string literals"
     parts = [p for p in s.split(";") if p.strip()]
@@ -97,7 +230,7 @@ def sql_reason(sql, max_rows=20, require_limit=True):
     for w in DENY_WORDS:
         if re.search(r"(?<![\w.$#@])%s(?![\w$#@])" % w, s):
             return "write or control keyword %s" % w.upper()
-    if re.search(r"(?m)^\s*go\s*$", _scrub(sql)):
+    if re.search(r"(?m)^\s*go\s*$", scrubbed):
         return "batch separator"
     for f in DENY_FUNCS:
         if re.search(r"(?<![\w.])%s\w*\s*\(" % re.escape(f), s) or (f.endswith("_") and re.search(r"\b%s\w+" % f, s)):
@@ -119,7 +252,7 @@ def sql_reason(sql, max_rows=20, require_limit=True):
         prev = tok if tok not in ("(", ")") else prev
     if depth != 0:
         return "unbalanced parentheses"
-    if require_limit and first in ("select", "with") and not CATALOG.search(s) and not AGG_ONLY.match(s):
+    if require_limit and first in ("select", "with") and not _catalog_only(s) and not AGG_ONLY.match(s):
         nums = [int(x) for m in LIMIT.finditer(s) for x in m.groups() if x]
         if not nums:
             return "row read without TOP/LIMIT"

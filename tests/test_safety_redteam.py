@@ -59,11 +59,45 @@ SQL = [
     "EXEC sp_executesql N'DELETE FROM t'", "SELECT setval('s', 1)", "SELECT 1\nGO\nDELETE FROM t",
     "WITH d AS (DELETE FROM t RETURNING id) SELECT id FROM d LIMIT 1", "SELECT * FROM t",  # no LIMIT
 ]
+# Comment / literal syntax the dialects disagree on: the guard must not read a write as a comment or a literal that
+# the database runs as code (MySQL `#` and `/*! */`, `--` without a space, backslash escapes, nested comments,
+# dollar quoting, T-SQL brackets), and a catalog mention must not lift the row cap off a data table.
+SQL_DIALECT = [
+    "SELECT TOP 1 * FROM #t; DROP TABLE x", "SELECT count(*) # 1 FROM t; DROP TABLE t",
+    "SELECT count(*) FROM t /*! INTO OUTFILE '/tmp/x' */", "SELECT count(*) FROM t /*!50000 DROP TABLE t */",
+    "SELECT count(*) FROM t /*M!100000 DROP TABLE t */", "SELECT count(*) --1 FROM t; DROP TABLE t",
+    "SELECT TOP 1 a FROM t WHERE b = 'x\\' ; DROP TABLE t; --'",
+    "SELECT TOP 1 \"a\\\" , 'b\" ; DROP TABLE t; -- ' FROM t",
+    "SELECT TOP 1 a FROM t /* /* */ ' */ ; DROP TABLE t; -- '",
+    "SELECT TOP 1 a FROM t # '\n; DROP TABLE t; -- '", "SELECT TOP 1 a FROM t --x '\n; DROP TABLE t; -- '",
+    "SELECT TOP 1 a FROM t -- note\r; DROP TABLE t", "SELECT $a$ ; DROP TABLE t; $a$",
+    "SELECT TOP 1 j[']'] ; DROP TABLE t; --'] FROM t",
+    "SELECT * FROM information_schema.tables t JOIN shop.orders o ON 1 = 1",
+    "SELECT * FROM shop.orders WHERE id IN (SELECT 1 FROM sys.objects)",
+    "SELECT o.*, (SELECT count(*) FROM pg_class) AS n FROM shop.orders o",
+    "SELECT * FROM pg_class, shop.orders", "SELECT * FROM sys.objects o CROSS APPLY shop.f(o.object_id) x",
+]
 SQL_OK = ["SELECT TOP 5 * FROM shop.orders", "WITH x AS (SELECT id FROM shop.orders) SELECT * FROM x LIMIT 5",
           "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'",
           "EXPLAIN SELECT * FROM shop.orders LIMIT 1", "EXEC sp_help 'shop.orders'",
           "SELECT replace(name, 'a', 'b') FROM shop.customers LIMIT 3", "SELECT count(*) FROM shop.orders",
-          "SELECT 'delete from x' AS s FROM shop.orders LIMIT 1", "SELECT id FROM shop.orders ORDER BY id DESC LIMIT 20"]
+          "SELECT 'delete from x' AS s FROM shop.orders LIMIT 1", "SELECT id FROM shop.orders ORDER BY id DESC LIMIT 20",
+          "WITH x AS (SELECT TOP 5 id FROM shop.orders) SELECT * FROM x",
+          "SELECT id, row_number() OVER (PARTITION BY status ORDER BY id) AS rn FROM shop.orders LIMIT 10",
+          "SELECT TOP 10 * FROM [dbo].[Orders]", "SELECT TOP (10) [id], [status] FROM [shop].[orders] WHERE [id] = 5",
+          "SELECT id FROM shop.orders ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY",
+          "SELECT id FROM shop.orders -- delete later\nLIMIT 5", "SELECT id FROM shop.orders /* drop? */ LIMIT 5",
+          "SELECT 'DELETE ME' AS x FROM shop.orders LIMIT 1", "SELECT 'a -- b' AS x FROM shop.orders LIMIT 1",
+          "SELECT 'it''s' AS x FROM shop.orders LIMIT 1", "SELECT 'C:\\\\' AS x FROM shop.orders LIMIT 1",
+          "SELECT id FROM shop.orders LIMIT 5;", "SELECT id::text, created_at::date FROM shop.orders LIMIT 5",
+          "SELECT id FROM shop.orders WHERE title ILIKE '%x%' LIMIT 5", "SELECT id FROM shop.orders WHERE id = $1 LIMIT 1",
+          "SELECT id FROM shop.orders WHERE note = E'it''s' LIMIT 1", "SELECT \"Id\" FROM \"shop\".\"Orders\" LIMIT 5",
+          "SELECT `id` FROM `shop`.`orders` LIMIT 5", "SELECT TOP 5 o.id FROM #recent o",
+          "SELECT c.table_name, c.column_name FROM information_schema.columns c "
+          "JOIN information_schema.tables t ON t.table_name = c.table_name WHERE c.table_schema = 'shop'",
+          "SELECT name FROM sys.objects o CROSS APPLY sys.dm_sql_referenced_entities(o.name, 'OBJECT') r",
+          "WITH k AS (SELECT conname FROM pg_constraint) SELECT * FROM k", "SELECT * FROM pg_get_keywords()",
+          "EXEC sp_helptext 'shop.usp_lock'"]
 MONGO = [{"operation": op, "collection": "c"} for op in
          ("insertOne", "updateMany", "deleteMany", "findOneAndUpdate", "bulkWrite", "drop", "createIndex", "mapReduce")] + [
     {"operation": "aggregate", "collection": "c", "pipeline": [{"$match": {}}, {"$out": "x"}]},
@@ -379,6 +413,28 @@ class QueryAndMcpTests(SafetyCase):
         for sql in SQL_OK:
             with self.subTest(sql=sql):
                 self.assertIsNone(query.sql_reason(sql))
+
+    def test_sql_dialect_tricks(self):
+        tool = "mcp__%s__run_query" % DB
+        for sql in SQL_DIALECT:
+            with self.subTest(sql=sql):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": sql}},
+                                      "mcp")
+
+    def test_own_job_statements_pass(self):
+        """Every statement Chitragupta's database jobs write (schema cards, trace, link map) passes the guard."""
+        from chitragupta import mcpjobs
+        from chitragupta.safety import query
+        stmts = []
+        for ctype, s in mcpjobs.CATALOG_SQL.items():
+            stmts.append(s["triggers"].format(schema="shop", names="'orders', 'docs'"))
+            stmts.append(s["writers"].format(likes=" OR ".join(s["like"].format(name=n) for n in ("orders", "docs"))))
+            stmts.append(mcpjobs.link_sql(ctype, ("shop", "docs", "order_id"), ("shop", "orders", "id")))
+        stmts += ["SELECT TOP 20 id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC",
+                  "SELECT id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC LIMIT 20"]
+        for sql in stmts:
+            with self.subTest(sql=sql[:80]):
+                self.assertIsNone(query.sql_reason(sql, 20))
 
     def test_mongo(self):
         tool = "mcp__%s__run_query" % DB
