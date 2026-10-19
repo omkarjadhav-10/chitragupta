@@ -637,6 +637,53 @@ class SessionGuardTests(SafetyCase):
         self.assertLess(times[len(times) // 2], 400)
 
 
+class SessionLauncherFailOpenTests(SafetyCase):
+    """The session guard must not block my session when the launcher itself can't load the package: the skills'
+    guard hook has no onFailure: block, and `run.py safety session` exits 0 silently. (The internal guard keeps
+    onFailure: block and fails closed.)"""
+
+    BAD = {"session_id": "s-1", "prompt_id": "P1", "tool_name": "Bash", "tool_input": {"command": "git commit -am x"}}
+
+    def launcher_copy(self, broken_package):
+        import shutil
+        root = tempfile.mkdtemp(prefix="plugin-copy-", dir=self.scratch)
+        os.makedirs(os.path.join(root, "hooks"))
+        shutil.copy(RUN_PY, os.path.join(root, "hooks", "run.py"))
+        if broken_package:
+            os.makedirs(os.path.join(root, "chitragupta"))
+            with open(os.path.join(root, "chitragupta", "__init__.py"), "w") as f:
+                f.write("raise ImportError('simulated broken install')\n")
+        return os.path.join(root, "hooks", "run.py")
+
+    def test_session_guard_exits_0_silently_when_the_package_cannot_load(self):
+        for broken in (False, True):  # no package next to the launcher / a package that fails to import
+            with self.subTest(broken_package=broken):
+                run = self.launcher_copy(broken)
+                p = subprocess.run([PY, "-B", run, "safety", "session"], input=json.dumps(self.BAD).encode(),
+                                   capture_output=True, timeout=30, env=self.child_env())
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
+
+    def test_other_launcher_commands_still_report_a_missing_package(self):
+        run = self.launcher_copy(False)
+        p = subprocess.run([PY, "-B", run, "safety", "internal", "none"], input=b"{}", capture_output=True, timeout=30,
+                           env=self.child_env())
+        self.assertNotEqual(p.returncode, 0)  # internal calls also carry onFailure: block
+
+    def test_skills_register_the_session_guard_without_on_failure_block(self):
+        import glob
+        from tests.support import ROOT
+        from chitragupta.safety import status
+        files = sorted(glob.glob(os.path.join(ROOT, "skills", "*", "SKILL.md")))
+        self.assertTrue(files)
+        for p in files:
+            with self.subTest(skill=p):
+                with open(p, encoding="utf-8") as f:
+                    text = f.read()
+                self.assertIn('"safety", "session"]', text)
+                self.assertFalse("onFailure" in text, "the session guard must not block when its launcher fails")
+        self.assertEqual(status.unguarded_skills(), [])
+
+
 # ---------------------------------------------------------------------------------------------- allowed actions
 
 class AllowedTests(SafetyCase):

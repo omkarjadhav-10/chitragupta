@@ -6,6 +6,9 @@ Two homes, one file:
     (setup copies this file there; it loads runtime/<version in "current">/chitragupta)
 
 Hooks fail open: any problem → exit 0 silently. The launcher never waits on a model.
+`safety session` (the /cg: skills' PreToolUse guard) fails open the same way when the package can't load: it is
+registered without onFailure: block, so a broken install never blocks the session. Once the package has loaded, the
+guard itself fails closed while a /cg: command is confirmed running (chitragupta/safety/hook.py).
 """
 import os
 import sys
@@ -31,21 +34,27 @@ def is_hook(argv):
     return bool(argv) and argv[0] == "hook"
 
 
+def fails_open(argv):
+    """Hooks, and the session guard: a launcher or package-load failure exits 0 silently."""
+    return is_hook(argv) or list(argv[:2]) == ["safety", "session"]
+
+
 def main(argv):
     hook = is_hook(argv)
+    quiet = fails_open(argv)
     try:
         if os.environ.get("CHITRAGUPTA_INTERNAL") == "1" and hook:
             return 0  # the engine's own child processes are never captured
         root = package_root()
         if root is None:
-            return 0 if hook else 3
+            return 0 if quiet else 3
         if root not in sys.path:
             sys.path.insert(0, root)
         from chitragupta.__main__ import run
         rc = run(argv)
         return 0 if hook else rc
-    except BaseException:  # noqa: BLE001 — hooks must never break a session
-        if hook:
+    except BaseException:  # noqa: BLE001 — hooks (and the session guard) must never break a session
+        if quiet:
             return 0
         raise
 

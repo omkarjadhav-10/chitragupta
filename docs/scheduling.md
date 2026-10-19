@@ -35,5 +35,5 @@ The data home is `~/Chitragupta` and the runtime `~/.chitragupta`, as on Windows
 
 ## Limits
 
-- **Hooks still start with `py -3`.** The plugin's hooks and `/cg:` commands use the Windows Python launcher. The `bin/cg-hook` launcher (python3, then python; `py -3` on Windows) is in the plugin, but switching `hooks.json` and the skills to it waits for a check in a live Claude Code session on each OS, because the `/cg:` safety guard is a fail-closed hook. Until then the scheduler backends are ready on macOS and Linux, but the hooks there won't start.
+- **Hooks still start with `py -3`.** The plugin's hooks and `/cg:` commands use the Windows Python launcher. The `bin/cg-hook` launcher (python3, then python; `py -3` on Windows) is in the plugin, but switching `hooks.json` and the skills to it waits for a check in a live Claude Code session on each OS, because the `/cg:` safety guard runs as a hook: one that doesn't start there would leave the guard off without a sign (it fails open when its launcher can't start). Until then the scheduler backends are ready on macOS and Linux, but the hooks there won't start.
 - macOS and Linux are covered by tests with a fake `launchctl` / `systemctl` / `crontab`; they have not been run on a real Mac or Linux machine yet.

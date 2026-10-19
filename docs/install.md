@@ -55,7 +55,7 @@ No events are recorded and nothing is written. Run **`/cg:setup`**.
 - **The `Chitragupta` scheduled task.** If Task Scheduler refuses it, setup falls back to a Startup-folder launcher.
 - **The `chitragupta` recall skill.** It goes in `~/.claude/skills/chitragupta/`.
 - **The CLAUDE.md block.** It is added to `~/.claude/CLAUDE.md` between `<!-- chitragupta:start -->` and `<!-- chitragupta:end -->`. The file is backed up first.
-- **A doctor run** at the end. It includes **Safety: enforced**: every process, file write and tool call goes through the safety layer ([safety.md](safety.md)). It needs Claude Code 2.1.295 or newer for fail-closed hooks.
+- **A doctor run** at the end. It includes **Safety: enforced**: every process, file write and tool call goes through the safety layer ([safety.md](safety.md)). It needs Claude Code 2.1.295 or newer for the internal calls' fail-closed guard hook.
 
 Setup is idempotent: re-running it repairs or upgrades an install and never changes recorded data. When it finishes, start a new session so the recall skill and the CLAUDE.md block load, then try `/cg:today`.
 
