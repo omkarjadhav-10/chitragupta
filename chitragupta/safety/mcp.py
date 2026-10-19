@@ -6,7 +6,8 @@ Profiles
                   query guard
   slack-send      only the configured send tool, only to my own Slack user ID (or my DM channel), plain text, capped
   slack-discover  only reading my own profile / looking up a user
-  session         a /cg: command in my session: read tools, Chitragupta's own helper, MCP reads as for `mcp`
+  session         a /cg: command in my session: read tools, Chitragupta's own helper, the read tools of Chitragupta's
+                  own MCP server (OWN_MCP_TOOLS, no allow.json entry needed), other MCP reads as for `mcp`
 
 A floor that allow.json can't lift: an MCP tool whose name says it writes (create, update, delete, send, comment,
 transition, upload, …) is never a read, whatever the allowlist says. The Slack send tool is the one exception, and
@@ -59,6 +60,17 @@ GIT_HOST_READ = {
     },
 }
 ACTION_KEYS = ("action", "method")
+# Chitragupta's own MCP server (chitragupta/mcpserver.py, started from the plugin manifest as server `chitragupta` of
+# plugin `cg`): read-only by construction, every tool a read of the data home. Pinned here (a test keeps it equal to
+# mcpserver.TOOL_NAMES) so the guard never imports the server. Session profile only: internal calls never see it.
+OWN_MCP_SERVER = "plugin_cg_chitragupta"
+OWN_MCP_TOOLS = frozenset({"search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table",
+                           "list_tickets", "get_alerts"})
+# Policy A for another plugin's MCP tools during a /cg: command: denied (a /cg: command only uses Chitragupta's tools),
+# but they're the other plugin's own background calls, not an attempt to write: logged with this category and left
+# out of the violation counts (log.summary).
+OTHER_PLUGIN = "other-plugin"
+OTHER_PLUGIN_REASON = "not a Chitragupta tool; skip this call and don't retry it"
 SESSION_READ = {"Read", "Grep", "Glob", "LS", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
                 "ToolSearch", "AskUserQuestion", "StructuredOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
 
@@ -204,7 +216,31 @@ def helper_command(cmd):
     return len(tok) >= 2 and _own_helper(tok[0])
 
 
-def session_reason(tool_name, tool_input, cfg):
+def own_mcp_reason(tool, server_info=None):
+    """A tool of Chitragupta's own MCP server: None for one of its read tools. When Claude Code says where the server
+    came from (mcp_server.source), it must be a plugin server — a user or project server that borrows the name is not
+    ours."""
+    src = server_info.get("source") if isinstance(server_info, dict) else None
+    if src is not None and src != "plugin":
+        return "server %s from %s is not Chitragupta's own MCP server" % (OWN_MCP_SERVER, src)
+    if tool not in OWN_MCP_TOOLS or writes(tool):
+        return "tool %s is not one of Chitragupta's own read tools" % tool
+    return None
+
+
+def other_plugin(tool_name, server_info=None):
+    """True for an MCP tool of another plugin: by the hook input's mcp_server.source when Claude Code sends it, else by
+    the `mcp__plugin_<plugin>_<server>__` name prefix. Chitragupta's own server is never "other"."""
+    server, _ = split_tool(str(tool_name or ""))
+    if not server or server == OWN_MCP_SERVER:
+        return False
+    src = server_info.get("source") if isinstance(server_info, dict) else None
+    if src is not None:
+        return src == "plugin"
+    return server.startswith("plugin_")
+
+
+def session_reason(tool_name, tool_input, cfg, server_info=None):
     inp = tool_input if isinstance(tool_input, dict) else {}
     if tool_name in SESSION_READ:
         return None
@@ -215,6 +251,10 @@ def session_reason(tool_name, tool_input, cfg):
         s = str(inp.get("skill") or inp.get("name") or "")
         return None if s == "chitragupta" or s.startswith("cg:") else "only Chitragupta's skills"
     server, tool = split_tool(tool_name)
+    if server == OWN_MCP_SERVER:
+        return own_mcp_reason(tool, server_info)
+    if other_plugin(tool_name, server_info):
+        return OTHER_PLUGIN_REASON
     if server:
         if "slack" in server.lower():
             return "no Slack tools during a /cg: command"
@@ -224,8 +264,9 @@ def session_reason(tool_name, tool_input, cfg):
 
 # --------------------------------------------------------------------------- the decision
 
-def reason(profile, tool_name, tool_input, cfg=None):
-    """None = allowed. Unknown profiles and unknown tools are refused."""
+def reason(profile, tool_name, tool_input, cfg=None, server_info=None):
+    """None = allowed. Unknown profiles and unknown tools are refused. `server_info`: the hook input's `mcp_server`
+    ({name, source}) for an MCP tool, when Claude Code sends it."""
     tool_name = str(tool_name or "")
     if profile == "none":
         return None if tool_name == "StructuredOutput" else "no tools in this job (%s)" % tool_name
@@ -237,7 +278,7 @@ def reason(profile, tool_name, tool_input, cfg=None):
     if profile == "slack-discover":
         return slack_discover_reason(tool_name, tool_input)
     if profile == "session":
-        return session_reason(tool_name, tool_input, cfg)
+        return session_reason(tool_name, tool_input, cfg, server_info)
     return "unknown guard profile %r" % profile
 
 

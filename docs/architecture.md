@@ -25,7 +25,7 @@ Everything is Python standard library code in one package, `chitragupta`. A few 
 ```mermaid
 flowchart LR
   subgraph CC["Claude Code session"]
-    H["Plugin hooks<br/>SessionStart · PreToolUse branch guard (sync) · UserPromptSubmit · PostToolUse · Stop · SessionEnd (async)"]
+    H["Plugin hooks<br/>SessionStart · PreToolUse branch guard · /cg: UserPromptExpansion (sync) · UserPromptSubmit · PostToolUse · Stop · SessionEnd (async)"]
   end
   H -->|"redacted JSON lines"| RAW["raw events<br/>.worklog/raw/DAY/SESSION.jsonl"]
   H -.->|"SessionStart: spawn"| MAINT["maintenance<br/>runtime refresh · dashboard ensure · MCP status"]
@@ -53,7 +53,7 @@ flowchart LR
 
 ### 1. Capture (hooks)
 
-`hooks/hooks.json` registers six events and points them at `hooks/run.py` inside the plugin. The PreToolUse entry is the branch guard: it starts only for branch and PR creation commands (the hooks' `if` filter), reads a few small files, records nothing and finishes in well under 200 ms (see [branch-tracking.md](branch-tracking.md#the-guard)). Three rules apply to the others:
+`hooks/hooks.json` registers seven events and points them at `hooks/run.py` inside the plugin. The PreToolUse entry is the branch guard: it starts only for branch and PR creation commands (the hooks' `if` filter), reads a few small files, records nothing and finishes in well under 200 ms (see [branch-tracking.md](branch-tracking.md#the-guard)). The UserPromptExpansion entry (`hook cg-expand`) starts only for the `/cg:` command names: it records that prompt's `prompt_id` in `.worklog/cache/cg-active/<session>` for the session guard, records nothing else, prints nothing and finishes in under 100 ms (see [safety.md](safety.md#how-it-is-enforced)). Three rules apply to the others:
 
 - **SessionStart runs synchronously.** It uses `py -3` with a 10 s budget; the measured p95 is well under 100 ms. It registers the session and prints context for the active ticket: a short summary from `cache/context/<KEY>.md`, a warning line if something is broken, and at most a weekly reminder. Then it spawns a detached maintenance process.
 - **The other four events run asynchronously** with windowless `pyw -3`.

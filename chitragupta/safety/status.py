@@ -1,7 +1,9 @@
 """Safety status for /cg:doctor and the dashboard's Health page.
 
-"enforced" needs all of: the canned guard decisions hold (selftest), every /cg: skill registers the fail-closed
-session guard, and Claude Code is new enough for `onFailure: block` (2.1.295).
+"enforced" needs all of: the canned guard decisions hold (selftest), every /cg: skill registers the session guard
+(without onFailure: block: a launcher that can't start must not block the session; the guard itself fails closed once a
+/cg: command is confirmed running), and Claude Code is new enough for `onFailure: block` on the internal calls' guard
+(2.1.295).
 """
 import glob
 import os
@@ -11,7 +13,7 @@ from .. import common
 from . import log, selftest
 
 MIN_CLAUDE = (2, 1, 295)
-SESSION_HOOK = re.compile(r'args:\s*\[[^\]]*"safety",\s*"session"\][^\n]*\n(?:[^\n]*\n){0,3}?\s*onFailure:\s*block')
+SESSION_HOOK = re.compile(r'args:\s*\[[^\]]*"safety",\s*"session"\]')
 
 
 def skills_dir():
@@ -56,13 +58,13 @@ def status(cfg=None, claude_detail=None):
     if claude_detail is not None:
         v = claude_version(claude_detail)
         if not v or v < MIN_CLAUDE:
-            problems.append("Claude Code %s is older than %s (needed for fail-closed hooks)"
+            problems.append("Claude Code %s is older than %s (needed for the internal calls' fail-closed guard)"
                             % (".".join(map(str, v)) if v else "?", ".".join(map(str, MIN_CLAUDE))))
     s = log.summary(days=7)
     day = log.summary(days=1)
     return {"enforced": not problems, "problems": problems, "checks": st.get("checks", 0),
             "skills_checked": sk is not None, "blocks_7d": s["recent"], "blocks_24h": day["recent"],
-            "by_layer": s["by_layer"], "last": s["last"], "log": log.path(),
+            "by_layer": s["by_layer"], "last": s["last"], "log": log.path(), "skipped_7d": s.get("other_plugin", 0),
             "database_read_only": database_read_only(cfg),
             "fetch": (cfg.get("git") or {}).get("allow_fetch", True) is not False}
 
@@ -77,8 +79,9 @@ def doctor_rows(cfg=None, claude_detail=None):
         rows.append({"name": "security log", "ok": False, "detail": "%d blocked action(s) in the last 24 h (%s) — see %s"
                      % (s["blocks_24h"], ", ".join("%s %d" % kv for kv in sorted(s["by_layer"].items())), s["log"])})
     else:
-        rows.append({"name": "security log", "ok": True, "detail": "no blocked actions in the last 24 h (%d in 7 days)"
-                     % s["blocks_7d"]})
+        rows.append({"name": "security log", "ok": True, "detail": "no blocked actions in the last 24 h (%d in 7 days)%s"
+                     % (s["blocks_7d"], "; %d other-plugin tool call(s) skipped during /cg: commands (not violations)"
+                        % s["skipped_7d"] if s["skipped_7d"] else "")})
     if s["database_read_only"] is False:
         rows.append({"name": "database login", "ok": False, "detail": "the database MCP's read-only login isn't confirmed: "
                      "give it a read-only login, then set mcp.database.read_only_login to true"})

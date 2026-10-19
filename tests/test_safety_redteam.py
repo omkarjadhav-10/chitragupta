@@ -460,22 +460,37 @@ class QueryAndMcpTests(SafetyCase):
 # ---------------------------------------------------------------------------------------------- /cg: commands in my sessions
 
 class SessionGuardTests(SafetyCase):
+    """The session guard acts only for the prompt a /cg: command expanded (UserPromptExpansion records its prompt_id);
+    every PreToolUse input carries the prompt_id of the prompt being processed."""
+
+    def expand(self, prompt_id, sid="s-1", name="cg:today", prompt=None, **extra):
+        """What the synchronous UserPromptExpansion hook (`hook cg-expand`) does for a typed /cg: command."""
+        from chitragupta.safety import hook
+        d = {"session_id": sid, "hook_event_name": "UserPromptExpansion", "expansion_type": "slash_command",
+             "command_name": name, "command_args": "", "command_source": "plugin", "prompt": prompt or "/" + name}
+        if prompt_id:
+            d["prompt_id"] = prompt_id
+        d.update(extra)
+        hook.expand(d)
+
+    def data(self, tool, inp, prompt_id="P1", sid="s-1", transcript=None):
+        d = {"session_id": sid, "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": inp}
+        if prompt_id:
+            d["prompt_id"] = prompt_id
+        if transcript:
+            d["transcript_path"] = transcript
+        return d
+
     def transcript(self, prompt):
         p = os.path.join(self.scratch, "t-%d.jsonl" % (len(os.listdir(self.scratch))))
         lines = [{"type": "user", "message": {"role": "user", "content": "earlier work"}},
-                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
-                 {"type": "user", "message": {"role": "user", "content": prompt}},
-                 {"type": "user", "isMeta": True, "message": {"content": [{"type": "text", "text": "skill body"}]}},
-                 {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}}]
+                 {"type": "user", "message": {"role": "user", "content": prompt}}]
         with open(p, "w", encoding="utf-8") as f:
             f.write("\n".join(json.dumps(l) for l in lines) + "\n")
         return p
 
-    def data(self, prompt, tool, inp, sid="s-1"):
-        return {"session_id": sid, "transcript_path": self.transcript(prompt), "tool_name": tool, "tool_input": inp}
-
     def test_writes_blocked_during_a_cg_command(self):
-        cg = "<command-message>cg:today</command-message>\n<command-name>/cg:today</command-name>"
+        self.expand("P1")
         for tool, inp in (("Bash", {"command": "git commit -am x"}), ("PowerShell", {"command": "git push"}),
                           ("Bash", {"command": 'py -3 "%s" cli today; git commit -am x' % RUN_PY}),
                           ("Edit", {"file_path": os.path.join(self.repo, "a.txt"), "old_string": "one", "new_string": "x"}),
@@ -485,42 +500,132 @@ class SessionGuardTests(SafetyCase):
                           (SEND, {"channel_id": ME, "message": "x"}), ("Agent", {"prompt": "x"}),
                           ("WebFetch", {"url": "https://acme.test"})):
             with self.subTest(tool=tool, inp=str(inp)[:50]):
-                self.assertHookDenies("session", self.data(cg, tool, inp))
-        self.assertHookDenies("session", self.data("/cg:check ABC-1001", "Bash", {"command": "git merge x"}))
+                self.assertHookDenies("session", self.data(tool, inp))
+        self.expand("P2", name="cg:check", prompt="/cg:check ABC-1001")
+        self.assertHookDenies("session", self.data("Bash", {"command": "git merge x"}, prompt_id="P2"))
 
     def test_reads_and_the_helper_pass_during_a_cg_command(self):
-        cg = "<command-name>/cg:ticket</command-name>"
+        self.expand("P1", name="cg:ticket")
         for tool, inp in (("Read", {"file_path": os.path.join(self.home, "inbox.md")}), ("Grep", {"pattern": "x"}),
                           ("Bash", {"command": 'py -3 "%s" cli ticket ABC-1001' % RUN_PY}),
                           ("mcp__%s__run_query" % DB, {"connection_id": "qa-main", "sql": "SELECT TOP 5 * FROM shop.orders"})):
             with self.subTest(tool=tool):
-                self.assertHookAllows("session", self.data(cg, tool, inp))
+                self.assertHookAllows("session", self.data(tool, inp))
 
     def test_my_own_work_is_untouched_outside_cg_commands(self):
-        for prompt in ("commit and push this", "please run /cg:today later", "fix the bug in a.txt"):
-            for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Bash", {"command": "git push --force"}),
-                              ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
-                              ("mcp__%s__run_query" % DB, {"sql": "UPDATE t SET a = 1"})):
-                with self.subTest(prompt=prompt, tool=tool):
-                    n = self.log_count()
-                    self.assertHookAllows("session", self.data(prompt, tool, inp))
-                    self.assertEqual(self.log_count(), n)
+        for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Bash", {"command": "git push --force"}),
+                          ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
+                          ("mcp__%s__run_query" % DB, {"sql": "UPDATE t SET a = 1"})):
+            with self.subTest(tool=tool):
+                n = self.log_count()
+                self.assertHookAllows("session", self.data(tool, inp))
+                self.assertEqual(self.log_count(), n)
 
-    def test_user_prompt_submit_mark_and_stop_clear(self):
+    def test_a_after_a_cg_prompt_the_next_prompt_is_not_guarded(self):
+        """Audit scenario: /cg: prompt P1 marked; the next normal prompt P2 (mark still there, transcript lagging)."""
+        self.expand("P1")
+        lag = self.transcript("<command-name>/cg:today</command-name>")  # the transcript still ends with the /cg: prompt
+        for tool, inp in (("Bash", {"command": "git commit -am x"}), ("Edit", {"file_path": os.path.join(self.repo, "a.txt")}),
+                          ("mcp__plugin_other_tool__panel_sync", {"x": 1})):
+            with self.subTest(tool=tool):
+                n = self.log_count()
+                self.assertHookAllows("session", self.data(tool, inp, prompt_id="P2", transcript=lag))
+                self.assertEqual(self.log_count(), n)
+
+    def test_b_same_prompt_is_guarded(self):
+        self.expand("P1")
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P1"))
+        self.assertHookAllows("session", self.data("Grep", {"pattern": "x"}, prompt_id="P1"))
+
+    def test_c_interrupted_cg_command_then_a_new_prompt(self):
+        """Esc during a /cg: command: no Stop, the mark stays; the next prompt has a new prompt_id."""
+        self.expand("P1")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+
+    def test_d_resumed_session(self):
+        self.expand("P1", sid="s-r")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git push"}, prompt_id="P7", sid="s-r"))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git push"}, prompt_id="P1", sid="s-other"))
+
+    def test_e_no_prompt_id_is_not_guarded(self):
         from chitragupta.safety import hook
-        hook.mark("s-9", "/cg:today")
-        d = self.data("normal prompt", "Bash", {"command": "git commit -am x"}, sid="s-9")
-        self.assertHookDenies("session", d)  # the mark alone is enough (transcript not flushed yet)
-        hook.clear("s-9")
-        self.assertHookAllows("session", self.data("normal prompt", "Bash", {"command": "git commit -am x"}, sid="s-9"))
-        hook.mark("s-9", "/cg:today")
-        hook.mark("s-9", "now something else")  # the next normal prompt clears it too
-        self.assertHookAllows("session", self.data("normal prompt", "Bash", {"command": "git commit"}, sid="s-9"))
+        self.expand("P1")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id=None))
+        # an expansion without a prompt_id leaves nothing that could match later
+        self.expand(None, sid="s-2")
+        self.assertFalse(os.path.exists(hook.mark_path("s-2")))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id=None, sid="s-2"))
+
+    def test_transcript_alone_no_longer_activates(self):
+        t = self.transcript("<command-name>/cg:today</command-name>")
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, transcript=t))
+
+    def test_only_cg_commands_mark(self):
+        from chitragupta.safety import hook
+        for name, prompt in (("other:today", "/other:today"), ("today", "/today"), ("review", "/review")):
+            with self.subTest(name=name):
+                self.expand("P1", name=name, prompt=prompt)
+                self.assertFalse(os.path.exists(hook.mark_path("s-1")))
+        self.expand("P1", name="today", prompt="/cg:today")  # a plain command name with the plugin prefix in the prompt
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}))
+
+    def test_stop_clears_only_its_own_prompt(self):
+        from chitragupta.safety import hook
+        self.expand("P2")
+        hook.clear("s-1", "P1")  # a late Stop of the previous turn must not lift the guard of this one
+        self.assertHookDenies("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+        hook.clear("s-1", "P2")
+        self.assertFalse(os.path.exists(hook.mark_path("s-1")))
+        self.assertHookAllows("session", self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2"))
+
+    def test_hooks_json_registers_a_synchronous_expansion_hook_for_cg_commands_only(self):
+        import re
+        from tests.support import ROOT
+        with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
+            hooks = json.load(f)["hooks"]
+        groups = hooks["UserPromptExpansion"]
+        self.assertEqual(len(groups), 1)
+        m = re.compile(groups[0]["matcher"])
+        for name in os.listdir(os.path.join(ROOT, "skills")):
+            with self.subTest(skill=name):
+                self.assertTrue(m.search("cg:" + name))
+        for other in ("other:today", "deploy", "cg:unknown", "xcg:today", "today-extra"):
+            self.assertFalse(m.search(other), other)
+        h = groups[0]["hooks"]
+        self.assertEqual(len(h), 1)
+        self.assertNotIn("async", h[0])
+        self.assertEqual(h[0]["args"][-2:], ["hook", "cg-expand"])
+        self.assertLessEqual(h[0]["timeout"], 5)
+        # nothing marks /cg: activity on UserPromptSubmit any more
+        self.assertNotIn("safety", json.dumps(hooks["UserPromptSubmit"]))
+
+    def test_through_the_launcher_and_fast(self):
+        """As Claude Code runs it: `hook cg-expand` records the prompt, then `safety session` guards only that prompt."""
+        from tests.support import run_hook
+        env = self.child_env()
+        exp = {"session_id": "s-l", "prompt_id": "P1", "hook_event_name": "UserPromptExpansion",
+               "expansion_type": "slash_command", "command_name": "cg:today", "command_source": "plugin",
+               "prompt": "/cg:today"}
+        times = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            p = run_hook("cg-expand", exp, env)
+            times.append((time.perf_counter() - t0) * 1000)
+            self.assertEqual((p.returncode, p.stdout), (0, b""))
+        times.sort()
+        print("\ncg-expand hook median = %.0f ms" % times[len(times) // 2])
+        self.assertLess(times[len(times) // 2], 400)
+        bad = json.dumps(self.data("Bash", {"command": "git commit -am x"}, prompt_id="P1", sid="s-l")).encode()
+        p = subprocess.run([PY, "-B", RUN_PY, "safety", "session"], input=bad, capture_output=True, env=env, timeout=30)
+        self.assertEqual(p.returncode, 2)
+        nxt = json.dumps(self.data("Bash", {"command": "git commit -am x"}, prompt_id="P2", sid="s-l")).encode()
+        p = subprocess.run([PY, "-B", RUN_PY, "safety", "session"], input=nxt, capture_output=True, env=env, timeout=30)
+        self.assertEqual((p.returncode, p.stdout), (0, b""))
 
     def test_session_guard_is_fast_when_idle(self):
-        """Outside /cg: commands the hook process returns at once (spawn + import + one transcript tail)."""
+        """Outside /cg: commands the hook process returns at once (spawn + import + one small file check)."""
         env = self.child_env()
-        data = json.dumps(self.data("ordinary work", "Bash", {"command": "git status"})).encode()
+        data = json.dumps(self.data("Bash", {"command": "git status"})).encode()
         times = []
         for _ in range(7):
             t0 = time.perf_counter()
@@ -530,6 +635,233 @@ class SessionGuardTests(SafetyCase):
         times.sort()
         print("\nsession guard (idle) median = %.0f ms" % times[len(times) // 2])
         self.assertLess(times[len(times) // 2], 400)
+
+
+class SessionLauncherFailOpenTests(SafetyCase):
+    """The session guard must not block my session when the launcher itself can't load the package: the skills'
+    guard hook has no onFailure: block, and `run.py safety session` exits 0 silently. (The internal guard keeps
+    onFailure: block and fails closed.)"""
+
+    BAD = {"session_id": "s-1", "prompt_id": "P1", "tool_name": "Bash", "tool_input": {"command": "git commit -am x"}}
+
+    def launcher_copy(self, broken_package):
+        import shutil
+        root = tempfile.mkdtemp(prefix="plugin-copy-", dir=self.scratch)
+        os.makedirs(os.path.join(root, "hooks"))
+        shutil.copy(RUN_PY, os.path.join(root, "hooks", "run.py"))
+        if broken_package:
+            os.makedirs(os.path.join(root, "chitragupta"))
+            with open(os.path.join(root, "chitragupta", "__init__.py"), "w") as f:
+                f.write("raise ImportError('simulated broken install')\n")
+        return os.path.join(root, "hooks", "run.py")
+
+    def test_session_guard_exits_0_silently_when_the_package_cannot_load(self):
+        for broken in (False, True):  # no package next to the launcher / a package that fails to import
+            with self.subTest(broken_package=broken):
+                run = self.launcher_copy(broken)
+                p = subprocess.run([PY, "-B", run, "safety", "session"], input=json.dumps(self.BAD).encode(),
+                                   capture_output=True, timeout=30, env=self.child_env())
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
+
+    def test_other_launcher_commands_still_report_a_missing_package(self):
+        run = self.launcher_copy(False)
+        p = subprocess.run([PY, "-B", run, "safety", "internal", "none"], input=b"{}", capture_output=True, timeout=30,
+                           env=self.child_env())
+        self.assertNotEqual(p.returncode, 0)  # internal calls also carry onFailure: block
+
+    def test_skills_register_the_session_guard_without_on_failure_block(self):
+        import glob
+        from tests.support import ROOT
+        from chitragupta.safety import status
+        files = sorted(glob.glob(os.path.join(ROOT, "skills", "*", "SKILL.md")))
+        self.assertTrue(files)
+        for p in files:
+            with self.subTest(skill=p):
+                with open(p, encoding="utf-8") as f:
+                    text = f.read()
+                self.assertIn('"safety", "session"]', text)
+                self.assertFalse("onFailure" in text, "the session guard must not block when its launcher fails")
+        self.assertEqual(status.unguarded_skills(), [])
+
+
+class OwnMcpServerTests(SafetyCase):
+    """During a /cg: command Chitragupta's own read-only MCP server (plugin `cg`, server `chitragupta`) needs no
+    allow.json entry; nothing else about the session profile changes."""
+
+    OWN = "mcp__plugin_cg_chitragupta__"
+
+    def setUp(self):
+        super().setUp()
+        from chitragupta.safety import hook
+        hook.expand({"session_id": "s-1", "prompt_id": "P1", "command_name": "cg:ticket", "prompt": "/cg:ticket ABC-1001"})
+
+    def data(self, tool, inp=None, server=None):
+        d = {"session_id": "s-1", "prompt_id": "P1", "tool_name": tool, "tool_input": inp or {}}
+        if server is not None:
+            d["mcp_server"] = server
+        return d
+
+    def test_every_own_read_tool_passes_without_allow_json(self):
+        from chitragupta import mcpserver
+        from chitragupta.safety import mcp
+        self.assertNotIn("plugin_cg_chitragupta", (mcp.load_allow().get("servers") or {}))
+        self.assertTrue(mcpserver.TOOL_NAMES)
+        for name in mcpserver.TOOL_NAMES:
+            for server in (None, {"name": "plugin:cg:chitragupta", "source": "plugin"}):
+                with self.subTest(tool=name, server=server):
+                    self.assertHookAllows("session", self.data(self.OWN + name, {"key": "ABC-1001"}, server))
+
+    def test_own_tool_list_is_read_only_and_pinned(self):
+        """The session allowlist is exactly the server's tool list, and none of those names says it writes."""
+        from chitragupta import mcpserver
+        from chitragupta.safety import mcp
+        self.assertEqual(sorted(mcp.OWN_MCP_TOOLS), sorted(mcpserver.TOOL_NAMES))
+        for name in mcpserver.TOOL_NAMES:
+            self.assertFalse(mcp.writes(name), name)
+
+    def test_unknown_or_spoofed_own_tools_are_denied(self):
+        self.assertHookDenies("session", self.data(self.OWN + "delete_ticket"))
+        self.assertHookDenies("session", self.data(self.OWN + "run_anything"))
+        # a server that only borrows the name: Claude Code says it isn't a plugin server
+        self.assertHookDenies("session", self.data(self.OWN + "get_ticket", {"key": "ABC-1001"},
+                                                   {"name": "plugin_cg_chitragupta", "source": "user"}))
+
+    def test_internal_profiles_still_refuse_it(self):
+        from chitragupta.safety import mcp
+        for profile in ("none", "mcp", "slack-send", "slack-discover"):
+            with self.subTest(profile=profile):
+                self.assertIsNotNone(mcp.reason(profile, self.OWN + "get_ticket", {"key": "ABC-1001"}, cfg=self.cfg()))
+
+
+class OtherPluginToolTests(SafetyCase):
+    """Policy A: during a /cg: command another plugin's MCP tool is still denied, but it is logged as category
+    `other-plugin` and not counted as a violation on Health / doctor."""
+
+    OTHER = "mcp__plugin_other_tool__panel_sync"
+    SKIP = "not a Chitragupta tool; skip this call and don't retry it"
+
+    def setUp(self):
+        super().setUp()
+        from chitragupta.safety import hook
+        hook.expand({"session_id": "s-1", "prompt_id": "P1", "command_name": "cg:today", "prompt": "/cg:today"})
+
+    def data(self, tool, server=None, prompt_id="P1"):
+        d = {"session_id": "s-1", "prompt_id": prompt_id, "tool_name": tool, "tool_input": {"x": 1}}
+        if server is not None:
+            d["mcp_server"] = server
+        return d
+
+    def last(self):
+        from chitragupta.safety import log
+        return log.entries(1)[-1]
+
+    def test_denied_with_a_skip_reason_and_logged_as_other_plugin(self):
+        for server in ({"name": "plugin:other:tool", "source": "plugin"}, None):  # by provenance, else by name
+            with self.subTest(server=server):
+                why = self.assertHookDenies("session", self.data(self.OTHER, server))
+                self.assertIn(self.SKIP, why)
+                e = self.last()
+                self.assertEqual((e["layer"], e.get("category")), ("tool", "other-plugin"))
+                self.assertIn(self.OTHER, e["what"])
+
+    def test_other_servers_are_ordinary_violations(self):
+        for tool, server in (("mcp__mcp-atlassian__jira_transition_issue", {"name": "mcp-atlassian", "source": "user"}),
+                             ("mcp__plugin_other_tool__panel_sync", {"name": "plugin_other_tool", "source": "project"}),
+                             ("Bash", None)):
+            with self.subTest(tool=tool):
+                why = self.assertHookDenies("session", dict(self.data(tool, server), tool_input={"command": "git push"}))
+                self.assertNotIn(self.SKIP, why)
+                self.assertNotIn("category", self.last())
+
+    def test_outside_a_cg_command_other_plugins_are_untouched(self):
+        n = self.log_count()
+        self.assertHookAllows("session", self.data(self.OTHER, {"name": "plugin:other:tool", "source": "plugin"}, "P2"))
+        self.assertEqual(self.log_count(), n)
+
+    def test_not_counted_on_health_or_doctor(self):
+        from chitragupta.safety import log, status
+        self.assertHookDenies("session", self.data(self.OTHER, {"name": "plugin:other:tool", "source": "plugin"}))
+        s = log.summary(7)
+        self.assertEqual((s["total"], s["recent"], s["by_layer"], s["last"]), (0, 0, {}, []))
+        self.assertEqual(s["other_plugin"], 1)
+        st = status.status(self.cfg())
+        self.assertEqual((st["blocks_24h"], st["blocks_7d"]), (0, 0))
+        rows = {r["name"]: r for r in status.doctor_rows(self.cfg())}
+        self.assertTrue(rows["security log"]["ok"], rows["security log"])
+        # a real violation still counts
+        self.assertHookDenies("session", self.data("Bash"))
+        s = log.summary(7)
+        self.assertEqual((s["recent"], s["by_layer"], len(s["last"])), (1, {"tool": 1}, 1))
+        self.assertFalse({r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]["ok"])
+
+
+class SecurityLogFormatTests(SafetyCase):
+    def test_timestamp_carries_the_local_utc_offset(self):
+        from chitragupta.safety import log
+        log.record("path", "test", "write C:/x", "write", "tests.caller")
+        self.assertRegex(log.entries(1)[-1]["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
+
+    def test_caller_comes_from_the_stack_when_not_given(self):
+        from chitragupta.safety import log, paths
+        log.record("path", "test", "write C:/x")
+        self.assertEqual(log.entries(1)[-1]["caller"], __name__)
+        outside = os.path.join(os.path.dirname(self.scratch), "elsewhere-%d.txt" % os.getpid())
+        self.assertBlocked(lambda: paths.write_text(outside, "x"), "path")  # through the guard: its own frames skipped
+        self.assertEqual(log.entries(1)[-1]["caller"], __name__)
+        log.record("path", "test", "write C:/x", caller="tests.explicit")
+        self.assertEqual(log.entries(1)[-1]["caller"], "tests.explicit")
+
+    def test_summary_counts_old_and_new_timestamps(self):
+        import datetime as dt
+        from chitragupta.safety import log
+        now = dt.datetime.now().astimezone()
+        other = dt.timezone(now.utcoffset() - dt.timedelta(hours=6))  # reads 6 h earlier than local time
+        ats = [(now - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S"),          # old format, recent
+               (now - dt.timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S"),           # old format, 3 days
+               (now - dt.timedelta(hours=2)).isoformat(timespec="seconds"),          # new format, recent
+               (now - dt.timedelta(hours=20)).astimezone(other).isoformat(timespec="seconds"),  # recent, other offset
+               (now - dt.timedelta(days=3)).astimezone(other).isoformat(timespec="seconds")]
+        os.makedirs(os.path.dirname(log.path()), exist_ok=True)
+        with open(log.path(), "w", encoding="utf-8") as f:
+            for at in ats:
+                f.write(json.dumps({"at": at, "layer": "path", "caller": "", "purpose": "", "what": "x", "reason": "r"}) + "\n")
+        self.assertEqual((log.summary(7)["total"], log.summary(7)["recent"]), (5, 5))
+        self.assertEqual(log.summary(1)["recent"], 3)
+
+
+class LateCleanupIsolationTests(unittest.TestCase):
+    """tests/support.py: restore() runs as the last cleanup, after every cleanup a test registered, and the whole run
+    has one sandbox user folder, so a late cleanup can never reach the real one."""
+
+    def test_the_run_has_a_sandbox_user_folder(self):
+        real = os.path.join(os.path.expanduser("~"), ".chitragupta")
+        for k in ("CHITRAGUPTA_USER_DIR", "CHITRAGUPTA_HOME"):
+            self.assertTrue(os.environ.get(k), k)
+        self.assertNotEqual(os.path.normcase(os.path.abspath(os.environ["CHITRAGUPTA_USER_DIR"])), os.path.normcase(real))
+
+    def test_a_guarded_cleanup_registered_the_old_way_stays_in_the_test_sandbox(self):
+        from chitragupta.safety import log
+        outer = log.path()
+        size = os.path.getsize(outer) if os.path.exists(outer) else 0
+        seen = {}
+
+        class Inner(Isolated, unittest.TestCase):
+            def setUp(self):
+                self.isolate()
+
+            def tearDown(self):
+                self.restore()  # the old way: before the test's own cleanups
+
+            def test_late(self):
+                seen["log"], seen["user"] = log.path(), self.user_dir
+                self.addCleanup(log.record, "path", "late cleanup", "write C:/x", "write", "tests.late")
+
+        res = unittest.TestResult()
+        unittest.defaultTestLoader.loadTestsFromTestCase(Inner).run(res)
+        self.assertEqual((res.errors, res.failures), ([], []))
+        self.assertNotEqual(seen["log"], outer)
+        self.assertEqual(os.path.getsize(outer) if os.path.exists(outer) else 0, size, "the late cleanup reached outside")
+        self.assertFalse(os.path.exists(seen["user"]), "the temp user folder was not removed")
 
 
 # ---------------------------------------------------------------------------------------------- allowed actions

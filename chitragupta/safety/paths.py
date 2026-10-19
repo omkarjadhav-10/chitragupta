@@ -156,6 +156,10 @@ def allowed(path, op="write"):
     if bad:
         return bad
     real = _real(raw)
+    for root in (common.home(), common.user_dir()):  # the usual case first, without loading the optional roots
+        rr = _real(root)                             # (install / scheduler imports: too slow for a sync hook)
+        if real == rr or real.startswith(rr.rstrip(os.sep) + os.sep):
+            return None
     for kind, root in roots():
         rr = _real(root)
         if kind == "tree" and (real == rr or real.startswith(rr.rstrip(os.sep) + os.sep)):

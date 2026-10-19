@@ -14,7 +14,6 @@ hooks:
           command: py
           args: ["-3", "${CLAUDE_PLUGIN_ROOT}/hooks/run.py", "safety", "session"]
           timeout: 10
-          onFailure: block
 ---
 
 # /cg:trace <KEY>

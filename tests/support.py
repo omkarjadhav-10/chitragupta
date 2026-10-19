@@ -3,7 +3,13 @@
 Every test runs against a throwaway data home (CHITRAGUPTA_HOME) and a throwaway user folder
 (CHITRAGUPTA_USER_DIR). Nothing here touches the network, a real `claude`, ~/.claude.json, Slack or a git remote.
 All fixtures are synthetic (tickets ABC-…, hosts *.acme.test, schema `shop`).
+
+Outside an isolated test the run itself is sandboxed too: importing this module points CHITRAGUPTA_HOME,
+CHITRAGUPTA_USER_DIR and CHITRAGUPTA_CLAUDE_DIR at one temp folder for the whole run when they aren't set, so code that
+runs between tests (or a cleanup after restore()) can never reach the real user folder or data home.
 """
+import atexit
+import gc
 import json
 import os
 import shutil
@@ -11,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE = os.path.join(ROOT, "chitragupta")
@@ -25,6 +32,24 @@ INTERNAL_VARS = ("CHITRAGUPTA_INTERNAL", "WORKLOG_INTERNAL")
 
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+
+def _run_sandbox():
+    """One temp user folder / data home / Claude folder for the whole run, unless the caller already set them."""
+    missing = [k for k in ("CHITRAGUPTA_HOME", "CHITRAGUPTA_USER_DIR", "CHITRAGUPTA_CLAUDE_DIR") if not os.environ.get(k)]
+    if not missing:
+        return None
+    box = tempfile.mkdtemp(prefix="cg-run-")
+    defaults = {"CHITRAGUPTA_HOME": os.path.join(box, "home"), "CHITRAGUPTA_USER_DIR": os.path.join(box, "user"),
+                "CHITRAGUPTA_CLAUDE_DIR": os.path.join(box, "claude")}
+    for k in missing:
+        os.environ[k] = defaults[k]
+    os.environ.setdefault("CHITRAGUPTA_NO_TASK", "1")
+    atexit.register(lambda: rmtree(box))
+    return box
+
+
+RUN_SANDBOX = _run_sandbox()
 
 
 def rmtree(path, *_):
@@ -101,8 +126,12 @@ def clear_caches():
 
 
 class Isolated:
-    """Mixin: temp CHITRAGUPTA_HOME + CHITRAGUPTA_USER_DIR set in setUp, every CHITRAGUPTA_* / WORKLOG_* variable
-    restored in tearDown; tripwires on everything that would leave the machine."""
+    """Mixin: temp CHITRAGUPTA_HOME + CHITRAGUPTA_USER_DIR set by isolate(), every CHITRAGUPTA_* / WORKLOG_* variable
+    restored afterwards; tripwires on everything that would leave the machine.
+
+    isolate() registers the restore as the test's first cleanup, so it runs last: after tearDown() and after every
+    cleanup the test registered (those still see the temp folders). restore() itself is idempotent, and a call from an
+    older tearDown() leaves the work to that cleanup."""
 
     home_prefix = "cg-test-"
 
@@ -122,12 +151,14 @@ class Isolated:
         os.environ["CHITRAGUPTA_NO_TASK"] = "1"
         os.environ["CHITRAGUPTA_STARTUP_DIR"] = os.path.join(self.user_dir, "startup")
         # nor the real LaunchAgents / systemd user folders (macOS / Linux scheduler backends)
-        sched = tempfile.mkdtemp(prefix="cg-sched-")  # outside every write root, like the real folders
+        sched = self._sched = tempfile.mkdtemp(prefix="cg-sched-")  # outside every write root, like the real folders
         os.environ["CHITRAGUPTA_LAUNCH_AGENTS_DIR"] = os.path.join(sched, "LaunchAgents")
         os.environ["CHITRAGUPTA_SYSTEMD_USER_DIR"] = os.path.join(sched, "systemd-user")
         clear_caches()
         self.forbidden = []
         self._patch_tripwires()
+        self._restored = False
+        self.addCleanup(self._restore)
 
     def _patch_tripwires(self):
         from chitragupta import mcpjobs, slack
@@ -145,15 +176,42 @@ class Isolated:
         slack._run = no_slack
 
     def restore(self):
+        """Kept for tearDown()s and cleanups that call it: the restore itself runs once, as the last cleanup
+        (registered by isolate()), so it never runs before a cleanup the test registered."""
+
+    def _restore(self):
+        if self._restored:
+            return
+        self._restored = True
         from chitragupta import mcpjobs, slack
         mcpjobs.run, mcpjobs.claude_json, slack._run = self._real_mcp
         for k in [k for k in os.environ if k.startswith(ENV_PREFIXES) or k in GIT_IDENTITY]:
             del os.environ[k]
         os.environ.update(self._saved_env)
         clear_caches()
-        for d in (self.home, self.user_dir):
-            rmtree(d)
+        left = [d for d in (self.home, self.user_dir) if not _removed(d)]
+        rmtree(self._sched)
         self.assertEqual(self.forbidden, [], "something tried to reach an MCP server or Slack")
+        self.assertEqual(left, [], "temp folders not removed (a file still open?): %s" % _leftovers(left))
 
     def child_env(self, **extra):
         return child_env(self.home, self.user_dir, **extra)
+
+
+def _removed(d, tries=10):
+    """rmtree, retried briefly (Windows releases a just-closed handle a moment later); True once the folder is gone."""
+    for i in range(tries):
+        rmtree(d)
+        if not os.path.exists(d):
+            return True
+        gc.collect()  # an unreferenced open file object closes here
+        time.sleep(0.05 * (i + 1))
+    return not os.path.exists(d)
+
+
+def _leftovers(dirs, n=10):
+    out = []
+    for d in dirs:
+        for dp, _, fs in os.walk(d):
+            out += [os.path.join(dp, f) for f in fs]
+    return out[:n] or dirs

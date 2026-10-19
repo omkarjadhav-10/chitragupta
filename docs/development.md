@@ -66,7 +66,7 @@ Never point a dev session at a real data home. Develop against a copy.
 python -m unittest discover -s tests -t .
 ```
 
-The tests are standard-library `unittest`. Each test runs in its own temp `CHITRAGUPTA_HOME` and `CHITRAGUPTA_USER_DIR`, with maintenance, dashboard autostart and the real Task Scheduler all switched off (`tests/support.py`). Every model, Slack and MCP call is stubbed, and tripwires fail a test that tries a real one. The data is synthetic: `ABC-1001…1004`, `acme.test`, a `shop` schema. The golden Jira-worklog layouts are compared byte for byte.
+The tests are standard-library `unittest`. Each test runs in its own temp `CHITRAGUPTA_HOME` and `CHITRAGUPTA_USER_DIR`, with maintenance, dashboard autostart and the real Task Scheduler all switched off (`tests/support.py`). `Isolated.isolate()` registers the restore as the test's first cleanup, so it runs last, after `tearDown()` and every cleanup the test adds; `restore()` is kept for old `tearDown()`s and does nothing itself. The restore fails the test when a temp folder can't be removed (usually a file left open). Importing `tests/support.py` also points `CHITRAGUPTA_HOME`, `CHITRAGUPTA_USER_DIR` and `CHITRAGUPTA_CLAUDE_DIR` at one temp folder for the whole run when they aren't set, so nothing that runs between tests can reach your real folders. Every model, Slack and MCP call is stubbed, and tripwires fail a test that tries a real one. The data is synthetic: `ABC-1001…1004`, `acme.test`, a `shop` schema. The golden Jira-worklog layouts are compared byte for byte.
 
 CI (`.github/workflows/test.yml`) runs on Windows and Ubuntu with Python 3.10, 3.11 and 3.12. It runs the version check, the secret scan (`--secrets-only`, since the deny-list is local) and the unit suite.
 
