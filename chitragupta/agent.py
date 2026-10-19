@@ -1007,7 +1007,7 @@ def cmd_tick(force=False):
 
 def cmd_branch_check(key=None, wait_s=None):
     """/cg:check [KEY]: fetch, refresh PRs and recompute the delivery check now (under the agent lock).
-    -> {"tickets": [...], "repos": [...]} or {"skipped": why}."""
+    -> {"tickets": [...], "repos": [...], "fetched": [repos actually fetched]} or {"skipped": why}."""
     lock = Lock()
     if not lock.acquire_wait(LOCK_WAIT_S if wait_s is None else wait_s):
         return {"skipped": "the background agent is busy; try again in a few minutes"}
@@ -1021,6 +1021,7 @@ def cmd_branch_check(key=None, wait_s=None):
             repos = [p for p in repos if gittrack.repo_key(p) in names] or repos
         tr = gittrack.Tracker(cfg, agent.state, agent.store, force_fetch=True, only_tickets=[key] if key else None,
                               health=agent.health)
+        started = common.now_iso()
         rx = tr.refresh(repos, fetch=True, force_pr=True)
         agent.store.reload_branches()
         if key:
@@ -1035,7 +1036,8 @@ def cmd_branch_check(key=None, wait_s=None):
         render.render_all(agent.store, cfg, agent.health, days=set(), tickets=set(t for t in tickets if t in agent.store.tickets))
         errors = {n: (r.data.meta.get("fetch_error") or r.data.meta.get("pr_error")) for n, r in rx.items()
                   if r.data.meta.get("fetch_error") or r.data.meta.get("pr_error")}
-        return {"tickets": tickets, "repos": sorted(rx), "errors": errors}
+        fetched = sorted(n for n, r in rx.items() if (r.data.meta.get("fetched_at") or "") >= started)
+        return {"tickets": tickets, "repos": sorted(rx), "fetched": fetched, "errors": errors}
     finally:
         if agent:
             try:

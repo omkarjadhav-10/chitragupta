@@ -11,8 +11,9 @@
   log --today                            print the current work day (for resolving "Monday", "yesterday")
   pause | resume | status                the PAUSED switch (<home>/.worklog/PAUSED)
 
-Everything is read-only except `log` (one line appended to inbox.md), `pause`/`resume` and `search --rebuild`
-(rewrites the search index cache, .worklog/cache/search.sqlite).
+Everything is read-only except `log` (one line appended to inbox.md), `pause`/`resume`, `search --rebuild`
+(rewrites the search index cache, .worklog/cache/search.sqlite) and `check` (refreshes Chitragupta's own branch, PR and
+delivery data, like the background tick; it fetches remote-tracking refs only when fetching is on).
 No command calls a model, Jira, Slack or the database MCP.
 """
 import argparse
@@ -411,6 +412,19 @@ def cmd_relations(a):
     return 0
 
 
+def check_headline(res):
+    """What /cg:check did: only the repos actually fetched are called fetched (fetching can be off or not due)."""
+    repos, fetched = res.get("repos") or [], res.get("fetched") or []
+    if not repos:
+        return "Refreshed no repos."
+    if not fetched:
+        return "Refreshed %s from local git data (no fetch: fetching is off or not due)." % ", ".join(repos)
+    rest = [r for r in repos if r not in fetched]
+    if rest:
+        return "Fetched %s; refreshed %s from local git data." % (", ".join(fetched), ", ".join(rest))
+    return "Fetched and refreshed %s." % ", ".join(fetched)
+
+
 def cmd_check(a):
     from . import agent
     key = norm_key(a.key) if a.key else None
@@ -418,7 +432,7 @@ def cmd_check(a):
     if res.get("skipped"):
         out("Not checked: " + res["skipped"])
         return 3
-    out("Fetched and refreshed %s." % (", ".join(res["repos"]) or "no repos"))
+    out(check_headline(res))
     for n, e in (res.get("errors") or {}).items():
         out("! %s: %s" % (n, e))
     for t in res["tickets"]:
@@ -720,7 +734,7 @@ def cmd_search(a):
 # --------------------------------------------------------------------------- main
 
 def parser():
-    p = argparse.ArgumentParser(prog="chitragupta cli", description="Chitragupta commands (read-only except log/pause).")
+    p = argparse.ArgumentParser(prog="chitragupta cli", description="Chitragupta commands (read-only except log, pause/resume, search --rebuild and check).")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("where")
     s.add_argument("--json", action="store_true")

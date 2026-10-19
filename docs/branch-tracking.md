@@ -237,7 +237,7 @@ The guard starts only for those commands, through the hooks' `if` filter. It rea
 - **Git-only mode** sees merged PRs only, through their merge commits: no open, draft or closed PRs, and no reviews.
 - **Inferred parents** (branches older than the reflog) are labelled and never judged.
 - **Someone else's commits** on your branch that don't name the ticket aren't counted.
-- **The MCP fallback** for PR data (a host's read-only MCP through the existing harness) is not in v0.2.0.
+- **PR data from a Git host's MCP** (since 0.4.0) is used only when no host CLI is available, through the read-only MCP harness and the daily budget; see [mcp.md](mcp.md).
 
 ## Privacy
 

@@ -314,3 +314,20 @@ class SkillFilesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckHeadlineTest(unittest.TestCase):
+    """/cg:check says "Fetched" only for repos it really fetched (fetching can be off or not due)."""
+
+    def test_no_fetch_is_not_called_a_fetch(self):
+        msg = cli.check_headline({"repos": ["shop-api"], "fetched": []})
+        self.assertNotIn("Fetched", msg)
+        self.assertIn("no fetch", msg)
+
+    def test_fetched_and_unfetched_repos_are_told_apart(self):
+        self.assertEqual(cli.check_headline({"repos": ["a", "b"], "fetched": ["a"]}),
+                         "Fetched a; refreshed b from local git data.")
+        self.assertEqual(cli.check_headline({"repos": ["a"], "fetched": ["a"]}), "Fetched and refreshed a.")
+
+    def test_old_result_without_fetched_key(self):
+        self.assertNotIn("Fetched", cli.check_headline({"repos": ["a"]}))

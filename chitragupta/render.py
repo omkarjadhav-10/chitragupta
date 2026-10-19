@@ -917,7 +917,9 @@ Ticket prefixes: {prefixes}. New prefixes seen in branch names are added automat
   (passwords in URLs/connection strings, Authorization headers, JWTs, AWS/GitHub/Slack/Azure keys, private keys,
   secret assignments) and patient data (HL7 field values, SSNs, emails, phones, DOBs, MRN/member/accession values,
   person fields in SQL/JSON). Masks keep shape: digits → `X`, letters → `x`.
-- Query results, API response bodies, log payloads and raw HL7/FHIR messages are never stored.
+- Only `daily/` (plus this README, `.gitignore` and `.gitattributes`) is pushed; everything else stays on this machine.
+- QA query results and QA worked examples may be kept in the local knowledge base (never pushed, never in daily
+  files or Slack). Production data, API response bodies, log payloads and raw HL7/FHIR messages are never stored.
 - Raw capture is kept {retention} days after it has been processed and pushed, then pruned.
 
 ## Troubleshooting
