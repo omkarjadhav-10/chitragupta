@@ -684,6 +684,55 @@ class SessionLauncherFailOpenTests(SafetyCase):
         self.assertEqual(status.unguarded_skills(), [])
 
 
+class OwnMcpServerTests(SafetyCase):
+    """During a /cg: command Chitragupta's own read-only MCP server (plugin `cg`, server `chitragupta`) needs no
+    allow.json entry; nothing else about the session profile changes."""
+
+    OWN = "mcp__plugin_cg_chitragupta__"
+
+    def setUp(self):
+        super().setUp()
+        from chitragupta.safety import hook
+        hook.expand({"session_id": "s-1", "prompt_id": "P1", "command_name": "cg:ticket", "prompt": "/cg:ticket ABC-1001"})
+
+    def data(self, tool, inp=None, server=None):
+        d = {"session_id": "s-1", "prompt_id": "P1", "tool_name": tool, "tool_input": inp or {}}
+        if server is not None:
+            d["mcp_server"] = server
+        return d
+
+    def test_every_own_read_tool_passes_without_allow_json(self):
+        from chitragupta import mcpserver
+        from chitragupta.safety import mcp
+        self.assertNotIn("plugin_cg_chitragupta", (mcp.load_allow().get("servers") or {}))
+        self.assertTrue(mcpserver.TOOL_NAMES)
+        for name in mcpserver.TOOL_NAMES:
+            for server in (None, {"name": "plugin:cg:chitragupta", "source": "plugin"}):
+                with self.subTest(tool=name, server=server):
+                    self.assertHookAllows("session", self.data(self.OWN + name, {"key": "ABC-1001"}, server))
+
+    def test_own_tool_list_is_read_only_and_pinned(self):
+        """The session allowlist is exactly the server's tool list, and none of those names says it writes."""
+        from chitragupta import mcpserver
+        from chitragupta.safety import mcp
+        self.assertEqual(sorted(mcp.OWN_MCP_TOOLS), sorted(mcpserver.TOOL_NAMES))
+        for name in mcpserver.TOOL_NAMES:
+            self.assertFalse(mcp.writes(name), name)
+
+    def test_unknown_or_spoofed_own_tools_are_denied(self):
+        self.assertHookDenies("session", self.data(self.OWN + "delete_ticket"))
+        self.assertHookDenies("session", self.data(self.OWN + "run_anything"))
+        # a server that only borrows the name: Claude Code says it isn't a plugin server
+        self.assertHookDenies("session", self.data(self.OWN + "get_ticket", {"key": "ABC-1001"},
+                                                   {"name": "plugin_cg_chitragupta", "source": "user"}))
+
+    def test_internal_profiles_still_refuse_it(self):
+        from chitragupta.safety import mcp
+        for profile in ("none", "mcp", "slack-send", "slack-discover"):
+            with self.subTest(profile=profile):
+                self.assertIsNotNone(mcp.reason(profile, self.OWN + "get_ticket", {"key": "ABC-1001"}, cfg=self.cfg()))
+
+
 # ---------------------------------------------------------------------------------------------- allowed actions
 
 class AllowedTests(SafetyCase):

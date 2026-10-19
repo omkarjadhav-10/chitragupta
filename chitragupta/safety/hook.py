@@ -126,7 +126,7 @@ def session():
         return 0
     try:
         from . import mcp
-        why = mcp.reason("session", data.get("tool_name"), data.get("tool_input"))
+        why = mcp.reason("session", data.get("tool_name"), data.get("tool_input"), server_info=data.get("mcp_server"))
     except Exception as e:  # noqa: BLE001 — fail closed once a /cg: command is confirmed running
         why = "guard error (%s: %s)" % (type(e).__name__, str(e)[:200])
     return _deny(why, "session", data) if why else 0
