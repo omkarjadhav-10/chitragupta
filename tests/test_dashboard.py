@@ -181,7 +181,7 @@ def build_home(home, now=None):
         "ticket": TICKET, "env": "qa", "fetched_at": yday + "T10:00:00+00:00",
         "trace": {"summary": "Order 42 created.", "steps": [{"table": "shop.orders", "key": "id = 42", "values": "status NEW"}]}})
     _w(os.path.join(home, "data", "calendar.json"), {
-        "leave": {(now.date() - _dt.timedelta(days=3)).isoformat(): "Family"}, "holiday": {}, "half_day": {}, "workday": {},
+        "leave": {yday: "Family"}, "holiday": {}, "half_day": {}, "workday": {},
         "time": {day: [{"ticket": "ABC-1002", "start": "18:00", "minutes": 30, "text": "Call about checkout"}]}})
     _w(os.path.join(home, "data", "timesheets", yday + ".json"), {
         "day": yday, "status": "sent", "sent_at": yday + "T20:01:00+00:00", "attempts": 0,
