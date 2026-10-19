@@ -4,7 +4,8 @@
 
 Rows are {name, ok, detail}; exit 1 when any row fails. --fast uses the cached MCP status instead of running
 `claude mcp list`. Slack, Jira and the database MCP are optional: "missing" is reported but is not a failure;
-a configured server that is signed out or offline is.
+a configured server that is signed out or unreachable is (the row keeps the check's error text, and what the last
+background job saw).
 """
 import json
 import os
@@ -135,29 +136,59 @@ def slack_row(r, cfg):
     status = r.get("status") or "unknown"
     if state == "off":
         return _row("Slack", True, slack.OFF_NOTE)
-    if status in ("signed out", "offline", "not listed"):
-        return _row("Slack", False, "%s: %s (sign in once: `setup add-slack` prints the steps)" % (status, r.get("detail")))
+    if status in ("signed out", "offline", "unreachable", "not listed"):
+        return _row("Slack", False, "%s: %s%s (sign in once: `setup add-slack` prints the steps)" % (
+            _word(status), r.get("detail"), _err(r)))
     if state == "not_connected":
         hint = "run `setup slack-user`" if status in ("connected", "configured") else "run `setup add-slack`"
         return _row("Slack", True, "%s (%s)" % (slack.NOT_CONNECTED_NOTE, hint))
     return _row("Slack", True, "%s: %s" % (status if status != "missing" else "ready", r.get("detail") or ""))
 
 
-def mcp_rows(st, cfg=None):
+def _word(status):
+    return "unreachable" if status == "offline" else status  # "offline": what older versions cached
+
+
+def _err(r):
+    """'; <the check's error text> (HH:MM)' for an unreachable / signed-out row, else ''."""
+    if not r.get("error"):
+        return ""
+    at = common.parse_ts(r.get("error_at"))
+    return "; %s%s" % (r["error"], " (%s)" % at.strftime("%H:%M") if at else "")
+
+
+_FIX = {"signed out": " - sign in again with /mcp in Claude Code",
+        "unreachable": " - is the server running and reachable? `claude mcp list` shows it"}
+
+
+def _last_job(health, server):
+    """'; last job HH:MM: <state> (<error>)' from health.json mcp.server_state, else ''."""
+    e = (((health or {}).get("mcp") or {}).get("server_state") or {}).get(server or "")
+    if not isinstance(e, dict) or not e.get("state"):
+        return ""
+    at = common.parse_ts(e.get("at"))
+    return "; last job%s: %s%s" % (" " + at.strftime("%m-%d %H:%M") if at else "", e["state"],
+                                   " (%s)" % e["error"][:160] if e.get("error") else "")
+
+
+def mcp_rows(st, cfg=None, health=None):
     cfg = cfg if cfg is not None else common.load_config()
     if not st:
         return [_row(label, True, "not checked (run doctor without --fast)") for label in ("Slack", "Jira", "database MCP")]
     rows = [slack_row(st.get("slack") or {}, cfg)]
     for key, label in (("jira", "Jira"), ("database", "database MCP")):
         r = st.get(key) or {}
-        status = r.get("status") or "unknown"
+        status = _word(r.get("status") or "unknown")
         if status in ("connected", "configured"):
             ok = True
         elif status in ("missing", "unsupported"):
             ok = not (key == "database" and r.get("server"))  # a chosen database server that vanished is a failure
         else:
-            ok = False  # signed out / offline / not listed
-        rows.append(_row(label, ok, "%s: %s" % (status, r.get("detail") or "")))
+            ok = False  # signed out / unreachable / not listed
+        detail = "%s: %s%s%s" % (status, r.get("detail") or "", _err(r), "" if ok else _FIX.get(status, ""))
+        if r.get("enabled", True) and r.get("server"):
+            detail += _last_job(health, r["server"])
+        rows.append(_row(label, ok, detail))
     return rows
 
 
@@ -200,7 +231,7 @@ def run(probe=True, task_expected=True, mcp=None):
     rows.append(_row("CLAUDE.md block", bl["installed"], bl["path"] + ("" if bl["installed"] else
                      ": %s" % (bl["problem"] or "block missing, re-run `setup apply`"))))
     st = mcp if mcp is not None else (setup.mcp_status(cfg, probe=True) if probe else setup.cached_mcp_status())
-    rows += mcp_rows(st, cfg)
+    rows += mcp_rows(st, cfg, health)
     from .safety import status as safety_status
     rows += safety_status.doctor_rows(cfg, next((r["detail"] for r in env if r["name"] == "claude" and r["ok"]), ""))
     rows.append(errors_row(health))

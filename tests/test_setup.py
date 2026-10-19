@@ -225,7 +225,7 @@ class McpTests(SetupCase):
         self.assertEqual(st["slack"]["status"], "connected")
         self.assertIn("not used by background jobs", st["slack"]["detail"])
         self.assertEqual(st["jira"]["status"], "connected")
-        self.assertEqual(st["database"]["status"], "offline")
+        self.assertEqual(st["database"]["status"], "unreachable")
         self.assertEqual(st["database"]["candidates"], ["other", "sqldb"])
         cwd = next(c for a, c in self.calls if a[-2:] == ["mcp", "list"])
         self.assertEqual(cwd.replace("\\", "/"), self.sender())
@@ -243,7 +243,7 @@ class McpTests(SetupCase):
     def test_parse_mcp_list(self):
         got = self.setup_mod.parse_mcp_list(MCP_LIST)
         self.assertEqual(got["claude.ai Slack"], "signed out")
-        self.assertEqual(got["sqldb"], "offline")
+        self.assertEqual(got["sqldb"], "unreachable")
         self.assertEqual(got["plugin:x:y"], "connected")
 
     def test_use_database(self):

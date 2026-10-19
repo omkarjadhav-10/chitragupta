@@ -37,7 +37,7 @@ No events are recorded and nothing is written. Run **`/cg:setup`**.
 - **Requirements.** It checks Python 3.10+, git, Windows, the `claude` executable (and its version) and `py -3`. If any of these fail, it tells you how to fix it and stops.
 - **Data home.** It shows the current one if set, otherwise suggests `%USERPROFILE%\Chitragupta`. Data already in the folder you pick is kept.
 - **Ticket prefixes, repos and Bruno collections.** It finds these in the folders your recent Claude Code sessions ran in: the repos, their branch names (`feature/ABC-1001-…` gives prefix `ABC`) and any `bruno.json` collections. You confirm the list or change it.
-- **MCP servers.** It shows Slack, Jira and a database MCP as connected, signed out, offline, missing or unsupported.
+- **MCP servers.** It shows Slack, Jira and a database MCP as connected, signed out, unreachable, missing or unsupported. An unreachable or signed-out server keeps the check's short error text and time (`error`, `error_at` in `.worklog\cache\mcp-status.json`; caches from older versions say `offline`, read as unreachable), and doctor adds what the last background job saw.
 
 ### What it asks, in one message
 

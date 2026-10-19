@@ -110,6 +110,8 @@ MCP jobs run only in the background tick or when you ask for them, never from a 
   Every block is logged in `%USERPROFILE%\.chitragupta\logs\security.log` and shown on Health.
 - **No credentials in its files.** Literal header values from your Claude Code MCP config, such as an auth header, are written into the per-job file as `${CHITRAGUPTA_RT_…}` references. The values reach only that job's process environment. If a value is missing, for example because you're signed out, the job is skipped without a model call.
 
+**Server state.** `health.json` keeps, per server, when a job last found it unreachable or signed out (`mcp.offline`, keyed by server) and why (`mcp.server_state`: `unreachable`, `signed-out` or `missing`, the short error text and the time); a job's own failure (missing env, a server down, the `claude` exit code) goes to `mcp.job_errors`. The next job that reaches the server clears its entries.
+
 The guard files are written only when an MCP job can actually run: Jira is enabled, or a database server is chosen and enabled.
 Once a day the Jira, database and Git-host entries of `allow.json` are refreshed from the code under the configured server names (`mcp.jira.server`, `mcp.database.server`, `mcp.git_host.*`): their read tools come only from the code (so new read tools reach an existing install and a renamed server isn't blocked), and write names you added to an entry stay on its deny list.
 

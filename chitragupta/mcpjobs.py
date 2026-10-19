@@ -253,7 +253,10 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
             env_extra[name] = v
     missing = [n for n in refs if n not in env_extra]
     if missing:  # signed out: don't spend a model call to find out
-        health.setdefault("mcp", {}).setdefault("offline", {})[job] = "missing env %s" % ",".join(sorted(missing))
+        err = "missing env %s" % ",".join(sorted(missing))
+        job_error(health, job, err)
+        for srv in (servers or {}):
+            server_down(health, srv, "signed-out", err)
         raise JobError("signed out: env %s not set" % ", ".join(sorted(missing)), skip=True)
     if not os.path.isfile(os.path.join(mcp_dir(), "allow.json")):
         ensure_files(cfg)  # never run a job without the read allowlist
@@ -272,23 +275,99 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     res["seconds"] = round(time.time() - t0, 1)
     res["missing_env"] = missing
     srv_state = {s.get("name"): s.get("status") for s in res.get("mcp_servers") or []}
+    srv_error = {s.get("name"): str(s.get("error") or "") for s in res.get("mcp_servers") or [] if s.get("error")}
     jl = m.setdefault("jobs", {})
     jl[job] = {"at": common.now_iso(), "in": res["input_tokens"], "out": res["output_tokens"], "cost": round(res["cost"], 4),
                "calls": len(res["calls"]), "servers": srv_state, "rc": rc}
     common.log("mcp", "%s rc=%s servers=%s calls=%s in=%s out=%s $%.4f" % (
         job, rc, srv_state, [c["name"] for c in res["calls"]], res["input_tokens"], res["output_tokens"], res["cost"]))
     bad = [n for n, st in srv_state.items() if st != "connected"]
+    for n in srv_state:
+        if n not in bad:
+            server_ok(health, n, cfg)
     if bad:
-        m.setdefault("offline", {})[",".join(bad)] = common.now_iso()
-        raise JobError("server offline or signed out: %s%s" % (", ".join(bad), " (missing env %s)" % missing if missing else ""),
-                       skip=True)
+        tail = _last_line(se)
+        why = []
+        for n in bad:
+            state = server_state_of(srv_state[n])
+            err = srv_error.get(n) or ("%s (%s)" % (srv_state[n], tail) if tail else str(srv_state[n]))
+            server_down(health, n, state, err)
+            why.append("%s %s: %s" % (n, state, err[:160]))
+        job_error(health, job, "; ".join(why))
+        raise JobError("server " + "; ".join(why), skip=True)
     if rc != 0 and not res["out"]:
+        job_error(health, job, "claude rc=%s" % rc)
         raise JobError("claude rc=%s: %s" % (rc, (se or so)[-300:].strip()))
+    m.setdefault("job_errors", {}).pop(job, None)
     for c in res["calls"]:
         if c.get("is_error") and ("read-only guard" in str(c.get("result")) or "safety guard" in str(c.get("result"))):
             m.setdefault("denied", []).append({"at": common.now_iso(), "job": job, "tool": c["name"]})
             m["denied"] = m["denied"][-20:]
     return res
+
+
+# --------------------------------------------------------------------------- server state (health.json "mcp")
+#   offline       {server: ISO time}             a server the last job found unreachable or signed out (server-keyed only)
+#   server_state  {server: {state, error, at}}   state: unreachable | signed-out | missing
+#   job_errors    {job: {error, at}}             why a job failed (missing env, a server down, claude rc)
+# A successful job clears its servers' offline / server_state entries and the role's skip / last_skip_reason.
+
+def server_state_of(status):
+    """Claude Code's server status (stream-json init or `claude mcp list`) -> unreachable | signed-out | missing."""
+    st = str(status or "").lower()
+    if "auth" in st or "sign" in st:
+        return "signed-out"
+    if st in ("missing", "not listed", "not configured"):
+        return "missing"
+    return "unreachable"  # failed / pending / timeout / anything else that isn't connected
+
+
+def _last_line(text):
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    return redact(lines[-1], mode="secrets")[:200] if lines else ""
+
+
+def server_down(health, server, state, error=""):
+    m = health.setdefault("mcp", {})
+    at = common.now_iso()
+    m.setdefault("offline", {})[server] = at
+    m.setdefault("server_state", {})[server] = {"state": state, "error": str(error or "")[:200], "at": at}
+
+
+def job_error(health, job, error):
+    health.setdefault("mcp", {}).setdefault("job_errors", {})[job] = {"error": str(error or "")[:300],
+                                                                       "at": common.now_iso()}
+
+
+def role_of(cfg, server):
+    """"jira" / "database" when `server` is that role's configured server, else None."""
+    for role in ("jira", "database"):
+        if server and server == server_name(cfg or {}, role):
+            return role
+    return None
+
+
+def server_ok(health, server, cfg=None):
+    """A job reached `server`: forget it was offline (also legacy entries keyed by a job name or a server list)."""
+    m = health.setdefault("mcp", {})
+    off = m.get("offline") or {}
+    role = role_of(cfg, server)
+    for k in list(off):
+        legacy_job = role and k.startswith(role + "-") and k != server and             not common.parse_ts(off[k] if isinstance(off[k], str) else "")
+        if server in str(k).split(",") or legacy_job:
+            del off[k]
+    (m.get("server_state") or {}).pop(server, None)
+    if role:
+        (m.get("skip") or {}).pop(role, None)
+        lsr = m.get("last_skip_reason")
+        if isinstance(lsr, dict):
+            lsr.pop(role, None)
+
+
+def offline_since(health, server):
+    """ISO time a job last found `server` unreachable or signed out, or None."""
+    v = ((health.get("mcp") or {}).get("offline") or {}).get(server)
+    return v if isinstance(v, str) and common.parse_ts(v) else None
 
 
 def tool_results(res, tool_suffix):

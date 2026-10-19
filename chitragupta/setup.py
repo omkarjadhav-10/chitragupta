@@ -246,19 +246,30 @@ def detect(cfg=None):
 
 # --------------------------------------------------------------------------- MCP status
 
-STATUS_WORDS = (("Connected", "connected"), ("Needs authentication", "signed out"), ("Failed", "offline"))
+STATUS_WORDS = (("Connected", "connected"), ("Needs authentication", "signed out"), ("Failed", "unreachable"))
+# Status words that mean "the server could not be reached"; "offline" is what older versions wrote to mcp-status.json.
+UNREACHABLE = ("unreachable", "offline")
 
 
-def parse_mcp_list(text):
-    """`claude mcp list` lines -> {server name: connected | signed out | offline | <raw>}."""
-    out = {}
+def _list_lines(text):
     for line in (text or "").splitlines():
         if ": " not in line or " - " not in line:
             continue
         name, rest = line.split(": ", 1)
-        state = rest.rsplit(" - ", 1)[-1]
-        status = next((v for k, v in STATUS_WORDS if k in state), state.strip()[:40])
-        out[name.strip()] = status
+        yield name.strip(), rest.rsplit(" - ", 1)[-1]
+
+
+def parse_mcp_list(text):
+    """`claude mcp list` lines -> {server name: connected | signed out | unreachable | <raw>}."""
+    return {name: next((v for k, v in STATUS_WORDS if k in state), state.strip()[:40]) for name, state in _list_lines(text)}
+
+
+def parse_mcp_errors(text):
+    """`claude mcp list` lines -> {server name: the short status text} for servers that aren't connected."""
+    out = {}
+    for name, state in _list_lines(text):
+        if "Connected" not in state:
+            out[name] = re.sub(r"^[^\w(]+", "", state.strip())[:160]
     return out
 
 
@@ -287,14 +298,17 @@ def _is_atlassian_remote(name, s):
     return "atlassian.com" in _url(s) or "atlassian.net" in _url(s)
 
 
-def mcp_list(folder, cfg=None, timeout=90):
-    """Run `claude mcp list` in `folder` (its local scope included). None when claude can't be run."""
+def mcp_list(folder, cfg=None, timeout=90, errors=None):
+    """Run `claude mcp list` in `folder` (its local scope included). None when claude can't be run. `errors`, a dict,
+    receives the short status text of each server that isn't connected."""
     exe = _claude_exe(cfg)
     if not exe:
         return None
     rc, so, se = _run(exe + ["mcp", "list"], "claude", cwd=folder if os.path.isdir(folder) else common.home(), timeout=timeout)
     if rc != 0 and not so:
         return None
+    if errors is not None:
+        errors.update(parse_mcp_errors(so))
     return parse_mcp_list(so)
 
 
@@ -307,13 +321,23 @@ def mcp_status(cfg=None, probe=True, listing=None):
     user = _servers(cj)
     sender = slack.sender_dir()
     local = local_servers(cj, sender)
+    errors = {}
     if listing is None and probe:
-        listing = mcp_list(sender, cfg)
+        listing = mcp_list(sender, cfg, errors=errors)
     probed = listing is not None
     listing = listing or {}
+    checked = common.now_iso()
 
     def live(name):
         return listing.get(name) or ("configured" if not probed else "not listed")
+
+    def problem(row):
+        """An unreachable or signed-out server keeps the check's short error text and time."""
+        if row.get("server") and row.get("status") in UNREACHABLE + ("signed out",):
+            row["error"] = errors.get(row["server"]) or ("Failed to connect" if row["status"] in UNREACHABLE
+                                                          else "Needs authentication")
+            row["error_at"] = checked
+        return row
 
     # Slack: Slack's hosted MCP in local scope of the sender folder (background only).
     sl = next((n for n, s in local.items() if _is_slack(n, s)), None)
@@ -323,7 +347,7 @@ def mcp_status(cfg=None, probe=True, listing=None):
         detail = "server %r in local scope of %s" % (sl, sender)
         if st == "connected" and not scfg.get("self_user_id"):
             detail += "; run `setup slack-user` to store your Slack user ID"
-        slack_row = {"status": st, "server": sl, "detail": detail}
+        slack_row = problem({"status": st, "server": sl, "detail": detail})
     else:
         slack_row = {"status": "missing", "server": None,
                      "detail": "no background Slack server (run `setup add-slack`)"}
@@ -336,7 +360,7 @@ def mcp_status(cfg=None, probe=True, listing=None):
     # Jira: the mcp-atlassian server the v0.1.0 jobs are written for (user scope).
     jname = mcpjobs.server_name(cfg, "jira")
     if jname in user:
-        jira_row = {"status": live(jname), "server": jname, "detail": "server %r (user scope)" % jname}
+        jira_row = problem({"status": live(jname), "server": jname, "detail": "server %r (user scope)" % jname})
     else:
         remote = [n for n, s in user.items() if _is_atlassian_remote(n, s)] + \
                  [n for n in listing if n.lower().startswith("claude.ai") and "atlassian" in n.lower()]
@@ -357,7 +381,7 @@ def mcp_status(cfg=None, probe=True, listing=None):
     candidates = sorted(n for n in user if n not in skip)
     dname = dcfg.get("server") or ""
     if dname and dname in user:
-        db_row = {"status": live(dname), "server": dname, "detail": "server %r (user scope)" % dname}
+        db_row = problem({"status": live(dname), "server": dname, "detail": "server %r (user scope)" % dname})
     elif dname:
         db_row = {"status": "missing", "server": dname, "detail": "mcp.database.server %r is not configured in Claude "
                                                                   "Code" % dname}
@@ -389,7 +413,7 @@ def mcp_status(cfg=None, probe=True, listing=None):
     host_row = {"status": st, "server": use[0]["server"] if use else None, "detail": detail, "servers": rows}
 
     slack_row["state"] = slack.state(cfg)  # ready | off | not_connected (user id + send tool stored?)
-    res = {"checked": common.now_iso(), "probed": probed, "slack": slack_row, "jira": jira_row, "database": db_row,
+    res = {"checked": checked, "probed": probed, "slack": slack_row, "jira": jira_row, "database": db_row,
            "git_host": host_row, "jobs_configured": mcpjobs.configured(cfg)}
     if plugin.is_set_up():
         try:
