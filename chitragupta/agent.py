@@ -976,12 +976,17 @@ def save_state(agent):
 
 
 def cmd_tick(force=False):
+    from . import ticklog
+    t0 = time.time()
     if os.path.exists(common.wl("locks", "upgrade.lock")):
+        ticklog.record("skipped-upgrade")
         return 0  # an upgrade is in progress; hooks keep capturing, processing resumes afterwards
     lock = Lock()
     if not lock.acquire():
+        ticklog.record("skipped-busy")  # another run holds the lock (and health.json): recorded only here
         return 0
     agent = None
+    outcome = "error"
     try:
         try:
             from . import migrate
@@ -990,6 +995,7 @@ def cmd_tick(force=False):
             common.log("agent", "migration failed: " + traceback.format_exc())
         agent = Agent(force=force)
         agent.tick()
+        outcome = "ok"
         return 0
     except Exception:
         common.log("agent", "tick failed: " + traceback.format_exc())
@@ -1002,6 +1008,7 @@ def cmd_tick(force=False):
                 save_state(agent)
             except Exception:
                 common.log("agent", "state save failed: " + traceback.format_exc())
+        ticklog.record(outcome, (time.time() - t0) * 1000, trim=True)
         lock.release()
 
 

@@ -335,5 +335,67 @@ class SlackRetry(Case):
         self.assertEqual(sh["attempts"], 3)
 
 
+class TickRecords(Case):
+    """FX-11: every background run leaves a record, busy skips included; a stale-tick warning when events arrive
+    but nothing processes them."""
+
+    def test_busy_skip_and_ok_runs_are_recorded(self):
+        from chitragupta import agent, ticklog
+        self.hold_agent_lock()
+        self.assertEqual(agent.cmd_tick(), 0)
+        self.assertEqual([r["outcome"] for r in ticklog.recent()], ["skipped-busy"])
+        self._held.pop().release()
+        with open(ticklog.path(), "a", encoding="utf-8") as f:
+            for _ in range(ticklog.KEEP + 30):
+                f.write(json.dumps({"at": "2026-10-16T09:00:00+05:30", "outcome": "ok", "ms": 1}) + "\n")
+        with mock.patch.object(agent.Agent, "tick", return_value=None):
+            self.assertEqual(agent.cmd_tick(), 0)
+        rec = ticklog.recent(1000)
+        self.assertEqual(len(rec), ticklog.KEEP)  # trimmed by the run that held the lock
+        self.assertEqual(rec[-1]["outcome"], "ok")
+        self.assertIn("ms", rec[-1])
+        with mock.patch.object(agent.Agent, "tick", side_effect=RuntimeError("boom")):
+            self.assertEqual(agent.cmd_tick(), 1)
+        self.assertEqual(ticklog.recent()[-1]["outcome"], "error")
+
+    def _stale_setup(self, ok_minutes_ago):
+        import datetime as dt
+        from chitragupta import common, ticklog
+        now = common.now()
+        raw = common.wl("raw", now.date().isoformat(), "s1.jsonl")
+        os.makedirs(os.path.dirname(raw), exist_ok=True)
+        with open(raw, "w", encoding="utf-8") as f:
+            f.write("{}\n")
+        ok = (now - dt.timedelta(minutes=ok_minutes_ago)).isoformat(timespec="seconds")
+        os.makedirs(os.path.dirname(ticklog.path()), exist_ok=True)
+        for m in (20, 10):
+            with open(ticklog.path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"at": (now - dt.timedelta(minutes=m)).isoformat(timespec="seconds"),
+                                    "outcome": "skipped-busy", "ms": 0}) + "\n")
+        return {"last_tick_ok": ok, "last_tick": ok}
+
+    def test_stale_warning_everywhere(self):
+        from chitragupta import common, doctor, hook, ticklog
+        from chitragupta.dashboard import api
+        h = self._stale_setup(45)
+        w = ticklog.stale_warning(h)
+        self.assertIn("no background run has succeeded since", w)
+        self.assertIn("skipped-busy x2", w)
+        self.assertIn(w, hook._health_warning(h, common))
+        self.assertFalse(doctor.tick_row(h)["ok"])
+        common.write_json(common.wl("health.json"), h)
+        st = api.status()
+        self.assertIn(w, st["warnings"])
+        self.assertEqual(st["tick"]["last_hour"], {"skipped-busy": 2})
+
+    def test_no_warning_after_a_recent_good_run(self):
+        from chitragupta import doctor, ticklog
+        h = self._stale_setup(10)
+        self.assertEqual(ticklog.stale_warning(h), "")
+        row = doctor.tick_row(h)
+        self.assertTrue(row["ok"])
+        self.assertIn("2 run(s) skipped in the last hour", row["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,12 @@ python -m chitragupta setup scheduler --repair   # register again if missing or 
 
 The status says *current* when the job is exactly what setup would write now (for example after the runtime moved), and *differs: repair* otherwise.
 
+## Run records
+
+Every background run appends one line to `.worklog\logs\ticks.jsonl`: `{"at", "outcome", "ms"}`, where `outcome` is `ok`, `error`, `skipped-busy` (another run held the agent lock) or `skipped-upgrade` (an upgrade was in progress). A skipped run can't write `health.json` (the run holding the lock owns it), so this file is where skips show; the run that holds the lock keeps it to the last 50 lines.
+
+When Claude Code hooks recorded events in the last hour but no background run has succeeded for over 30 minutes, SessionStart, `/cg:doctor` (the *last tick* row), the Health page and the MCP server's `get_alerts` show one warning line, with how the runs since the last good one ended (for example `skipped-busy x6`). A new install gets 30 minutes before it counts.
+
 ## What Chitragupta may run here
 
 Only its own job, enforced by the command and path guards ([safety.md](safety.md)):

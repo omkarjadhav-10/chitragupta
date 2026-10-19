@@ -84,10 +84,23 @@ def hooks_row():
                 % (_fmt_age(now - last_session), _fmt_age(now - last_raw) if last_raw else "setup"))
 
 
+def _busy_note():
+    """'; N run(s) skipped in the last hour (agent busy)' from the run records, else ''."""
+    from . import ticklog
+    now = common.now()
+    n = sum(1 for r in ticklog.recent() if r.get("outcome") == "skipped-busy" and
+            (now - (common.parse_ts(r.get("at")) or now)).total_seconds() < 3600)
+    return "; %d run(s) skipped in the last hour (agent busy)" % n if n else ""
+
+
 def tick_row(health, task_expected=True):
+    from . import ticklog
     a = _age(health.get("last_tick_ok"))
+    stale = ticklog.stale_warning(health)
+    if stale:
+        return _row("last tick", False, stale.split(": ", 1)[-1] + " (see the task row; `setup apply` re-registers it)")
     if a is not None and a <= TICK_MAX_AGE:
-        return _row("last tick", True, _fmt_age(a))
+        return _row("last tick", True, _fmt_age(a) + _busy_note())
     if a is None and (_new_setup() or not task_expected):
         return _row("last tick", True, "no background run yet (the task runs every 5 minutes)"
                     if task_expected else "no background run yet (no task registered)")

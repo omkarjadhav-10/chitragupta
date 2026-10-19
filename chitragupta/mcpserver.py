@@ -620,6 +620,13 @@ def tool_get_alerts(args, cfg):
         warn.append("The background tick last ran %s (/cg:doctor)." % h["last_tick"])
     for w in h.get("warnings") or []:
         warn.append(_one(w if isinstance(w, str) else json.dumps(w, ensure_ascii=False), 300))
+    try:
+        from . import ticklog
+        stale = ticklog.stale_warning(h)
+        if stale:
+            warn.append(_one(stale, 300))
+    except Exception:  # noqa: BLE001 - the rest still shows
+        pass
     for k, label in (("last_error", "Last error"), ("last_push_error", "Last push error")):
         if h.get(k):
             warn.append("%s: %s" % (label, _one(h[k], 300)))

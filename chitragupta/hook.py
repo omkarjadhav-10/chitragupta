@@ -178,8 +178,15 @@ def _session_start_output(cfg, common, ev, inp):
 def _health_warning(health, common):
     """One factual line, only when something is wrong."""
     msgs = list(health.get("warnings") or [])
+    try:
+        from . import ticklog
+        stale = ticklog.stale_warning(health)  # events in the last hour, no good run for 30 min
+    except Exception:  # noqa: BLE001 - a warning must never break SessionStart
+        stale = ""
     last_ok = common.parse_ts(health.get("last_tick_ok"))
-    if last_ok and (common.now() - last_ok).total_seconds() > 2 * 3600:
+    if stale:
+        msgs.append(stale)
+    elif last_ok and (common.now() - last_ok).total_seconds() > 2 * 3600:
         msgs.append("Worklog recorder status: no successful background run since %s."
                     % last_ok.strftime("%Y-%m-%d %H:%M"))
     return " ".join(msgs[:3])

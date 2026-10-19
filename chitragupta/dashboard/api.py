@@ -997,14 +997,14 @@ def status(cfg=None, now=None, server=None):
         "now": now.isoformat(timespec="seconds"), "day": today_day, "home": common.home(),
         "paused": os.path.exists(common.wl("PAUSED")),
         "hooks": {"last_event": hook_ts, "last_raw_event": raw_ts, "minutes_ago": _ago_minutes(hook_ts, now)},
-        "tick": {"last_tick": h.get("last_tick"), "last_tick_ok": h.get("last_tick_ok"),
-                 "minutes_ago": ago["last_tick"], "ok_minutes_ago": ago["last_tick_ok"]},
+        "tick": dict({"last_tick": h.get("last_tick"), "last_tick_ok": h.get("last_tick_ok"),
+                      "minutes_ago": ago["last_tick"], "ok_minutes_ago": ago["last_tick_ok"]}, **_ticks(now)),
         "push": {"last_push": h.get("last_push"), "last_commit": h.get("last_commit"), "minutes_ago": ago["last_push"],
                  "error": h.get("last_push_error"), "remote_set": bool(cfg.get("github_remote"))},
         "slack": _slack(h, cfg),
         "mcp": _mcp(h, cfg, today_day),
         "today": h.get("today") if (h.get("today") or {}).get("day") == today_day else {"day": today_day},
-        "warnings": list(h.get("warnings") or []),
+        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now)] if w],
         "errors_total": h.get("errors_total") or 0,
         "errors": recent_errors(h),
         "dashboard": server or {},
@@ -1012,6 +1012,26 @@ def status(cfg=None, now=None, server=None):
         "pr_sources": h.get("pr_sources") or [],
         "safety": _safety(cfg),
     }
+
+
+def _ticks(now):
+    """The run records (.worklog/logs/ticks.jsonl): the last 10 and how the last hour's runs ended."""
+    from .. import ticklog
+    rec = ticklog.recent()
+    hour = {}
+    for r in rec:
+        t = common.parse_ts(r.get("at"))
+        if t and (now - t).total_seconds() < 3600:
+            hour[r.get("outcome")] = hour.get(r.get("outcome"), 0) + 1
+    return {"recent": rec[-10:], "last_hour": hour}
+
+
+def _stale(h, now):
+    try:
+        from .. import ticklog
+        return ticklog.stale_warning(h, now)
+    except Exception:  # noqa: BLE001 - the rest of the page still shows
+        return ""
 
 
 def _search_stats():
