@@ -795,6 +795,75 @@ class OtherPluginToolTests(SafetyCase):
         self.assertFalse({r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]["ok"])
 
 
+class SecurityLogFormatTests(SafetyCase):
+    def test_timestamp_carries_the_local_utc_offset(self):
+        from chitragupta.safety import log
+        log.record("path", "test", "write C:/x", "write", "tests.caller")
+        self.assertRegex(log.entries(1)[-1]["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
+
+    def test_caller_comes_from_the_stack_when_not_given(self):
+        from chitragupta.safety import log, paths
+        log.record("path", "test", "write C:/x")
+        self.assertEqual(log.entries(1)[-1]["caller"], __name__)
+        outside = os.path.join(os.path.dirname(self.scratch), "elsewhere-%d.txt" % os.getpid())
+        self.assertBlocked(lambda: paths.write_text(outside, "x"), "path")  # through the guard: its own frames skipped
+        self.assertEqual(log.entries(1)[-1]["caller"], __name__)
+        log.record("path", "test", "write C:/x", caller="tests.explicit")
+        self.assertEqual(log.entries(1)[-1]["caller"], "tests.explicit")
+
+    def test_summary_counts_old_and_new_timestamps(self):
+        import datetime as dt
+        from chitragupta.safety import log
+        now = dt.datetime.now().astimezone()
+        other = dt.timezone(now.utcoffset() - dt.timedelta(hours=6))  # reads 6 h earlier than local time
+        ats = [(now - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S"),          # old format, recent
+               (now - dt.timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S"),           # old format, 3 days
+               (now - dt.timedelta(hours=2)).isoformat(timespec="seconds"),          # new format, recent
+               (now - dt.timedelta(hours=20)).astimezone(other).isoformat(timespec="seconds"),  # recent, other offset
+               (now - dt.timedelta(days=3)).astimezone(other).isoformat(timespec="seconds")]
+        os.makedirs(os.path.dirname(log.path()), exist_ok=True)
+        with open(log.path(), "w", encoding="utf-8") as f:
+            for at in ats:
+                f.write(json.dumps({"at": at, "layer": "path", "caller": "", "purpose": "", "what": "x", "reason": "r"}) + "\n")
+        self.assertEqual((log.summary(7)["total"], log.summary(7)["recent"]), (5, 5))
+        self.assertEqual(log.summary(1)["recent"], 3)
+
+
+class LateCleanupIsolationTests(unittest.TestCase):
+    """tests/support.py: restore() runs as the last cleanup, after every cleanup a test registered, and the whole run
+    has one sandbox user folder, so a late cleanup can never reach the real one."""
+
+    def test_the_run_has_a_sandbox_user_folder(self):
+        real = os.path.join(os.path.expanduser("~"), ".chitragupta")
+        for k in ("CHITRAGUPTA_USER_DIR", "CHITRAGUPTA_HOME"):
+            self.assertTrue(os.environ.get(k), k)
+        self.assertNotEqual(os.path.normcase(os.path.abspath(os.environ["CHITRAGUPTA_USER_DIR"])), os.path.normcase(real))
+
+    def test_a_guarded_cleanup_registered_the_old_way_stays_in_the_test_sandbox(self):
+        from chitragupta.safety import log
+        outer = log.path()
+        size = os.path.getsize(outer) if os.path.exists(outer) else 0
+        seen = {}
+
+        class Inner(Isolated, unittest.TestCase):
+            def setUp(self):
+                self.isolate()
+
+            def tearDown(self):
+                self.restore()  # the old way: before the test's own cleanups
+
+            def test_late(self):
+                seen["log"], seen["user"] = log.path(), self.user_dir
+                self.addCleanup(log.record, "path", "late cleanup", "write C:/x", "write", "tests.late")
+
+        res = unittest.TestResult()
+        unittest.defaultTestLoader.loadTestsFromTestCase(Inner).run(res)
+        self.assertEqual((res.errors, res.failures), ([], []))
+        self.assertNotEqual(seen["log"], outer)
+        self.assertEqual(os.path.getsize(outer) if os.path.exists(outer) else 0, size, "the late cleanup reached outside")
+        self.assertFalse(os.path.exists(seen["user"]), "the temp user folder was not removed")
+
+
 # ---------------------------------------------------------------------------------------------- allowed actions
 
 class AllowedTests(SafetyCase):
