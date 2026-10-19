@@ -29,6 +29,7 @@ from .safety import paths
 _AUTO = object()  # build(until=...): "now" for the current work day, the whole day otherwise
 RESEND_WINDOW_S = 120  # a Resend request with the same id inside this window counts once
 CONDENSE_KEEP_DAYS = 14
+FACTS_REUSE_S = 30 * 60  # a Slack retry reuses evening facts fetched this recently (no second Jira job)
 
 EXAMPLES = [
     "Retested the document upload fix on QA and checked the file shows up in the admin portal. Wrote the RCA comment.",
@@ -447,7 +448,8 @@ class JiraWorklog:
     def build(self, day, send_day=None, *, until=_AUTO, facts="live", condense="model", correction=False, delivery=True):
         """The 20:00 message: the one builder the sender and every preview call.
         until: activity up to then (default: now for the current work day, the whole day otherwise).
-        facts: "live" = one read-only jira-evening job (the sender) | "cached" = the latest evening-facts cache, no call
+        facts: "live" = one read-only jira-evening job (the sender) | "recent" = the evening-facts cache when it was
+        fetched within FACTS_REUSE_S, else live (a Slack retry) | "cached" = the latest evening-facts cache, no call
         (a preview) | None = no Jira. Only when mcp.jira.enabled; they add my Jira comments as activity points and
         subtract time already logged in Jira.
         condense: "model" | "cache" | False, see describe().
@@ -465,7 +467,12 @@ class JiraWorklog:
         fx, facts_at, source = None, None, None
         if facts and mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.evening"):
             tickets = self.fact_tickets(bl, manual)
-            if tickets and facts == "live":
+            rec = evening_cache(day) if tickets and facts == "recent" else {}
+            fetched = common.parse_ts(rec.get("fetched_at"))
+            if rec.get("facts") is not None and fetched and (now - fetched).total_seconds() <= FACTS_REUSE_S:
+                fx, facts_at, facts = rec["facts"], rec["fetched_at"], "cached"  # a retry minutes later: no new call
+            elif tickets and facts in ("live", "recent"):
+                facts = "live"
                 try:
                     fx = mcpjobs.jira_evening(day, tickets, self.cfg, self.a.health)
                     facts_at = common.now_iso()
@@ -545,7 +552,7 @@ class JiraWorklog:
                 if (now - pc).total_seconds() >= self.ts["correction_debounce_minutes"] * 60:
                     out.append((day, "correction"))
             elif sh.get("status") in (None, "", "failed") and int(sh.get("attempts") or 0) < 4:
-                out.append((day, "first"))
+                out.append((day, "retry" if sh.get("status") == "failed" and sh.get("attempts") else "first"))
         return out
 
     def tick(self):
@@ -572,9 +579,12 @@ class JiraWorklog:
             self.run_day(day, why)
 
     def run_day(self, day, why, send=True):
+        """Compose and send `day`. why: first | retry (a failed send again: reuses the evening facts fetched within
+        FACTS_REUSE_S) | resend | correction."""
         sh = load_sheet(day)
         today = common.workday(common.now(), self.cfg)
-        res = self.build(day, today, facts="live", condense="model", correction=(why == "correction"))
+        res = self.build(day, today, facts="recent" if why == "retry" else "live", condense="model",
+                         correction=(why == "correction"))
         sh.pop("resend", None)
         sh.pop("pending_correction", None)
         if res["kind"] == "none":

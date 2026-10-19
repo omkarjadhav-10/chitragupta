@@ -97,7 +97,7 @@ Every model call is a headless `claude -p`:
 
 ## MCP jobs
 
-MCP jobs run only in the background tick or when you ask for them, never from a hook. They are limited to `mcp.daily_call_budget` jobs a day (default 10). Each job is one `claude -p --model haiku` call that gets:
+MCP jobs run only in the background tick or when you ask for them, never from a hook. They are limited to `mcp.daily_call_budget` jobs a day (default 10); a job counts only when it made at least one MCP tool call, and jobs that made none (a server down) have their own cap of the same size. While a server is known to be unreachable or signed out (a job found it so, or the last `claude mcp list` check did after the last job that reached it), its background Jira and database jobs wait, apart from one probe job at most every 2 hours; one failed job also stops that server's other jobs in the same run. Each job is one `claude -p --model haiku` call that gets:
 
 - **Only its own server.** `--strict-mcp-config --mcp-config <a file with only that server>`.
 - **Only read tools.** `--allowedTools` lists the job's read tools, and `--disallowedTools` lists the server's write tools.

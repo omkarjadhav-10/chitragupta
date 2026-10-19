@@ -215,5 +215,125 @@ class ServerStatus(Harness):
                                   "2026-10-16")["offline"], {"a,b": "2026-10-16T09:00:00+05:30"})
 
 
+class Budget(Harness):
+    """FX-9: a unit only for a run that made an MCP call; offline servers get one probe per OFFLINE_PROBE_S; a Slack
+    retry reuses the evening facts fetched minutes before."""
+
+    def test_a_run_without_mcp_calls_costs_no_unit(self):
+        from chitragupta import mcpjobs
+        h = {}
+        self.job(h, reply=(0, stream({JIRA: "connected"}), ""))
+        self.assertEqual(int((h["mcp"].get("calls") or {}).get("2026-10-16") or 0), 0)
+        self.assertEqual(h["mcp"]["empty"]["2026-10-16"], 1)
+        with self.assertRaises(mcpjobs.JobError):
+            self.job(h, reply=(1, stream({JIRA: "failed"}), "connect ECONNREFUSED"))
+        self.assertEqual(int((h["mcp"].get("calls") or {}).get("2026-10-16") or 0), 0)
+        self.job(h, reply=(0, stream({JIRA: "connected"}, [("mcp__%s__jira_get_issue" % JIRA, "{}")]), ""))
+        self.assertEqual(h["mcp"]["calls"]["2026-10-16"], 1)
+        self.assertEqual(h["mcp"]["jobs"]["probe-job"]["calls"], 1)
+
+    def test_empty_runs_have_their_own_cap(self):
+        from chitragupta import mcpjobs
+        cfg = self.jcfg(daily_call_budget=10)
+        h = {"mcp": {"empty": {"2026-10-16": 4}}}
+        self.assertEqual(mcpjobs.budget_left(h, cfg, "2026-10-16"), 6)
+        h = {"mcp": {"empty": {"2026-10-16": 10}, "calls": {"2026-10-16": 1}}}
+        self.assertEqual(mcpjobs.budget_left(h, cfg, "2026-10-16"), 0)
+
+
+class OfflineProbe(Case):
+    def _agent(self, health_mcp=None):
+        a = self.agent()
+        a.cfg["mcp"]["database"].update(enabled=True, server="sqldb", connections={"qa": "qa-shop"})
+        a.cfg["mcp"]["jira"]["enabled"] = False
+        a.health["mcp"] = health_mcp or {}
+        self.ran = []
+
+        def job(name):
+            def go(*x, **k):
+                self.ran.append(name)
+                a.jobs._skipped("database", "server sqldb unreachable: connect ECONNREFUSED")
+                from chitragupta import mcpjobs
+                mcpjobs.server_down(a.health, "sqldb", "unreachable", "connect ECONNREFUSED")
+                return 0
+            return go
+        a.jobs.schema_cards = job("schema")
+        a.jobs.qa_traces = job("trace")
+        a.jobs.link_map = job("linkmap")
+        return a
+
+    def tick(self, a):
+        from chitragupta import mcpjobs
+        with mock.patch.object(mcpjobs, "ensure_files"):
+            a.jobs.tick()
+
+    def test_one_failure_stops_the_rest_of_the_tick(self):
+        self.clock("2026-10-16", 10, 0)
+        a = self._agent()
+        self.tick(a)
+        self.assertEqual(self.ran, ["schema"])
+
+    def test_offline_server_gets_one_probe_per_interval(self):
+        from chitragupta import kbjobs
+        t = self.clock("2026-10-16", 10, 0)
+        a = self._agent({"offline": {"sqldb": "2026-10-16T09:30:00" + t.isoformat()[19:]}})
+        self.tick(a)
+        self.assertEqual(self.ran, ["schema"])  # the probe
+        self.ran.clear()
+        a.health["mcp"].pop("skip", None)  # even without the skip mark, the probe interval holds
+        self.clock("2026-10-16", 11, 0)
+        self.tick(a)
+        self.assertEqual(self.ran, [])
+        self.clock("2026-10-16", 10 + kbjobs.OFFLINE_PROBE_S // 3600, 1)
+        a.health["mcp"].pop("skip", None)
+        self.tick(a)
+        self.assertEqual(self.ran, ["schema"])
+
+    def test_cached_status_offline_skips_until_a_job_succeeds_later(self):
+        from chitragupta import common, plugin
+        self.clock("2026-10-16", 10, 0)
+        common.write_json(plugin.mcp_status_cache(), {"checked": "2026-10-16T09:50:00+05:30", "database": {
+            "status": "unreachable", "server": "sqldb", "error": "Failed to connect",
+            "error_at": common.now_iso()}})
+        a = self._agent({"probe": {"database": common.now_iso()}})
+        self.tick(a)
+        self.assertEqual(self.ran, [])  # cached offline and probed just now
+        a.health["mcp"]["last_ok"] = {"sqldb": "2026-10-16T10:30:00+05:30"}  # a later job reached it
+        self.clock("2026-10-16", 10, 40)
+        self.tick(a)
+        self.assertEqual(self.ran, ["schema"])
+
+
+class SlackRetry(Case):
+    def test_retry_reuses_recent_facts_and_is_labelled(self):
+        from chitragupta import common, jiraworklog, mcpjobs
+        self.clock("2026-10-16", 20, 0)
+        self.raw("2026-10-16", "ABC-1001", 10, 0)
+        a = self.agent()
+        a.run_extractions = lambda *x, **k: None
+        a.cfg["mcp"]["jira"].update(enabled=True)
+        a.cfg["jira_worklog"] = {"slack": {"self_user_id": "U000TEST", "send_tool": "mcp__slack__slack_send_message"}}
+        calls = []
+
+        def evening(day, tickets, cfg, health):
+            calls.append(common.now_iso())
+            facts = {"comments": [], "worklogs": [], "status_changes": []}
+            common.write_json(common.hp("data", "jira", "_evening", day + ".json"),
+                              {"day": day, "fetched_at": common.now_iso(), "facts": facts})
+            return facts
+        jiraworklog.slack.send = lambda cfg, text, health: {"ok": False, "error": "slack_send_message tool is not available"}
+        with mock.patch.object(mcpjobs, "jira_evening", side_effect=evening):
+            a.jwl.tick()
+            self.clock("2026-10-16", 20, 5)
+            a.jwl.tick()
+            self.clock("2026-10-16", 20, 50)
+            a.jwl.tick()
+        self.assertEqual(len(calls), 2)  # 20:00 and 20:50; the 20:05 retry reused the 20:00 facts
+        sh = jiraworklog.load_sheet("2026-10-16")
+        self.assertEqual([v["why"] for v in sh["versions"]], ["first", "retry", "retry"])
+        self.assertTrue(sh["versions"][1]["jira_facts"])
+        self.assertEqual(sh["attempts"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

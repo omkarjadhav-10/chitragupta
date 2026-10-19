@@ -111,12 +111,18 @@ class JobError(Exception):
 
 
 def budget_left(health, cfg, day):
+    """Jobs left today. A unit is spent only by a run that made at least one MCP tool call (mcp.calls); runs that made
+    none (a server down, the model gave up) are counted apart (mcp.empty) under their own cap of the same size, so a
+    server that keeps failing can't start model calls without end."""
     m = health.setdefault("mcp", {})
     calls = m.setdefault("calls", {})
-    for d in list(calls):
-        if d < (_dt.date.fromisoformat(day) - _dt.timedelta(days=7)).isoformat():
-            del calls[d]
-    return int(((cfg.get("mcp") or {}).get("daily_call_budget")) or 10) - int(calls.get(day) or 0)
+    cut = (_dt.date.fromisoformat(day) - _dt.timedelta(days=7)).isoformat()
+    for counts in (calls, m.get("empty") or {}):
+        for d in list(counts):
+            if d < cut:
+                del counts[d]
+    budget = int(((cfg.get("mcp") or {}).get("daily_call_budget")) or 10)
+    return min(budget - int(calls.get(day) or 0), budget - int((m.get("empty") or {}).get(day) or 0))
 
 
 _SAVED = re.compile(r"(?:saved to:?)\s+([A-Za-z]:[\\/][^\r\n]*?\.(?:txt|json))", re.I)
@@ -264,13 +270,15 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
                          disallowed=writes, mcp_config=cfg_path, json_schema=schema, output="stream-json",
                          max_turns=max_turns, cfg=cfg)
     m = health.setdefault("mcp", {})
-    ck = "manual_calls" if manual else "calls"
-    m.setdefault(ck, {})[day] = int(m.setdefault(ck, {}).get(day) or 0) + 1
     t0 = time.time()
     common.ensure_dir(common.wl("sandbox"))
     rc, so, se = commands.run(args, "claude", cwd=common.wl("sandbox"), input_text=stdin_text or "", timeout=timeout,
                               env_extra=env_extra, cfg=cfg)
     res = parse_stream(so)
+    # Budget: a unit only when the run made at least one MCP tool call; empty runs are counted apart (budget_left).
+    ck = ("manual_calls" if manual else "calls") if res["calls"] else ("manual_empty" if manual else "empty")
+    counts = m.setdefault(ck, {})
+    counts[day] = int(counts.get(day) or 0) + 1
     common.write_text(os.path.join(common.wl("cache", "mcp"), job + ".last.jsonl"), redact(so or "", mode="secrets"))
     res["seconds"] = round(time.time() - t0, 1)
     res["missing_env"] = missing
@@ -310,6 +318,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
 #   offline       {server: ISO time}             a server the last job found unreachable or signed out (server-keyed only)
 #   server_state  {server: {state, error, at}}   state: unreachable | signed-out | missing
 #   job_errors    {job: {error, at}}             why a job failed (missing env, a server down, claude rc)
+#   last_ok       {server: ISO time}             the last job that reached the server
 # A successful job clears its servers' offline / server_state entries and the role's skip / last_skip_reason.
 
 def server_state_of(status):
@@ -357,6 +366,7 @@ def server_ok(health, server, cfg=None):
         if server in str(k).split(",") or legacy_job:
             del off[k]
     (m.get("server_state") or {}).pop(server, None)
+    m.setdefault("last_ok", {})[server] = common.now_iso()
     if role:
         (m.get("skip") or {}).pop(role, None)
         lsr = m.get("last_skip_reason")
