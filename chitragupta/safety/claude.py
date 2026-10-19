@@ -13,9 +13,9 @@ from .. import common
 from .commands import BUILTIN_WRITES
 
 PROFILES = ("none", "mcp", "slack-send", "slack-discover")
-# This plugin (name `cg`, marketplace `chitragupta`) is switched off inside every internal call, so its read-only
-# MCP server never starts there even when a call runs without --strict-mcp-config (which already leaves plugin
-# servers out). The server itself also lists no tools when CHITRAGUPTA_INTERNAL=1.
+# This plugin (name `cg`, marketplace `chitragupta`) is switched off inside every internal call as well, so its
+# read-only MCP server never starts there (--strict-mcp-config already leaves plugin servers out). The server itself
+# also lists no tools when CHITRAGUPTA_INTERNAL=1.
 OWN_PLUGIN = "cg@chitragupta"
 
 
@@ -34,8 +34,9 @@ def guard_settings(profile, cfg=None):
 
 
 def build(exe, prompt, profile, model, system_prompt_file=None, allowed=(), disallowed=(), mcp_config=None,
-          strict=True, json_schema=None, output="json", max_turns=None, cfg=None):
-    """argv for one internal call. `exe` is resolve_claude()'s list (claude.exe, or node + cli.js)."""
+          json_schema=None, output="json", max_turns=None, cfg=None):
+    """argv for one internal call. `exe` is resolve_claude()'s list (claude.exe, or node + cli.js). Always
+    --strict-mcp-config: only the servers in `mcp_config` (none without it) load."""
     args = list(exe) + ["-p", prompt, "--model", model]
     if system_prompt_file:
         args += ["--system-prompt-file", system_prompt_file]
@@ -44,10 +45,9 @@ def build(exe, prompt, profile, model, system_prompt_file=None, allowed=(), disa
              "--no-session-persistence", "--disable-slash-commands", "--output-format", output]
     if output == "stream-json":
         args.append("--verbose")
-    if strict:
-        args.append("--strict-mcp-config")
-        if mcp_config:
-            args += ["--mcp-config", mcp_config]
+    args.append("--strict-mcp-config")
+    if mcp_config:
+        args += ["--mcp-config", mcp_config]
     allowed = [t for t in allowed if t]
     args += ["--allowedTools", ",".join(allowed)]  # always explicit; "" = nothing pre-approved
     args += ["--disallowedTools", ",".join(list(BUILTIN_WRITES) + [t for t in disallowed if t and t not in allowed])]

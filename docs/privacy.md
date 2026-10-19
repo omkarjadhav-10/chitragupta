@@ -83,7 +83,7 @@ These references are never masked: `{{var}}`, `${VAR}`, `$VAR`, `$(…)`. You ca
 If Slack is connected, it receives only the evening Jira-worklog message, sent as a direct message to **you**:
 
 - **Plain lines.** Each entry is a ticket key, a start time, a duration and a short description. The descriptions are checked first: a line containing a file path, an extension, SQL, an email or a long digit run is rejected. The whole message then goes through the `public` redaction pass.
-- **One send call.** Each send is one `claude -p` call with only the send tool allowed and every other Slack tool disallowed. The text the model actually sent is compared with the intended message.
+- **One send call.** Each send is one `claude -p` call with only the send tool allowed and every other Slack tool disallowed, and with `--strict-mcp-config` plus a config holding only the Slack server, so none of your other MCP servers load. The OAuth sign-in stays in Claude Code's own store: the config names the same definition (URL and client id) and carries no token; a literal credential header would be passed as a `${CHITRAGUPTA_RT_…}` reference with its value only in the call's environment. The text the model actually sent is compared with the intended message.
 - **Saved either way.** The message is also saved in the daily note and in `data\timesheets\<day>.json`, whether or not Slack is connected.
 
 ## Model calls

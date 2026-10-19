@@ -41,8 +41,8 @@ get_db_table(name="shop.orders")
   except its own error log (`.worklog/logs/mcp-server.log`, through the safety layer's path guard). It never calls a
   model, opens no network connection and starts no process.
 - **Local.** stdio only: Claude Code starts it as a child process; nothing listens on a port.
-- **Not in background calls.** Chitragupta's own `claude -p` calls run with `--strict-mcp-config` (plugin MCP servers
-  aren't started under it) and with settings that switch this plugin off (`enabledPlugins: {"cg@chitragupta": false}`).
+- **Not in background calls.** Chitragupta's own `claude -p` calls, the Slack sender included, all run with
+  `--strict-mcp-config` (plugin MCP servers aren't started under it) and with settings that switch this plugin off (`enabledPlugins: {"cg@chitragupta": false}`).
   As a third layer, the server lists no tools when it sees `CHITRAGUPTA_INTERNAL=1`.
 - **Search.** `search` uses the persistent search index when it is installed; otherwise it builds the dashboard's
   in-memory index on first use. Without the index, the `repo` filter is ignored (the answer says so).

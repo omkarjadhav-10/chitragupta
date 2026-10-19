@@ -397,5 +397,67 @@ class TickRecords(Case):
         self.assertIn("2 run(s) skipped in the last hour", row["detail"])
 
 
+class SlackSenderConfig(Case):
+    """FX-18: the Slack sender always runs with --strict-mcp-config and only the Slack server, in local mode too."""
+
+    SEND = "mcp__slack__slack_send_message"
+
+    def setUp(self):
+        super().setUp()
+        from chitragupta import mcpjobs, slack
+        real = mcpjobs.claude_exe
+        self.addCleanup(setattr, mcpjobs, "claude_exe", real)
+        mcpjobs.claude_exe = lambda cfg: ["claude"]
+        self.slack = slack
+
+    def cfg(self):
+        return {"jira_worklog": {"slack": {"self_user_id": "U000TEST", "send_tool": self.SEND, "mode": "local"}}}
+
+    def claude_json(self, servers):
+        from chitragupta import plugin
+        p = plugin.claude_json_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"mcpServers": {"other": {"type": "stdio", "command": "x"}},
+                       "projects": {self.slack.sender_dir().replace("\\", "/"): {"mcpServers": servers}}}, f)
+
+    def test_local_mode_passes_only_the_local_slack_server(self):
+        from chitragupta import common
+        from chitragupta.safety import commands
+        self.claude_json({"slack": {"type": "http", "url": "https://mcp.slack.com/mcp",
+                                    "oauth": {"clientId": "1.2", "callbackPort": 3118},
+                                    "headers": {"Authorization": "Bearer test-literal-value"}}})
+        path, env = self.slack._mcp_config(self.cfg(), "local")
+        conf = common.read_json(path)
+        self.assertEqual(list(conf["mcpServers"]), ["slack"])
+        srv = conf["mcpServers"]["slack"]
+        self.assertEqual((srv["url"], srv["oauth"]), ("https://mcp.slack.com/mcp", {"clientId": "1.2", "callbackPort": 3118}))
+        self.assertEqual(srv["headers"]["Authorization"], "${CHITRAGUPTA_RT_SLACK_AUTHORIZATION}")
+        self.assertNotIn("test-literal-value", common.read_text(path))
+        self.assertEqual(env, {"CHITRAGUPTA_RT_SLACK_AUTHORIZATION": "Bearer test-literal-value"})
+        a = self.slack._args(self.cfg(), "Send", [self.SEND], "local")
+        self.assertIn("--strict-mcp-config", a)
+        self.assertEqual(a[a.index("--mcp-config") + 1], path)
+        self.assertIsNone(commands.reason(a, "claude", cwd=self.slack._cwd("local"), cfg=self.cfg()))
+
+    def test_no_exemption_for_the_sender_folder(self):
+        from chitragupta.safety import commands
+        self.claude_json({"slack": {"type": "http", "url": "https://mcp.slack.com/mcp"}})
+        a = self.slack._args(self.cfg(), "Send", [self.SEND], "local")
+        i = a.index("--strict-mcp-config")
+        loose = a[:i] + a[i + 1:]
+        self.assertIn("strict-mcp-config", commands.reason(loose, "claude", cwd=self.slack.sender_dir(), cfg=self.cfg()))
+
+    def test_no_local_server_no_call(self):
+        from chitragupta.safety import commands
+        self.slack._run = self._real_mcp[2]  # the real sender; restore() puts the tripwire back
+        real = commands.run
+        self.addCleanup(setattr, commands, "run", real)
+        commands.run = lambda *a, **k: self.fail("no claude call without the Slack server")
+        r = self._saved[1](self.cfg(), "hello", {})  # the real send (Case replaces slack.send)
+        self.assertFalse(r["ok"])
+        self.assertIn("no Slack server in the local scope", r["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

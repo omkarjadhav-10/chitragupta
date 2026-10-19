@@ -157,7 +157,7 @@ Setup and `setup slack-user` fill in most of these.
 | `jira_worklog.slack.self_user_id` | string | `""` | Your Slack user ID (looked up by `setup slack-user`). |
 | `jira_worklog.slack.send_tool` | string | `""` | Full name of the Slack MCP send tool (discovered). |
 | `jira_worklog.slack.tools` | list | `[]` | All Slack tools seen at discovery. Every tool except the send tool is disallowed on a send. |
-| `jira_worklog.slack.mode` | `"strict"` \| `"local"` | `"strict"` | `strict` passes only `.worklog\mcp\slack.json` to the send call. `local` runs in the sender folder's local scope. Discovery picks the one that works. |
+| `jira_worklog.slack.mode` | `"strict"` \| `"local"` | `"strict"` | Where the Slack server definition comes from. `strict` passes `.worklog\mcp\slack.json` to the send call. `local` passes the sender folder's local-scope Slack definition exactly as Claude Code has it (copied to `.worklog\cache\mcp\slack-local.json`, so the sign-in for that definition is found), and runs in the sender folder. Both run with `--strict-mcp-config`, so no other MCP server loads in the send call. Discovery picks the one that works. |
 | `jira_worklog.slack.email` | string | `""` | Email to look up in Slack; defaults to the last `git_author_emails` entry. |
 | `jira_worklog.slack.server.url` | string | `"https://mcp.slack.com/mcp"` | Slack MCP endpoint. |
 | `jira_worklog.slack.server.client_id` | string | Slack's published client id for Claude | OAuth client id. |
