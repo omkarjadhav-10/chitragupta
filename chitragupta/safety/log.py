@@ -9,6 +9,9 @@ import time
 from .. import common
 
 MAX_BYTES = 1_000_000
+# Categories that are recorded but are not violations: left out of summary()'s counts (Health, doctor, get_alerts).
+#   other-plugin  another plugin's MCP tool called during a /cg: command: denied and skipped (safety/mcp.py, Policy A)
+NOT_VIOLATIONS = frozenset({"other-plugin"})
 
 
 class Blocked(PermissionError):
@@ -24,12 +27,15 @@ def path():
     return os.path.join(common.user_dir(), "logs", "security.log")
 
 
-def record(layer, reason, what="", purpose="", caller=""):
-    """Append one violation. `what` is the blocked command / path / statement / tool (truncated)."""
+def record(layer, reason, what="", purpose="", caller="", category=""):
+    """Append one block. `what` is the blocked command / path / statement / tool (truncated). `category` (only written
+    when set) marks a block that is not a violation (NOT_VIOLATIONS)."""
     p = path()
-    line = json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "layer": layer, "caller": caller or "",
-                       "purpose": purpose or "", "what": common.truncate(str(what), 600), "reason": reason},
-                      ensure_ascii=False)
+    entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "layer": layer, "caller": caller or "",
+             "purpose": purpose or "", "what": common.truncate(str(what), 600), "reason": reason}
+    if category:
+        entry["category"] = category
+    line = json.dumps(entry, ensure_ascii=False)
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         if os.path.exists(p) and os.path.getsize(p) > MAX_BYTES:
@@ -62,12 +68,20 @@ def entries(limit=200):
     return out[-limit:]
 
 
+def is_violation(e):
+    return e.get("category") not in NOT_VIOLATIONS
+
+
 def summary(days=7):
-    """{total, recent (last `days`), by_layer, last} for Health and doctor."""
-    es = entries(10_000)
+    """{total, recent (last `days`), by_layer, last, other_plugin} for Health and doctor. Counts violations only;
+    `other_plugin` is the number of other plugins' tool calls skipped during /cg: commands in the same window."""
+    every = entries(10_000)
+    es = [e for e in every if is_violation(e)]
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - days * 86400))
     recent = [e for e in es if (e.get("at") or "") >= cutoff]
     by = {}
     for e in recent:
         by[e.get("layer") or "?"] = by.get(e.get("layer") or "?", 0) + 1
-    return {"total": len(es), "recent": len(recent), "days": days, "by_layer": by, "last": es[-5:]}
+    skipped = sum(1 for e in every if e.get("category") == "other-plugin" and (e.get("at") or "") >= cutoff)
+    return {"total": len(es), "recent": len(recent), "days": days, "by_layer": by, "last": es[-5:],
+            "other_plugin": skipped}

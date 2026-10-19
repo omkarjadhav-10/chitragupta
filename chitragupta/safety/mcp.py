@@ -66,6 +66,11 @@ ACTION_KEYS = ("action", "method")
 OWN_MCP_SERVER = "plugin_cg_chitragupta"
 OWN_MCP_TOOLS = frozenset({"search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table",
                            "list_tickets", "get_alerts"})
+# Policy A for another plugin's MCP tools during a /cg: command: denied (a /cg: command only uses Chitragupta's tools),
+# but they're the other plugin's own background calls, not an attempt to write: logged with this category and left
+# out of the violation counts (log.summary).
+OTHER_PLUGIN = "other-plugin"
+OTHER_PLUGIN_REASON = "not a Chitragupta tool; skip this call and don't retry it"
 SESSION_READ = {"Read", "Grep", "Glob", "LS", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
                 "ToolSearch", "AskUserQuestion", "StructuredOutput", "ListMcpResourcesTool", "ReadMcpResourceTool"}
 
@@ -223,6 +228,18 @@ def own_mcp_reason(tool, server_info=None):
     return None
 
 
+def other_plugin(tool_name, server_info=None):
+    """True for an MCP tool of another plugin: by the hook input's mcp_server.source when Claude Code sends it, else by
+    the `mcp__plugin_<plugin>_<server>__` name prefix. Chitragupta's own server is never "other"."""
+    server, _ = split_tool(str(tool_name or ""))
+    if not server or server == OWN_MCP_SERVER:
+        return False
+    src = server_info.get("source") if isinstance(server_info, dict) else None
+    if src is not None:
+        return src == "plugin"
+    return server.startswith("plugin_")
+
+
 def session_reason(tool_name, tool_input, cfg, server_info=None):
     inp = tool_input if isinstance(tool_input, dict) else {}
     if tool_name in SESSION_READ:
@@ -236,6 +253,8 @@ def session_reason(tool_name, tool_input, cfg, server_info=None):
     server, tool = split_tool(tool_name)
     if server == OWN_MCP_SERVER:
         return own_mcp_reason(tool, server_info)
+    if other_plugin(tool_name, server_info):
+        return OTHER_PLUGIN_REASON
     if server:
         if "slack" in server.lower():
             return "no Slack tools during a /cg: command"

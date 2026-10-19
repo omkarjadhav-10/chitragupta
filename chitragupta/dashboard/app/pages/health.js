@@ -93,6 +93,7 @@ export function HealthPage() {
         <${Card} id="h-safe" title="Safety" status=${!sf.enforced ? html`<${Status} kind="bad">Not enforced</${Status}>` : blocks ? html`<${Status} kind="warn">${plural(blocks, 'blocked action')}</${Status}>` : html`<${Status} kind="ok">Enforced</${Status}>`}
           big=${sf.enforced ? 'Read-only' : '—'}
           lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h; latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
+            sf.skipped_7d ? plural(sf.skipped_7d, "other plugin's tool call") + ' skipped during /cg: commands in 7 days (not counted as blocks).' : '',
             sf.database_read_only === false ? "The database MCP's read-only login isn't confirmed (mcp.database.read_only_login)." : '', sf.log ? 'Log: ' + sf.log : '']} />
         <${SearchCard} st=${s.search} onDone=${res.reload} />
       </div>

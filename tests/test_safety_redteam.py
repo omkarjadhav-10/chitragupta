@@ -733,6 +733,68 @@ class OwnMcpServerTests(SafetyCase):
                 self.assertIsNotNone(mcp.reason(profile, self.OWN + "get_ticket", {"key": "ABC-1001"}, cfg=self.cfg()))
 
 
+class OtherPluginToolTests(SafetyCase):
+    """Policy A: during a /cg: command another plugin's MCP tool is still denied, but it is logged as category
+    `other-plugin` and not counted as a violation on Health / doctor."""
+
+    OTHER = "mcp__plugin_other_tool__panel_sync"
+    SKIP = "not a Chitragupta tool; skip this call and don't retry it"
+
+    def setUp(self):
+        super().setUp()
+        from chitragupta.safety import hook
+        hook.expand({"session_id": "s-1", "prompt_id": "P1", "command_name": "cg:today", "prompt": "/cg:today"})
+
+    def data(self, tool, server=None, prompt_id="P1"):
+        d = {"session_id": "s-1", "prompt_id": prompt_id, "tool_name": tool, "tool_input": {"x": 1}}
+        if server is not None:
+            d["mcp_server"] = server
+        return d
+
+    def last(self):
+        from chitragupta.safety import log
+        return log.entries(1)[-1]
+
+    def test_denied_with_a_skip_reason_and_logged_as_other_plugin(self):
+        for server in ({"name": "plugin:other:tool", "source": "plugin"}, None):  # by provenance, else by name
+            with self.subTest(server=server):
+                why = self.assertHookDenies("session", self.data(self.OTHER, server))
+                self.assertIn(self.SKIP, why)
+                e = self.last()
+                self.assertEqual((e["layer"], e.get("category")), ("tool", "other-plugin"))
+                self.assertIn(self.OTHER, e["what"])
+
+    def test_other_servers_are_ordinary_violations(self):
+        for tool, server in (("mcp__mcp-atlassian__jira_transition_issue", {"name": "mcp-atlassian", "source": "user"}),
+                             ("mcp__plugin_other_tool__panel_sync", {"name": "plugin_other_tool", "source": "project"}),
+                             ("Bash", None)):
+            with self.subTest(tool=tool):
+                why = self.assertHookDenies("session", dict(self.data(tool, server), tool_input={"command": "git push"}))
+                self.assertNotIn(self.SKIP, why)
+                self.assertNotIn("category", self.last())
+
+    def test_outside_a_cg_command_other_plugins_are_untouched(self):
+        n = self.log_count()
+        self.assertHookAllows("session", self.data(self.OTHER, {"name": "plugin:other:tool", "source": "plugin"}, "P2"))
+        self.assertEqual(self.log_count(), n)
+
+    def test_not_counted_on_health_or_doctor(self):
+        from chitragupta.safety import log, status
+        self.assertHookDenies("session", self.data(self.OTHER, {"name": "plugin:other:tool", "source": "plugin"}))
+        s = log.summary(7)
+        self.assertEqual((s["total"], s["recent"], s["by_layer"], s["last"]), (0, 0, {}, []))
+        self.assertEqual(s["other_plugin"], 1)
+        st = status.status(self.cfg())
+        self.assertEqual((st["blocks_24h"], st["blocks_7d"]), (0, 0))
+        rows = {r["name"]: r for r in status.doctor_rows(self.cfg())}
+        self.assertTrue(rows["security log"]["ok"], rows["security log"])
+        # a real violation still counts
+        self.assertHookDenies("session", self.data("Bash"))
+        s = log.summary(7)
+        self.assertEqual((s["recent"], s["by_layer"], len(s["last"])), (1, {"tool": 1}, 1))
+        self.assertFalse({r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]["ok"])
+
+
 # ---------------------------------------------------------------------------------------------- allowed actions
 
 class AllowedTests(SafetyCase):

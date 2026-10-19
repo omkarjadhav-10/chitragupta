@@ -64,7 +64,7 @@ def status(cfg=None, claude_detail=None):
     day = log.summary(days=1)
     return {"enforced": not problems, "problems": problems, "checks": st.get("checks", 0),
             "skills_checked": sk is not None, "blocks_7d": s["recent"], "blocks_24h": day["recent"],
-            "by_layer": s["by_layer"], "last": s["last"], "log": log.path(),
+            "by_layer": s["by_layer"], "last": s["last"], "log": log.path(), "skipped_7d": s.get("other_plugin", 0),
             "database_read_only": database_read_only(cfg),
             "fetch": (cfg.get("git") or {}).get("allow_fetch", True) is not False}
 
@@ -79,8 +79,9 @@ def doctor_rows(cfg=None, claude_detail=None):
         rows.append({"name": "security log", "ok": False, "detail": "%d blocked action(s) in the last 24 h (%s) — see %s"
                      % (s["blocks_24h"], ", ".join("%s %d" % kv for kv in sorted(s["by_layer"].items())), s["log"])})
     else:
-        rows.append({"name": "security log", "ok": True, "detail": "no blocked actions in the last 24 h (%d in 7 days)"
-                     % s["blocks_7d"]})
+        rows.append({"name": "security log", "ok": True, "detail": "no blocked actions in the last 24 h (%d in 7 days)%s"
+                     % (s["blocks_7d"], "; %d other-plugin tool call(s) skipped during /cg: commands (not violations)"
+                        % s["skipped_7d"] if s["skipped_7d"] else "")})
     if s["database_read_only"] is False:
         rows.append({"name": "database login", "ok": False, "detail": "the database MCP's read-only login isn't confirmed: "
                      "give it a read-only login, then set mcp.database.read_only_login to true"})

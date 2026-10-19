@@ -963,6 +963,7 @@ def _safety(cfg):
         s = safety_status.status(cfg)
         return {"enforced": s["enforced"], "problems": s["problems"], "checks": s["checks"],
                 "blocks_24h": s["blocks_24h"], "blocks_7d": s["blocks_7d"], "by_layer": s["by_layer"],
+                "skipped_7d": s.get("skipped_7d", 0),
                 "recent": [{"at": e.get("at"), "layer": e.get("layer"), "what": _cut(e.get("what") or "", 300),
                             "reason": _cut(e.get("reason") or "", 300)} for e in s["last"]],
                 "database_read_only": s["database_read_only"], "fetch": s["fetch"], "log": s["log"]}

@@ -22,9 +22,10 @@ CG_NAME = re.compile(r"^/?cg:[A-Za-z0-9_-]+$")
 CG_PROMPT = re.compile(r"^\s*/cg:[A-Za-z0-9_-]+(?:\s|$)")
 
 
-def _deny(why, profile, data):
+def _deny(why, profile, data, category=""):
     from . import log, mcp
-    log.record("tool", why, mcp.describe(data.get("tool_name"), data.get("tool_input")), profile, "safety." + profile)
+    log.record("tool", why, mcp.describe(data.get("tool_name"), data.get("tool_input")), profile, "safety." + profile,
+               category=category)
     sys.stdout.write(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "deny",
         "permissionDecisionReason": "Chitragupta safety guard (read-only): " + why}}))
@@ -127,9 +128,10 @@ def session():
     try:
         from . import mcp
         why = mcp.reason("session", data.get("tool_name"), data.get("tool_input"), server_info=data.get("mcp_server"))
+        cat = mcp.OTHER_PLUGIN if why == mcp.OTHER_PLUGIN_REASON else ""
     except Exception as e:  # noqa: BLE001 — fail closed once a /cg: command is confirmed running
-        why = "guard error (%s: %s)" % (type(e).__name__, str(e)[:200])
-    return _deny(why, "session", data) if why else 0
+        why, cat = "guard error (%s: %s)" % (type(e).__name__, str(e)[:200]), ""
+    return _deny(why, "session", data, cat) if why else 0
 
 
 def main(argv):
