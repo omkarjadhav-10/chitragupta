@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Windows (v0.1.0 schedules its background work with Windows Task Scheduler)
+- Windows: the hooks start Python with the `py -3` launcher. The background job can also be scheduled on macOS and Linux ([scheduling.md](scheduling.md)), but capture there still needs hooks that don't use `py`
 - Claude Code: 2.1.292+ for the one-command install, 2.1.275+ for the in-session form
 - Python 3.10+ with the `py` launcher on `PATH`. The plugin's hooks run `py -3`; plain `python` may be the Microsoft Store stub.
 - Git
@@ -107,12 +107,12 @@ The claude.ai Slack connector and any Slack server in your user scope are **not*
 
 ## Connecting Jira (optional)
 
-v0.1.0 jobs are written for the **`mcp-atlassian`** server, configured in your Claude Code user scope. Turn the jobs on with `mcp.jira.enabled: true`; the server name comes from `mcp.jira.server`. With Jira connected:
+The Jira jobs are written for the **`mcp-atlassian`** server, configured in your Claude Code user scope. Turn the jobs on with `mcp.jira.enabled: true`; the server name comes from `mcp.jira.server`. With Jira connected:
 
 - Ticket titles and summaries come from the Jira card, fetched once per ticket and at most once a day.
 - The evening summary subtracts time you already logged in Jira and mentions your comments and status changes.
 
-The **official Atlassian remote MCP** (and the claude.ai Atlassian connector) is detected and reported as *present but not supported*. v0.1.0 jobs don't use it; support is on the [roadmap](roadmap.md).
+The **official Atlassian remote MCP** (and the claude.ai Atlassian connector) is detected and reported as *present but not supported*. The jobs don't use it; support is on the [roadmap](roadmap.md).
 
 ## Connecting a database MCP (optional)
 

@@ -1,7 +1,7 @@
 {
   "name": "cg",
   "displayName": "Chitragupta",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Keeps a worklog of your Claude Code sessions: daily notes, per-ticket findings, saved requests, DB flows, an evening Jira-worklog summary and a local read-only dashboard.",
   "author": {
     "name": "Omkar Jadhav",

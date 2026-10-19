@@ -4,8 +4,79 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-20
+
+Fixes from the end-to-end audit of 19 Oct: the `/cg:` guard's scope, read-only gaps in the query and command guards,
+capture leaks from dev folders, MCP budget and status, and run records.
+
+### Security
+- Query guard: comments and literals are read in one pass, and syntax that SQL dialects read differently is refused
+  instead of guessed (MySQL `/*! */` and `/*M! */`, nested comments, a backslash before a closing quote, dollar
+  quoting, quotes inside `[brackets]`, `#` or `--` without a space before a quote, bracket or `;` on the same line).
+  `-- ` comments end at CR or LF.
+- Query guard: catalog reads skip the row limit only when every FROM / JOIN / APPLY source is a catalog object.
+- MCP guard: with `connections` configured, every database tool call names exactly one allowed connection (no fallback
+  to the server's default); routing arguments (env, server, database …) must name an allowed one too. Exempt tools
+  are the explicit `connectionless` list in allow.json (default whoami, list_connections); a query tool never is.
+- Command guard: internal `claude` calls need `-p` / `--print` as the first argument.
+- Slack: the sender always runs with `--strict-mcp-config` and only the Slack server, in `local` mode too (the
+  local-scope definition is passed as is; no token is copied); the command guard no longer exempts the sender folder.
+
+### Fixed
+- `/cg:` session guard acts only for the prompt that ran the `/cg:` command. A synchronous `UserPromptExpansion` hook,
+  matched to the `/cg:` command names only, records that prompt's `prompt_id`, and the guard compares it with each
+  tool call's `prompt_id`. Your next prompt, an interrupted (Esc) command or a resumed session is no longer blocked.
+  The transcript fallback and the UserPromptSubmit mark are gone. With no `prompt_id`, the guard does not act.
+- The `/cg:` skills' guard hook no longer uses `onFailure: block`, and `run.py safety session` exits 0 when the
+  package can't load, so a broken install never blocks your session. Internal calls' guard still fails closed.
+- Other plugins' MCP tools called during a `/cg:` command are still denied ("not a Chitragupta tool; skip this call
+  and don't retry it"), but logged with `"category": "other-plugin"` and not counted as blocks on Health, in
+  `/cg:doctor` or by `get_alerts`.
+- Query guard no longer over-blocks reads: a query tool's own `limit` (number or digit string, 1..max_rows) caps the
+  rows so the statement needs no TOP / LIMIT; a SELECT without FROM needs no limit; a SQL call with a `filter`
+  argument isn't sent to the MongoDB check; a select-list column named `copy` passes.
+- Capture: `.worklog-ignore` now covers every folder below it, up to your home folder, so a repo nested inside an
+  ignored checkout is no longer captured.
+- Ticket prefixes and watched repos are learned only from captured work: never from folders outside the capture
+  scope, ignored folders, the system temp folder or Chitragupta's own folders.
+- The transcript safety net applies the hooks' capture rules to every message's folder (time-only in the data home,
+  nothing in excluded, ignored or Chitragupta folders) and recovers full content only inside a git repo or an include
+  path, so home-folder sessions no longer appear under "Other work" through it.
+- Artifacts are never filed from ignored folders, the data home, the runtime folder or the plugin.
+- The configured example ticket (`render.example_ticket`, `jira_worklog.example_ticket`) is never detected as a
+  ticket, never gets time in the evening worklog, a hub or a Jira call.
+- MCP jobs: a daily budget unit is counted only when a job made at least one MCP tool call; jobs that made none are
+  counted apart under their own cap. While a server is known unreachable or signed out, background Jira/database jobs
+  wait, with one probe job at most every 2 hours, and one failed job stops that server's other jobs in the same run.
+- Evening worklog: a retry after a failed Slack send is recorded as `retry` and reuses the Jira facts fetched in the
+  last 30 minutes instead of reading Jira again.
+- MCP status: "unreachable" (was "offline") and "signed out" are told apart and keep the check's error text and
+  time; health keeps `mcp.offline` per server only, adds `mcp.server_state` and `mcp.job_errors`, and the next job
+  that reaches a server clears its offline/skip marks. Older status caches and health files still read.
+- Jira allowlist: the entry is filed under `mcp.jira.server` and refreshed from the code daily, so a renamed Jira
+  server works and new read tools reach existing installs. `get_write_request` is no longer listed as a database read.
+- MCP jobs: a large tool result saved to a file is used even when its delete is refused.
+- `/cg:check` says "Fetched" only for repos it actually fetched; the CLI help lists `check` among the commands that
+  write (Chitragupta's own branch data). The data home's README says only `daily/` is pushed and QA values may stay
+  local. Stale docs corrected (branch-tracking limits, dashboard write actions, install requirements).
+
+### Added
+- `placeholder_tickets` (default `[]`): more example ticket keys that are never treated as tickets.
+- `/cg:` commands may use Chitragupta's own read-only MCP tools (`mcp__plugin_cg_chitragupta__*`) without an
+  allow.json entry.
+- Background-run records in `.worklog/logs/ticks.jsonl` (ok, error, skipped-busy, skipped-upgrade, duration; last
+  50), and a warning on SessionStart, `/cg:doctor`, Health and `get_alerts` when hooks recorded events in the last
+  hour but no background run succeeded for over 30 minutes.
+- security.log: timestamps carry the local UTC offset (older lines still read), and the caller is taken from the
+  stack when the code doesn't name one.
+
 ### Changed
 - A Slack send that makes no call now says whether the Slack server connected and whether the send tool loaded.
+- Contributor rule 1 has one documented exception: the synchronous `UserPromptExpansion` hook for `/cg:` commands.
+
+### Internal
+- tests/support.py: the restore runs as the last cleanup; the whole run gets a sandbox user folder; leftover temp
+  folders fail the test.
 
 ## [0.4.0] - 2026-10-18
 
@@ -59,9 +130,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Slack sender had no tool guard (hooks were off). It now has one, with the recipient checked in code.
 
 ### Added
-- **Base relations** (`branching.repos.<repo>.relations`: `cut_from`, `merges_into`, `syncs_from`): the branch graph draws bases from their real fork points and the merges between them; missing delivery cells say how the change will arrive (verdicts unchanged). `cli relations detect` proposes them from local refs (read-only), `cli relations set` saves them.
-
-### Added
 - **Dashboard 2.0, read side** ([docs/dashboard.md](docs/dashboard.md)): a new look and layout (navigation, a side list per page, the page), live updates, and these pages:
   - **Today**: time against the day's target, the day lane by lane per ticket with commits, delivery alerts across all tickets, tonight's Jira entries with a copy button per field; **past days** at `#/day/<date>`
   - **Tickets**: filter by text, status, repo, alerts and last active; sort any column. **Ticket**: a header that stays in view and tabs (Overview, Branches & PRs, DB flow, Requests, Queries, Artifacts, Timeline, Notes)
@@ -74,6 +142,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Accessibility:** WCAG 2.2 AA, checked with axe on every page in both themes; skip link, landmarks, visible focus, WAI-ARIA tabs, dialogs, combobox and live region; text or table versions of every chart and diagram; status never shown by colour alone.
 - New read-only endpoints: `/api/day/<date>`, `/api/calendar`, `/api/knowledge`, `/api/search` (in-memory SQLite FTS5, or a plain scan), `/api/setup`, `/api/events` (Server-Sent Events). `/api/tickets` adds alerts and branches, `/api/tickets/<KEY>` the README, `/api/status` the cached MCP status and search stats.
 - `scripts/ui/`: browser checks on a synthetic home (axe, keyboard, palette, layouts, no outgoing requests).
+- **Base relations** (`branching.repos.<repo>.relations`: `cut_from`, `merges_into`, `syncs_from`): the branch graph draws bases from their real fork points and the merges between them; missing delivery cells say how the change will arrive (verdicts unchanged). `cli relations detect` proposes them from local refs (read-only), `cli relations set` saves them.
 
 ### Changed
 - `setup add-slack` prints the `claude mcp add --scope local …` command for you to run. Chitragupta never writes Claude Code's settings (`~/.claude.json`).

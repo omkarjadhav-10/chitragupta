@@ -255,7 +255,7 @@ Team sharing: targets, level, author and deny-list. See [sharing.md](sharing.md)
 
 ## Reserved keys
 
-These keys are accepted but nothing reads them in v0.1.0:
+These keys are accepted but nothing reads them yet:
 
 - `jira_worklog.model`: the condense step uses `models.worklog_condense` instead.
 - `jira_worklog.slack.mcp_config`
