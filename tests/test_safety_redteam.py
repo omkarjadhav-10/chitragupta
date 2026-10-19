@@ -59,11 +59,45 @@ SQL = [
     "EXEC sp_executesql N'DELETE FROM t'", "SELECT setval('s', 1)", "SELECT 1\nGO\nDELETE FROM t",
     "WITH d AS (DELETE FROM t RETURNING id) SELECT id FROM d LIMIT 1", "SELECT * FROM t",  # no LIMIT
 ]
+# Comment / literal syntax the dialects disagree on: the guard must not read a write as a comment or a literal that
+# the database runs as code (MySQL `#` and `/*! */`, `--` without a space, backslash escapes, nested comments,
+# dollar quoting, T-SQL brackets), and a catalog mention must not lift the row cap off a data table.
+SQL_DIALECT = [
+    "SELECT TOP 1 * FROM #t; DROP TABLE x", "SELECT count(*) # 1 FROM t; DROP TABLE t",
+    "SELECT count(*) FROM t /*! INTO OUTFILE '/tmp/x' */", "SELECT count(*) FROM t /*!50000 DROP TABLE t */",
+    "SELECT count(*) FROM t /*M!100000 DROP TABLE t */", "SELECT count(*) --1 FROM t; DROP TABLE t",
+    "SELECT TOP 1 a FROM t WHERE b = 'x\\' ; DROP TABLE t; --'",
+    "SELECT TOP 1 \"a\\\" , 'b\" ; DROP TABLE t; -- ' FROM t",
+    "SELECT TOP 1 a FROM t /* /* */ ' */ ; DROP TABLE t; -- '",
+    "SELECT TOP 1 a FROM t # '\n; DROP TABLE t; -- '", "SELECT TOP 1 a FROM t --x '\n; DROP TABLE t; -- '",
+    "SELECT TOP 1 a FROM t -- note\r; DROP TABLE t", "SELECT $a$ ; DROP TABLE t; $a$",
+    "SELECT TOP 1 j[']'] ; DROP TABLE t; --'] FROM t",
+    "SELECT * FROM information_schema.tables t JOIN shop.orders o ON 1 = 1",
+    "SELECT * FROM shop.orders WHERE id IN (SELECT 1 FROM sys.objects)",
+    "SELECT o.*, (SELECT count(*) FROM pg_class) AS n FROM shop.orders o",
+    "SELECT * FROM pg_class, shop.orders", "SELECT * FROM sys.objects o CROSS APPLY shop.f(o.object_id) x",
+]
 SQL_OK = ["SELECT TOP 5 * FROM shop.orders", "WITH x AS (SELECT id FROM shop.orders) SELECT * FROM x LIMIT 5",
           "SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'",
           "EXPLAIN SELECT * FROM shop.orders LIMIT 1", "EXEC sp_help 'shop.orders'",
           "SELECT replace(name, 'a', 'b') FROM shop.customers LIMIT 3", "SELECT count(*) FROM shop.orders",
-          "SELECT 'delete from x' AS s FROM shop.orders LIMIT 1", "SELECT id FROM shop.orders ORDER BY id DESC LIMIT 20"]
+          "SELECT 'delete from x' AS s FROM shop.orders LIMIT 1", "SELECT id FROM shop.orders ORDER BY id DESC LIMIT 20",
+          "WITH x AS (SELECT TOP 5 id FROM shop.orders) SELECT * FROM x",
+          "SELECT id, row_number() OVER (PARTITION BY status ORDER BY id) AS rn FROM shop.orders LIMIT 10",
+          "SELECT TOP 10 * FROM [dbo].[Orders]", "SELECT TOP (10) [id], [status] FROM [shop].[orders] WHERE [id] = 5",
+          "SELECT id FROM shop.orders ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY",
+          "SELECT id FROM shop.orders -- delete later\nLIMIT 5", "SELECT id FROM shop.orders /* drop? */ LIMIT 5",
+          "SELECT 'DELETE ME' AS x FROM shop.orders LIMIT 1", "SELECT 'a -- b' AS x FROM shop.orders LIMIT 1",
+          "SELECT 'it''s' AS x FROM shop.orders LIMIT 1", "SELECT 'C:\\\\' AS x FROM shop.orders LIMIT 1",
+          "SELECT id FROM shop.orders LIMIT 5;", "SELECT id::text, created_at::date FROM shop.orders LIMIT 5",
+          "SELECT id FROM shop.orders WHERE title ILIKE '%x%' LIMIT 5", "SELECT id FROM shop.orders WHERE id = $1 LIMIT 1",
+          "SELECT id FROM shop.orders WHERE note = E'it''s' LIMIT 1", "SELECT \"Id\" FROM \"shop\".\"Orders\" LIMIT 5",
+          "SELECT `id` FROM `shop`.`orders` LIMIT 5", "SELECT TOP 5 o.id FROM #recent o",
+          "SELECT c.table_name, c.column_name FROM information_schema.columns c "
+          "JOIN information_schema.tables t ON t.table_name = c.table_name WHERE c.table_schema = 'shop'",
+          "SELECT name FROM sys.objects o CROSS APPLY sys.dm_sql_referenced_entities(o.name, 'OBJECT') r",
+          "WITH k AS (SELECT conname FROM pg_constraint) SELECT * FROM k", "SELECT * FROM pg_get_keywords()",
+          "EXEC sp_helptext 'shop.usp_lock'"]
 MONGO = [{"operation": op, "collection": "c"} for op in
          ("insertOne", "updateMany", "deleteMany", "findOneAndUpdate", "bulkWrite", "drop", "createIndex", "mapReduce")] + [
     {"operation": "aggregate", "collection": "c", "pipeline": [{"$match": {}}, {"$out": "x"}]},
@@ -287,6 +321,25 @@ class CommandGuardTests(SafetyCase):
                 self.assertBlocked(lambda: commands.check(argv, "claude", cwd=sb, cfg=cfg), "command")
         self.assertBlocked(lambda: commands.check(good, "claude", cwd=self.repo, cfg=cfg), "command")
 
+    def test_claude_subcommand_with_print_elsewhere_is_blocked(self):
+        """-p only counts as the first argument: a subcommand that writes (plugin install, update …) with the builder's
+        flags and a trailing -p is refused, native exe or node + cli.js."""
+        from chitragupta.safety import claude as builder, commands, paths
+        cfg = self.cfg()
+        sb = paths.sandbox()
+        good = builder.build(["claude"], "x", "none", "haiku", cfg=cfg)
+        flags = good[3:]  # the builder's flags without "claude -p x"
+        cli = os.path.join(self.scratch, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+        for argv in (["claude", "plugin", "install", "x"] + flags + ["-p"], ["claude", "update"] + flags + ["--print"],
+                     ["claude", "plugin", "marketplace", "add", "o/r", "-p"] + flags,
+                     ["node", cli, "update"] + flags + ["-p"], ["claude", "x", "-p"] + flags):
+            with self.subTest(argv=argv[1:4]):
+                self.assertBlocked(lambda: commands.check(argv, "claude", cwd=sb, cfg=cfg), "command")
+        self.assertIsNone(commands.reason(["claude", "--print"] + good[2:], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["node", cli] + good[1:], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["claude", "--version"], "claude", cwd=sb, cfg=cfg))
+        self.assertIsNone(commands.reason(["claude", "mcp", "list"], "claude", cwd=sb, cfg=cfg))
+
 
 # ---------------------------------------------------------------------------------------------- path guard
 
@@ -380,6 +433,77 @@ class QueryAndMcpTests(SafetyCase):
             with self.subTest(sql=sql):
                 self.assertIsNone(query.sql_reason(sql))
 
+    def test_sql_dialect_tricks(self):
+        tool = "mcp__%s__run_query" % DB
+        for sql in SQL_DIALECT:
+            with self.subTest(sql=sql):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": sql}},
+                                      "mcp")
+
+    def test_own_job_statements_pass(self):
+        """Every statement Chitragupta's database jobs write (schema cards, trace, link map) passes the guard."""
+        from chitragupta import mcpjobs
+        from chitragupta.safety import query
+        stmts = []
+        for ctype, s in mcpjobs.CATALOG_SQL.items():
+            stmts.append(s["triggers"].format(schema="shop", names="'orders', 'docs'"))
+            stmts.append(s["writers"].format(likes=" OR ".join(s["like"].format(name=n) for n in ("orders", "docs"))))
+            stmts.append(mcpjobs.link_sql(ctype, ("shop", "docs", "order_id"), ("shop", "orders", "id")))
+        stmts += ["SELECT TOP 20 id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC",
+                  "SELECT id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC LIMIT 20"]
+        for sql in stmts:
+            with self.subTest(sql=sql[:80]):
+                self.assertIsNone(query.sql_reason(sql, 20))
+
+    def test_reads_that_were_over_blocked(self):
+        """Reads the guard used to refuse: a tool-level limit (int or digit string) <= max_rows caps the rows, a
+        table-free SELECT needs no limit, a SQL call with a `filter` argument isn't Mongo, a column named `copy`."""
+        from chitragupta.safety import mcp, query
+        tool = "mcp__%s__run_query" % DB
+        corpus = ["select id, status from shop.orders where id = :id",
+                  "select o.id, d.title from shop.orders o join shop.docs d on d.order_id = o.id where o.id = 42"]
+        for sql in corpus:
+            for lim in (10, "10", "20", 20):
+                with self.subTest(sql=sql[:40], limit=lim):
+                    self.assertHookAllows("internal", {"tool_name": tool, "tool_input": {
+                        "connection_id": "qa-main", "limit": lim, "sql": sql}}, "mcp")
+            with self.subTest(sql=sql[:40], limit=None):  # without the tool's cap it still needs its own
+                self.assertIsNotNone(query.sql_reason(sql))
+        for lim in (21, "21", "abc", "", True, 0, -1, 5.5, "1e3", [20]):
+            with self.subTest(bad_limit=lim):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {
+                    "connection_id": "qa-main", "limit": lim, "sql": corpus[0]}}, "mcp")
+        for sql in ("SELECT TOP 500 * FROM shop.orders", "UPDATE shop.orders SET a = 1",
+                    "SELECT * FROM shop.orders LIMIT 100", "SELECT 1; DROP TABLE t"):
+            with self.subTest(capped_but_bad=sql):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {
+                    "connection_id": "qa-main", "limit": 10, "sql": sql}}, "mcp")
+        for sql in ("SELECT 1", "SELECT now()", "SELECT current_user", "SELECT @@version", "select 1 as ok;",
+                    "SELECT TOP 5 copy FROM shop.docs", "SELECT TOP 5 id, copy, status FROM shop.docs",
+                    "SELECT copy AS c FROM shop.docs LIMIT 5", "SELECT TOP 5 d.copy FROM shop.docs d"):
+            with self.subTest(ok=sql):
+                self.assertIsNone(query.sql_reason(sql))
+        for sql in ("SELECT generate_series(1, 1000000)", "SELECT unnest(ids) FROM shop.orders",
+                    "COPY shop.orders TO PROGRAM 'x'", "SELECT TOP 5 a FROM t COPY t2 FROM 'x'",
+                    "SELECT TOP 5 copy FROM t COPY t2 FROM 'x'", "SELECT TOP 1 a FROM t\nCOPY INTO t2 FROM 'x'",
+                    "SELECT TOP 5 copy FROM t; COPY t TO PROGRAM 'x'", "SELECT 1 FROM shop.orders"):
+            with self.subTest(denied=sql):
+                self.assertIsNotNone(query.sql_reason(sql))
+        allow = {"max_rows": 20, "servers": {DB: {"read": ["run_query"], "query_tools": ["run_query"],
+                                                  "connections": ["qa-main", "acme-mongo", "qa-docs"],
+                                                  "types": {"qa-docs": "mongodb"}}}}
+        self.assertIsNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "sql": "SELECT TOP 5 id FROM shop.orders",
+                                                "filter": "status = 'open'"}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "sql": "SELECT TOP 5 id FROM shop.orders",
+                                                   "filter": {"$set": {"a": 1}}}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "acme-mongo", "operation": "deleteMany",
+                                                   "sql": "SELECT 1", "filter": {}}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "filter": {}, "operation": "deleteMany"},
+                                            allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-docs", "operation": "deleteMany", "sql": "SELECT 1"},
+                                            allow))
+        self.assertIsNone(mcp.mcp_reason(tool, {"connection_id": "acme-mongo", "operation": "find", "filter": {}}, allow))
+
     def test_mongo(self):
         tool = "mcp__%s__run_query" % DB
         for inp in MONGO:
@@ -393,6 +517,79 @@ class QueryAndMcpTests(SafetyCase):
     def test_production_connection(self):
         self.assertHookDenies("internal", {"tool_name": "mcp__%s__run_query" % DB,
                                            "tool_input": {"connection_id": "prod-main", "sql": "SELECT TOP 1 * FROM t"}}, "mcp")
+
+    def test_database_calls_name_an_allowed_connection(self):
+        """With `connections` configured, a call without a connection (the server's default would be used), with
+        two, or routed through another argument name to a connection that isn't allowed, is denied."""
+        tool, sql = "mcp__%s__run_query" % DB, "SELECT TOP 1 * FROM shop.orders"
+        for inp in ({"sql": sql}, {"env": "prod", "server": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "server": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "database": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "connectionName": "qa-main", "sql": sql},
+                    {"connection_id": ["qa-main"], "sql": sql}, {"conn": "prod-main", "sql": sql}):
+            with self.subTest(inp=inp):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": inp}, "mcp")
+        self.assertHookDenies("internal", {"tool_name": "mcp__%s__list_tables" % DB, "tool_input": {"schema": "shop"}}, "mcp")
+        self.assertHookAllows("internal", {"tool_name": "mcp__%s__list_tables" % DB,
+                                           "tool_input": {"connectionId": "qa-main", "schema": "shop"}}, "mcp")
+        self.assertHookAllows("internal", {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": sql}}, "mcp")
+        from chitragupta.safety import mcp
+        srv = {"read": ["whoami", "list_connections", "run_query", "describe_table"], "query_tools": ["run_query"],
+               "connections": ["qa-main"]}
+        allow = {"max_rows": 20, "servers": {DB: srv}}
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__whoami" % DB, {}, allow))
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {"connectionId": "prod-main"}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__describe_table" % DB, {"table": "orders"}, allow))
+        srv["connectionless"] = ["whoami", "run_query"]  # a query tool is never connectionless
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__run_query" % DB, {"sql": sql}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {}, allow))
+        srv["connections"] = []  # nothing allowed yet: nothing but the connectionless tools
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__run_query" % DB, {"sql": sql}, allow))
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__whoami" % DB, {}, allow))
+
+    def test_own_database_jobs_pass_the_guard(self):
+        """Every call Chitragupta's schema, trace and link-map jobs ask for names its connection and passes the
+        guard with the allowlist the jobs generate."""
+        import re
+        from chitragupta import common, mcpjobs
+        from chitragupta.safety import mcp
+        cfg = self.cfg()
+        cfg["mcp"]["database"].update(connections={"qa": "qa-main"})
+        common.save_config(cfg)
+        os.remove(os.path.join(self.home, ".worklog", "mcp", "allow.json"))
+        allow = mcpjobs.ensure_files(cfg)
+        tasks = []
+
+        def fake_run(job, servers, reads, writes, task, schema, cfg, health, **k):
+            tasks.append(task)
+            return {"calls": [{"name": "mcp__%s__describe_table" % DB, "input": {"table": t},
+                               "result": json.dumps([{"name": "id"}, {"name": "status"}, {"name": "order_id"}]),
+                               "is_error": False} for t in ("orders", "docs")],
+                    "out": {"done": True, "steps": [], "changes": [], "summary": ""}, "input_tokens": 0,
+                    "output_tokens": 0}
+        real = mcpjobs.run
+        mcpjobs.run = fake_run
+        try:
+            mcpjobs.schema_cards(["shop.orders", "shop.docs"], cfg, {})
+            mcpjobs.qa_trace("ABC-1001", ["orderId=42"], {"shop.orders": ["status"]}, cfg, {})
+            mcpjobs.link_map([("shop.docs.order_id", "shop.orders.id", "name")], ["shop.orders", "shop.docs"], cfg, {})
+        finally:
+            mcpjobs.run = real
+        line = re.compile(r"^\d+\. (\w+) connectionId=(\S+)(?: schema=(\S+))?(?: table=(\S+))?(?: limit=(\d+))?"
+                          r"(?: sql=(.*))?$")
+        calls = [ln for t in tasks for ln in t.splitlines() if re.match(r"^\d+\. ", ln)]
+        self.assertGreaterEqual(len(calls), 6)
+        for ln in calls:
+            with self.subTest(call=ln[:90]):
+                m = line.match(ln)
+                self.assertIsNotNone(m, "a job call without connectionId")
+                tool, conn, sch, table, lim, sql = m.groups()
+                inp = {"connectionId": conn}
+                inp.update({k: v for k, v in (("schema", sch), ("table", table)) if v})
+                if sql:
+                    inp.update(limit=int(lim), sql=json.loads(sql))
+                self.assertIsNone(mcp.mcp_reason(mcpjobs.mcp_tool(DB, tool), inp, allow))
 
     def test_jira_writes(self):
         for t in JIRA_WRITES:
