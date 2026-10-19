@@ -312,19 +312,31 @@ class Agent:
         return touched_days
 
     def _learn(self, ev):
-        """Auto-add new ticket prefixes (from branch names) and repos seen in sessions."""
+        """Auto-add new ticket prefixes (from branch names) and repos seen in sessions, only from captured work: an
+        event whose folder is outside the capture scope, ignored, under the system temp folder or inside
+        Chitragupta's own folders teaches nothing (common.learnable_path)."""
+        repo = ev.get("repo_root")
+        where = repo or ev.get("cwd")
+        if not where or not self._learnable(where):
+            return
         p = common.new_branch_prefix(ev.get("branch"), self.prefixes)
         if p:
             self.cfg["ticket_prefixes"] = sorted(set(self.prefixes) | {p})
             self.cfg_dirty = True
             common.log("agent", "learned ticket prefix %s from branch %s" % (p, ev.get("branch")))
-        repo = ev.get("repo_root")
-        if repo and not common.repo_ignored(repo) and not common.path_within(repo, common.home()):
+        if repo:
             norm = [common.norm_path(r) for r in self.cfg.get("watched_repos") or []]
             if common.norm_path(repo) not in norm and os.path.exists(os.path.join(repo, ".git")):
                 self.cfg.setdefault("watched_repos", []).append(repo.replace("\\", "/"))
                 self.cfg_dirty = True
                 common.log("agent", "watching new repo %s" % repo)
+
+    def _learnable(self, path):
+        memo = self.__dict__.setdefault("_learnable_memo", {})
+        key = common.norm_path(path)
+        if key not in memo:
+            memo[key] = common.learnable_path(path, self.cfg)
+        return memo[key]
 
     def _apply_carry(self, day):
         carry = self.state.get("carry_todos")

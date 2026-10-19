@@ -464,3 +464,40 @@ def path_ignored(path):
 def repo_ignored(repo_root):
     """A repo (or any folder) is ignored when it, or a folder above it, has `.worklog-ignore` (see path_ignored)."""
     return bool(repo_root) and path_ignored(repo_root)
+
+
+def own_folders():
+    """Chitragupta's own folders: the data home, the runtime and settings folder, and the plugin (or runtime copy)
+    this code runs from."""
+    return [home(), user_dir(), os.path.dirname(PACKAGE_DIR)]
+
+
+def in_own_folder(path):
+    return bool(path) and any(path_within(path, p) for p in own_folders())
+
+
+def temp_dirs():
+    """The system temp folder(s): scratch and test folders live there, never work to learn from. The same places
+    tempfile.gettempdir() looks (that module is only for chitragupta/safety)."""
+    cands = [os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")]
+    if os.name == "nt":
+        cands += [os.path.join(os.environ.get("LOCALAPPDATA") or "", "Temp") if os.environ.get("LOCALAPPDATA") else "",
+                  os.path.join(os.environ.get("SystemRoot") or "C:\\Windows", "Temp")]
+    else:
+        cands += ["/tmp", "/var/tmp", "/usr/tmp"]
+    out = []
+    for p in cands:
+        if p and norm_path(p) not in [norm_path(x) for x in out]:
+            out.append(p)
+    return out
+
+
+def learnable_path(path, cfg):
+    """May the engine learn settings (a new ticket prefix, a repo to watch) from work in this folder? Only from
+    captured work: inside the capture scope, not ignored (.worklog-ignore here or above), not under the system temp
+    folder, and not inside Chitragupta's own folders (data home, runtime, plugin)."""
+    if not path or not scope_allows(path, cfg) or in_own_folder(path):
+        return False
+    if any(path_within(path, t) for t in temp_dirs()):
+        return False
+    return not path_ignored(path)

@@ -26,10 +26,10 @@ A minimal config after setup:
 |---|---|---|---|
 | `worklog_home` | string | the resolved data home | Absolute path of the data home. Informational; the home itself is resolved as described [below](#data-home-resolution). |
 | `github_remote` | string | `""` | The only push target, for example `https://github.com/you/worklog`. Empty means nothing is pushed. A local folder or `file://` remote also works. It must be a **private** GitHub repo; see [privacy.md](privacy.md). |
-| `ticket_prefixes` | list of strings | `[]` | Jira project keys, for example `["ABC", "OPS"]`. Grows by itself when a branch names a new UPPERCASE prefix. |
+| `ticket_prefixes` | list of strings | `[]` | Jira project keys, for example `["ABC", "OPS"]`. Grows by itself when a branch names a new UPPERCASE prefix, but only in captured work: never from a folder outside the capture scope, one with `.worklog-ignore` (here or above), the system temp folder, or Chitragupta's own folders (data home, runtime, plugin). |
 | `capture_scope.include_paths` | list of paths | `[]` | If not empty, capture happens only under these folders. Empty means everywhere. |
 | `capture_scope.exclude_paths` | list of paths | `[]` | Never capture under these folders. The data home itself is always time-only (see [privacy.md](privacy.md)). |
-| `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from sessions. |
+| `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from captured sessions, with the same limits as `ticket_prefixes`. |
 | `git_author_emails` | list of strings | `[]` | Your commit emails, for example `["you@acme.test"]`. They filter "my commits" and identify you in Jira facts. The last one is also the default Slack lookup email. |
 | `bruno_collections` | list of paths | `[]` | Bruno collections outside the data home. Request edits there show up under "Outside Claude Code". |
 | `sql_script_dirs` | list of paths | `[]` | Folders of `.sql` scripts to watch. |
