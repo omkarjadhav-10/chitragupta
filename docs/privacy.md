@@ -83,7 +83,7 @@ These references are never masked: `{{var}}`, `${VAR}`, `$VAR`, `$(…)`. You ca
 If Slack is connected, it receives only the evening Jira-worklog message, sent as a direct message to **you**:
 
 - **Plain lines.** Each entry is a ticket key, a start time, a duration and a short description. The descriptions are checked first: a line containing a file path, an extension, SQL, an email or a long digit run is rejected. The whole message then goes through the `public` redaction pass.
-- **One send call.** Each send is one `claude -p` call with only the send tool allowed and every other Slack tool disallowed. The text the model actually sent is compared with the intended message.
+- **One send call.** Each send is one `claude -p` call with only the send tool allowed and every other Slack tool disallowed, and with `--strict-mcp-config` plus a config holding only the Slack server, so none of your other MCP servers load. The OAuth sign-in stays in Claude Code's own store: the config names the same definition (URL and client id) and carries no token; a literal credential header would be passed as a `${CHITRAGUPTA_RT_…}` reference with its value only in the call's environment. The text the model actually sent is compared with the intended message.
 - **Saved either way.** The message is also saved in the daily note and in `data\timesheets\<day>.json`, whether or not Slack is connected.
 
 ## Model calls
@@ -97,7 +97,7 @@ Every model call is a headless `claude -p`:
 
 ## MCP jobs
 
-MCP jobs run only in the background tick or when you ask for them, never from a hook. They are limited to `mcp.daily_call_budget` jobs a day (default 10). Each job is one `claude -p --model haiku` call that gets:
+MCP jobs run only in the background tick or when you ask for them, never from a hook. They are limited to `mcp.daily_call_budget` jobs a day (default 10); a job counts only when it made at least one MCP tool call, and jobs that made none (a server down) have their own cap of the same size. While a server is known to be unreachable or signed out (a job found it so, or the last `claude mcp list` check did after the last job that reached it), its background Jira and database jobs wait, apart from one probe job at most every 2 hours; one failed job also stops that server's other jobs in the same run. Each job is one `claude -p --model haiku` call that gets:
 
 - **Only its own server.** `--strict-mcp-config --mcp-config <a file with only that server>`.
 - **Only read tools.** `--allowedTools` lists the job's read tools, and `--disallowedTools` lists the server's write tools.
@@ -110,7 +110,10 @@ MCP jobs run only in the background tick or when you ask for them, never from a 
   Every block is logged in `%USERPROFILE%\.chitragupta\logs\security.log` and shown on Health.
 - **No credentials in its files.** Literal header values from your Claude Code MCP config, such as an auth header, are written into the per-job file as `${CHITRAGUPTA_RT_…}` references. The values reach only that job's process environment. If a value is missing, for example because you're signed out, the job is skipped without a model call.
 
+**Server state.** `health.json` keeps, per server, when a job last found it unreachable or signed out (`mcp.offline`, keyed by server) and why (`mcp.server_state`: `unreachable`, `signed-out` or `missing`, the short error text and the time); a job's own failure (missing env, a server down, the `claude` exit code) goes to `mcp.job_errors`. The next job that reaches the server clears its entries.
+
 The guard files are written only when an MCP job can actually run: Jira is enabled, or a database server is chosen and enabled.
+Once a day the Jira, database and Git-host entries of `allow.json` are refreshed from the code under the configured server names (`mcp.jira.server`, `mcp.database.server`, `mcp.git_host.*`): their read tools come only from the code (so new read tools reach an existing install and a renamed server isn't blocked), and write names you added to an entry stay on its deny list.
 
 Jira results are cached locally in `data\jira\`. They can include colleagues' names from comments and worklogs. That cache is never pushed.
 

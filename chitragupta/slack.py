@@ -4,8 +4,16 @@ The server is registered in local scope for .worklog/slack-sender only (its own 
 session loads Slack's tools. One `claude -p` call per send: haiku, only the send tool allowed, lean flags, and the safety guard (profile
 slack-send, fail-closed) checks the call itself: only the send tool, only to my own user ID, plain text, capped.
 The tool-call text is compared with the intended message (stream-json) and any mismatch is logged.
+
+Every call runs with --strict-mcp-config and an --mcp-config holding only the Slack server, so no other MCP server
+loads. Mode `strict` passes .worklog/mcp/slack.json; mode `local` passes the sender folder's local-scope Slack
+definition exactly as Claude Code has it (name, URL, OAuth client id: Claude Code keeps the sign-in per definition, so
+the same definition finds it), copied to .worklog/cache/mcp/slack-local.json. A literal credential header would be
+written there as a ${CHITRAGUPTA_RT_...} reference, its value passed only in the call's environment; OAuth tokens
+stay in Claude Code's own store and are never read or copied.
 """
 import json
+import os
 import re
 
 from . import common
@@ -69,12 +77,56 @@ def ensure_config(cfg=None):
     common.write_json(common.wl("mcp", "slack.json"), {"mcpServers": {"slack": server_def(cfg)}})
 
 
-def _args(cfg, task, allowed, mode, max_turns=3, disallowed=None, profile="slack-send"):
+_CRED_HEADERS = ("authorization", "x-api-key", "cookie")
+
+
+def local_server(cfg=None):
+    """(name, definition) of the Slack server in the sender folder's local scope (~/.claude.json, read only), or
+    (None, None)."""
+    from . import plugin, setup
+    cj = common.read_json(plugin.claude_json_path(), {}) or {}
+    for name, s in setup.local_servers(cj, sender_dir()).items():
+        if setup._is_slack(name, s):
+            return name, s
+    return None, None
+
+
+def local_config(cfg=None):
+    """Write .worklog/cache/mcp/slack-local.json with only the local-scope Slack server. -> (path, env) or
+    (None, {}) when there is none. A literal credential header becomes a ${CHITRAGUPTA_RT_...} reference whose value
+    goes only into the call's environment (env)."""
+    name, s = local_server(cfg)
+    if not s:
+        return None, {}
+    s, env = json.loads(json.dumps(s)), {}
+    for k, v in list((s.get("headers") or {}).items()):
+        if k.lower() in _CRED_HEADERS and not mcpjobs._REF.search(str(v)):
+            var = "CHITRAGUPTA_RT_" + re.sub(r"[^A-Z0-9]", "_", ("%s_%s" % (name, k)).upper())
+            env[var] = str(v)
+            s["headers"][k] = "${%s}" % var
+    for var in mcpjobs._refs(s):  # ${VAR} the definition already references: from this process or the user env
+        if var not in env and mcpjobs.user_env(var):
+            env[var] = mcpjobs.user_env(var)
+    path = os.path.join(common.wl("cache", "mcp"), "slack-local.json")
+    common.write_json(path, {"mcpServers": {name: s}})
+    return path, env
+
+
+def _mcp_config(cfg, mode):
+    """(--mcp-config path, env) for the call: only the Slack server, in either mode."""
+    if mode == "local":
+        return local_config(cfg)
+    return common.wl("mcp", "slack.json"), {}
+
+
+def _args(cfg, task, allowed, mode, max_turns=3, disallowed=None, profile="slack-send", mcp_config=None):
     """One guarded call (safety.claude): `slack-send` lets only the send tool reach my own user ID; `slack-discover`
-    only reads my profile. Disallowed tools are dropped from the context: ~23k -> ~4k input tokens per turn."""
+    only reads my profile. Disallowed tools are dropped from the context: ~23k -> ~4k input tokens per turn.
+    Always --strict-mcp-config with only the Slack server (see the module docstring)."""
+    if mcp_config is None:
+        mcp_config = _mcp_config(cfg, mode)[0]
     return builder.build(mcpjobs.claude_exe(cfg), task, profile, "haiku", common.prompt_path("slack_send.md"),
-                         allowed=allowed or [], disallowed=disallowed or [], strict=mode == "strict",
-                         mcp_config=common.wl("mcp", "slack.json") if mode == "strict" else None,
+                         allowed=allowed or [], disallowed=disallowed or [], mcp_config=mcp_config,
                          output="stream-json", max_turns=max_turns, cfg=cfg)
 
 
@@ -89,9 +141,15 @@ def _others(cfg, keep):
 
 def _run(cfg, task, allowed, mode, timeout=180, disallowed=None, profile="slack-send"):
     common.ensure_dir(_cwd(mode))
-    rc, so, se = commands.run(_args(cfg, task, allowed, mode, disallowed=disallowed, profile=profile), "claude",
-                              cwd=_cwd(mode), input_text="", timeout=timeout, cfg=cfg,
-                              env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"))
+    path, env = _mcp_config(cfg, mode)
+    if not path:  # no model call without the one Slack server to load
+        res = mcpjobs.parse_stream("")
+        res.update(rc=1, stderr="", result="no Slack server in the local scope of %s (run `setup add-slack`)" %
+                   sender_dir())
+        return res
+    rc, so, se = commands.run(_args(cfg, task, allowed, mode, disallowed=disallowed, profile=profile, mcp_config=path),
+                              "claude", cwd=_cwd(mode), input_text="", timeout=timeout, cfg=cfg,
+                              env_extra=dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", **env))
     res = mcpjobs.parse_stream(so)
     res["rc"], res["stderr"] = rc, (se or "")[-400:]
     return res

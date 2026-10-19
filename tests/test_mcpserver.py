@@ -370,13 +370,14 @@ class TestReadOnly(McpBase):
 class TestIsolation(unittest.TestCase):
     def test_background_calls_switch_this_plugin_off(self):
         """Every internal claude -p call uses --strict-mcp-config (plugin MCP servers are not started under it) and
-        settings that turn this plugin off, so the server can't start even in the one non-strict (Slack local) mode."""
+        settings that turn this plugin off as well."""
         from chitragupta.safety import claude as builder
-        for strict in (True, False):
-            argv = builder.build(["claude"], "x", "none", "haiku", strict=strict)
+        for cfg_path in (None, "x.json"):
+            argv = builder.build(["claude"], "x", "none", "haiku", mcp_config=cfg_path)
             settings = json.loads(argv[argv.index("--settings") + 1])
             self.assertEqual(settings["enabledPlugins"], {"cg@chitragupta": False})
-            self.assertEqual(strict, "--strict-mcp-config" in argv)
+            self.assertIn("--strict-mcp-config", argv)
+            self.assertEqual(cfg_path is not None, "--mcp-config" in argv)
             self.assertNotIn("--plugin-dir", argv)
 
     def test_plugin_manifest_and_launchers(self):

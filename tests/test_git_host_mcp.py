@@ -212,7 +212,7 @@ class Setup(Case):
             json.dump({"mcpServers": servers}, f)
 
     def test_detected_then_chosen(self):
-        from chitragupta import common, setup
+        from chitragupta import common, mcpjobs, setup
         from chitragupta.safety.mcp import GIT_HOST_READ
         self.cj(SERVERS)
         write_config(self.home, {"mcp": {"jira": {"enabled": True}}})
@@ -230,7 +230,7 @@ class Setup(Case):
         cfg = common.load_config()
         self.assertEqual(cfg["mcp"]["git_host"]["azure-devops"], {"server": "ado", "enabled": True})
         allow = common.read_json(common.wl("mcp", "allow.json"))
-        self.assertEqual(allow["servers"]["mcp-atlassian"]["read"], ["jira_get_issue"])
+        self.assertEqual(allow["servers"]["mcp-atlassian"]["read"], mcpjobs.JIRA_ALLOW_DEFAULT["read"])  # from the code
         e = allow["servers"]["ado"]
         self.assertEqual((e["role"], e["provider"]), ("git-host", "azure-devops"))
         self.assertEqual(sorted(e["read"]), sorted(GIT_HOST_READ["azure-devops"]))

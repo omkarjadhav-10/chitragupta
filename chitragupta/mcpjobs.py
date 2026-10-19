@@ -77,9 +77,9 @@ def server_def(name):
     return s
 
 
-def job_config(server, tools, job):
+def job_config(server, tools, job, cfg=None):
     s = server_def(server)
-    if server == "mcp-atlassian":  # the server itself enforces read-only and loads only this job's tools
+    if server == server_name(cfg or {}, "jira"):  # the server itself enforces read-only and loads only this job's tools
         env = {k: v for k, v in (s.get("env") or {}).items()
                if not (k.startswith("CONFLUENCE_") and all(t.startswith("jira_") for t in tools))}
         env["READ_ONLY_MODE"] = "true"
@@ -112,12 +112,18 @@ class JobError(Exception):
 
 
 def budget_left(health, cfg, day):
+    """Jobs left today. A unit is spent only by a run that made at least one MCP tool call (mcp.calls); runs that made
+    none (a server down, the model gave up) are counted apart (mcp.empty) under their own cap of the same size, so a
+    server that keeps failing can't start model calls without end."""
     m = health.setdefault("mcp", {})
     calls = m.setdefault("calls", {})
-    for d in list(calls):
-        if d < (_dt.date.fromisoformat(day) - _dt.timedelta(days=7)).isoformat():
-            del calls[d]
-    return int(((cfg.get("mcp") or {}).get("daily_call_budget")) or 10) - int(calls.get(day) or 0)
+    cut = (_dt.date.fromisoformat(day) - _dt.timedelta(days=7)).isoformat()
+    for counts in (calls, m.get("empty") or {}):
+        for d in list(counts):
+            if d < cut:
+                del counts[d]
+    budget = int(((cfg.get("mcp") or {}).get("daily_call_budget")) or 10)
+    return min(budget - int(calls.get(day) or 0), budget - int((m.get("empty") or {}).get(day) or 0))
 
 
 _SAVED = re.compile(r"(?:saved to:?)\s+([A-Za-z]:[\\/][^\r\n]*?\.(?:txt|json))", re.I)
@@ -134,10 +140,18 @@ def _persisted(content):
     p = m.group(1)
     try:
         txt = common.read_text(p)
-        paths.delete(p, caller="mcpjobs.persisted")
-        return txt
     except OSError:
         return None
+    try:
+        paths.delete(p, caller="mcpjobs.persisted")
+    except OSError as e:  # a refused delete (safety.Blocked is a PermissionError) must not lose the text already read
+        if not _DELETE_REFUSED:
+            _DELETE_REFUSED.append(p)
+            common.log("mcp", "saved tool result kept (delete refused: %s): %s" % (str(e)[:160], p))
+    return txt
+
+
+_DELETE_REFUSED = []  # the refusal is logged once per process
 
 
 def unwrap(x):
@@ -234,7 +248,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
         merged["mcpServers"] = servers_override
     else:
         for srv, tools in servers.items():
-            path, r = job_config(srv, tools, job + "-" + srv)
+            path, r = job_config(srv, tools, job + "-" + srv, cfg)
             merged["mcpServers"].update(common.read_json(path)["mcpServers"])
             refs |= r
     cfg_path = os.path.join(common.wl("cache", "mcp"), job + ".json")
@@ -246,7 +260,10 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
             env_extra[name] = v
     missing = [n for n in refs if n not in env_extra]
     if missing:  # signed out: don't spend a model call to find out
-        health.setdefault("mcp", {}).setdefault("offline", {})[job] = "missing env %s" % ",".join(sorted(missing))
+        err = "missing env %s" % ",".join(sorted(missing))
+        job_error(health, job, err)
+        for srv in (servers or {}):
+            server_down(health, srv, "signed-out", err)
         raise JobError("signed out: env %s not set" % ", ".join(sorted(missing)), skip=True)
     if not os.path.isfile(os.path.join(mcp_dir(), "allow.json")):
         ensure_files(cfg)  # never run a job without the read allowlist
@@ -254,34 +271,114 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
                          disallowed=writes, mcp_config=cfg_path, json_schema=schema, output="stream-json",
                          max_turns=max_turns, cfg=cfg)
     m = health.setdefault("mcp", {})
-    ck = "manual_calls" if manual else "calls"
-    m.setdefault(ck, {})[day] = int(m.setdefault(ck, {}).get(day) or 0) + 1
     t0 = time.time()
     common.ensure_dir(common.wl("sandbox"))
     rc, so, se = commands.run(args, "claude", cwd=common.wl("sandbox"), input_text=stdin_text or "", timeout=timeout,
                               env_extra=env_extra, cfg=cfg)
     res = parse_stream(so)
+    # Budget: a unit only when the run made at least one MCP tool call; empty runs are counted apart (budget_left).
+    ck = ("manual_calls" if manual else "calls") if res["calls"] else ("manual_empty" if manual else "empty")
+    counts = m.setdefault(ck, {})
+    counts[day] = int(counts.get(day) or 0) + 1
     common.write_text(os.path.join(common.wl("cache", "mcp"), job + ".last.jsonl"), redact(so or "", mode="secrets"))
     res["seconds"] = round(time.time() - t0, 1)
     res["missing_env"] = missing
     srv_state = {s.get("name"): s.get("status") for s in res.get("mcp_servers") or []}
+    srv_error = {s.get("name"): str(s.get("error") or "") for s in res.get("mcp_servers") or [] if s.get("error")}
     jl = m.setdefault("jobs", {})
     jl[job] = {"at": common.now_iso(), "in": res["input_tokens"], "out": res["output_tokens"], "cost": round(res["cost"], 4),
                "calls": len(res["calls"]), "servers": srv_state, "rc": rc}
     common.log("mcp", "%s rc=%s servers=%s calls=%s in=%s out=%s $%.4f" % (
         job, rc, srv_state, [c["name"] for c in res["calls"]], res["input_tokens"], res["output_tokens"], res["cost"]))
     bad = [n for n, st in srv_state.items() if st != "connected"]
+    for n in srv_state:
+        if n not in bad:
+            server_ok(health, n, cfg)
     if bad:
-        m.setdefault("offline", {})[",".join(bad)] = common.now_iso()
-        raise JobError("server offline or signed out: %s%s" % (", ".join(bad), " (missing env %s)" % missing if missing else ""),
-                       skip=True)
+        tail = _last_line(se)
+        why = []
+        for n in bad:
+            state = server_state_of(srv_state[n])
+            err = srv_error.get(n) or ("%s (%s)" % (srv_state[n], tail) if tail else str(srv_state[n]))
+            server_down(health, n, state, err)
+            why.append("%s %s: %s" % (n, state, err[:160]))
+        job_error(health, job, "; ".join(why))
+        raise JobError("server " + "; ".join(why), skip=True)
     if rc != 0 and not res["out"]:
+        job_error(health, job, "claude rc=%s" % rc)
         raise JobError("claude rc=%s: %s" % (rc, (se or so)[-300:].strip()))
+    m.setdefault("job_errors", {}).pop(job, None)
     for c in res["calls"]:
         if c.get("is_error") and ("read-only guard" in str(c.get("result")) or "safety guard" in str(c.get("result"))):
             m.setdefault("denied", []).append({"at": common.now_iso(), "job": job, "tool": c["name"]})
             m["denied"] = m["denied"][-20:]
     return res
+
+
+# --------------------------------------------------------------------------- server state (health.json "mcp")
+#   offline       {server: ISO time}             a server the last job found unreachable or signed out (server-keyed only)
+#   server_state  {server: {state, error, at}}   state: unreachable | signed-out | missing
+#   job_errors    {job: {error, at}}             why a job failed (missing env, a server down, claude rc)
+#   last_ok       {server: ISO time}             the last job that reached the server
+# A successful job clears its servers' offline / server_state entries and the role's skip / last_skip_reason.
+
+def server_state_of(status):
+    """Claude Code's server status (stream-json init or `claude mcp list`) -> unreachable | signed-out | missing."""
+    st = str(status or "").lower()
+    if "auth" in st or "sign" in st:
+        return "signed-out"
+    if st in ("missing", "not listed", "not configured"):
+        return "missing"
+    return "unreachable"  # failed / pending / timeout / anything else that isn't connected
+
+
+def _last_line(text):
+    lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
+    return redact(lines[-1], mode="secrets")[:200] if lines else ""
+
+
+def server_down(health, server, state, error=""):
+    m = health.setdefault("mcp", {})
+    at = common.now_iso()
+    m.setdefault("offline", {})[server] = at
+    m.setdefault("server_state", {})[server] = {"state": state, "error": str(error or "")[:200], "at": at}
+
+
+def job_error(health, job, error):
+    health.setdefault("mcp", {}).setdefault("job_errors", {})[job] = {"error": str(error or "")[:300],
+                                                                       "at": common.now_iso()}
+
+
+def role_of(cfg, server):
+    """"jira" / "database" when `server` is that role's configured server, else None."""
+    for role in ("jira", "database"):
+        if server and server == server_name(cfg or {}, role):
+            return role
+    return None
+
+
+def server_ok(health, server, cfg=None):
+    """A job reached `server`: forget it was offline (also legacy entries keyed by a job name or a server list)."""
+    m = health.setdefault("mcp", {})
+    off = m.get("offline") or {}
+    role = role_of(cfg, server)
+    for k in list(off):
+        legacy_job = role and k.startswith(role + "-") and k != server and             not common.parse_ts(off[k] if isinstance(off[k], str) else "")
+        if server in str(k).split(",") or legacy_job:
+            del off[k]
+    (m.get("server_state") or {}).pop(server, None)
+    m.setdefault("last_ok", {})[server] = common.now_iso()
+    if role:
+        (m.get("skip") or {}).pop(role, None)
+        lsr = m.get("last_skip_reason")
+        if isinstance(lsr, dict):
+            lsr.pop(role, None)
+
+
+def offline_since(health, server):
+    """ISO time a job last found `server` unreachable or signed out, or None."""
+    v = ((health.get("mcp") or {}).get("offline") or {}).get(server)
+    return v if isinstance(v, str) and common.parse_ts(v) else None
 
 
 def tool_results(res, tool_suffix):
@@ -298,33 +395,32 @@ def tool_results(res, tool_suffix):
 
 # --------------------------------------------------------------------------- allowlist
 
-ALLOW_DEFAULT = {
-    "max_rows": 20,
-    "servers": {
-        "mcp-atlassian": {
-            "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile"],
-            "write": ["jira_add_comment", "jira_add_issues_to_sprint", "jira_add_watcher", "jira_add_worklog",
-                      "jira_assign_issue", "jira_batch_create_issues", "jira_batch_create_versions",
-                      "jira_create_customer_request", "jira_create_issue", "jira_create_issue_link",
-                      "jira_create_remote_issue_link", "jira_create_sprint", "jira_create_version", "jira_delete_issue",
-                      "jira_download_attachments", "jira_edit_comment", "jira_link_to_epic", "jira_move_issue",
-                      "jira_move_issues_to_backlog", "jira_remove_issue_link", "jira_remove_watcher",
-                      "jira_transition_issue", "jira_update_issue", "jira_update_proforma_form_answers",
-                      "jira_update_sprint", "jira_update_version", "confluence_add_comment", "confluence_add_inline_comment",
-                      "confluence_add_label", "confluence_copy_page", "confluence_create_page",
-                      "confluence_create_page_from_template", "confluence_delete_attachment", "confluence_delete_page",
-                      "confluence_download_attachment", "confluence_download_content_attachments", "confluence_move_page",
-                      "confluence_reply_to_comment", "confluence_set_page_restrictions", "confluence_update_page",
-                      "confluence_update_page_section", "confluence_upload_attachment", "confluence_upload_attachments"],
-        },
-    },
+# Allowlist entry for the Jira server, filed under the configured name (mcp.jira.server, default mcp-atlassian) and
+# re-applied from here every day, so a renamed server works and new read tools reach existing installs.
+JIRA_ALLOW_DEFAULT = {
+    "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile"],
+    "write": ["jira_add_comment", "jira_add_issues_to_sprint", "jira_add_watcher", "jira_add_worklog",
+              "jira_assign_issue", "jira_batch_create_issues", "jira_batch_create_versions",
+              "jira_create_customer_request", "jira_create_issue", "jira_create_issue_link",
+              "jira_create_remote_issue_link", "jira_create_sprint", "jira_create_version", "jira_delete_issue",
+              "jira_download_attachments", "jira_edit_comment", "jira_link_to_epic", "jira_move_issue",
+              "jira_move_issues_to_backlog", "jira_remove_issue_link", "jira_remove_watcher",
+              "jira_transition_issue", "jira_update_issue", "jira_update_proforma_form_answers",
+              "jira_update_sprint", "jira_update_version", "confluence_add_comment", "confluence_add_inline_comment",
+              "confluence_add_label", "confluence_copy_page", "confluence_create_page",
+              "confluence_create_page_from_template", "confluence_delete_attachment", "confluence_delete_page",
+              "confluence_download_attachment", "confluence_download_content_attachments", "confluence_move_page",
+              "confluence_reply_to_comment", "confluence_set_page_restrictions", "confluence_update_page",
+              "confluence_update_page_section", "confluence_upload_attachment", "confluence_upload_attachments"],
 }
+
+ALLOW_DEFAULT = {"max_rows": 20, "servers": {"mcp-atlassian": JIRA_ALLOW_DEFAULT}}
 
 # Allowlist entry for the database MCP, filed under the configured server name (mcp.database.server).
 # The tool names are that server's tools.
 DATABASE_ALLOW_DEFAULT = {
     "read": ["whoami", "list_connections", "list_schemas", "list_tables", "describe_table", "run_query",
-             "get_artifact", "list_artifacts", "get_write_request"],
+             "get_artifact", "list_artifacts"],
     "write": ["create_artifact", "update_artifact", "archive_artifact", "create_write_request", "update_write_request"],
     "query_tools": ["run_query"],
     "connections": {"qa": "", "dev": ""},
@@ -386,7 +482,7 @@ def allow_default(cfg=None):
     """Default allowlist: the Jira server's tools, plus the database MCP's under its configured name (if any), plus
     each configured Git-host server with its provider's classified read tools (hostmcp)."""
     from . import hostmcp
-    allow = json.loads(json.dumps(ALLOW_DEFAULT))
+    allow = {"max_rows": ALLOW_DEFAULT["max_rows"], "servers": {server_name(cfg or {}, "jira"): jira_allow_entry()}}
     srv = server_name(cfg or {}, "database")
     if srv:
         allow["servers"].setdefault(srv, _database_allow_entry(cfg))
@@ -404,12 +500,24 @@ def configured(cfg):
         bool(hostmcp.configured(cfg))
 
 
+def jira_allow_entry(existing=None):
+    """allow.json entry for the Jira server: the code's reads (only), the known writes plus any listed before."""
+    e = dict(existing or {})
+    e["read"] = list(JIRA_ALLOW_DEFAULT["read"])
+    e["write"] = list(JIRA_ALLOW_DEFAULT["write"]) + sorted(set(e.get("write") or []) - set(JIRA_ALLOW_DEFAULT["write"]))
+    return e
+
+
+_RETIRED_READS = ("get_write_request",)  # never a read (the name floor denies it); dropped from older files
+
+
 def mcp_tool(server, tool):
     return "mcp__%s__%s" % (server, tool)
 
 
 def ensure_files(cfg):
-    """allow.json (kept, only created) and readonly-settings.json (regenerated)."""
+    """allow.json (created once; the Jira, database and Git-host entries are refreshed from the code every day) and
+    readonly-settings.json (regenerated)."""
     d = mcp_dir()
     common.ensure_dir(d)
     ap = os.path.join(d, "allow.json")
@@ -427,8 +535,11 @@ def ensure_files(cfg):
                 allowed.add(db["connections"][env])
         entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
         entry.setdefault("connectionless", list(CONNECTIONLESS_DEFAULT))
+        entry["read"] = [t for t in entry.get("read") or [] if t not in _RETIRED_READS]
         _apply_tool_names(entry, cfg)
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
+    jname = server_name(cfg, "jira")  # under the configured name, from the code: renames and new read tools apply
+    allow.setdefault("servers", {})[jname] = jira_allow_entry(allow["servers"].get(jname))
     from . import hostmcp
     for provider, name in hostmcp.configured(cfg).items():  # re-classified every time: only the provider's reads
         allow.setdefault("servers", {})[name] = hostmcp.allow_entry(provider, allow["servers"].get(name))
@@ -469,7 +580,8 @@ def jira_card(key, cfg, health):
     task = ("Call jira_get_issue once with issue_key=%s, fields=\"summary,issuetype,status,priority,parent,issuelinks,"
             "description,comment,customfield_10020,labels\", comment_limit=30. Then return the JSON. found=false only when the "
             "tool says the issue does not exist. summary: 2-3 plain sentences on the problem and where it stands." % key)
-    res = run("jira-card-" + key, {srv: ["jira_get_issue"]}, reads, _writes(srv), task, CARD_SCHEMA, cfg, health, max_turns=3)
+    res = run("jira-card-" + key, {srv: ["jira_get_issue"]}, reads, _writes(srv, cfg), task, CARD_SCHEMA, cfg, health,
+              max_turns=3)
     raw = tool_results(res, "jira_get_issue")
     out = res.get("out") or {}
     rec = {"key": key, "fetched_at": common.now_iso(), "card": out, "raw": raw[0][1] if raw else None,
@@ -500,7 +612,7 @@ def jira_evening(day, tickets, cfg, health):
             "that is expected, do not retry or read them. Then return {\"done\": true}." % (
                 json.dumps(jql), len(keys) + 1, ",".join(keys)))
     res = run("jira-evening", {srv: ["jira_search", "jira_batch_get_changelogs"]},
-              [mcp_tool(srv, "jira_search"), mcp_tool(srv, "jira_batch_get_changelogs")], _writes(srv), task,
+              [mcp_tool(srv, "jira_search"), mcp_tool(srv, "jira_batch_get_changelogs")], _writes(srv, cfg), task,
               DONE_SCHEMA, cfg, health, day=day, max_turns=4, timeout=400)
     search = [unwrap(v) for _, v in tool_results(res, "jira_search")]
     changes = [unwrap(v) for _, v in tool_results(res, "jira_batch_get_changelogs")]

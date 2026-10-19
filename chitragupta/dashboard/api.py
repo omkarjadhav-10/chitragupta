@@ -862,6 +862,13 @@ def _ago_minutes(ts, now):
     return None if d is None else max(0, int((now - d).total_seconds() // 60))
 
 
+def _offline(m):
+    """health mcp.offline as {server: ISO time}. Older versions also filed job names ("jira-card-…": "missing env …")
+    there; those are job errors, not servers, and are left out."""
+    off = m.get("offline") if isinstance(m.get("offline"), dict) else {}
+    return {k: v for k, v in off.items() if isinstance(v, str) and common.parse_ts(v)}
+
+
 def _mcp(h, cfg, today_day):
     m = h.get("mcp") or {}
     servers = {}
@@ -870,6 +877,11 @@ def _mcp(h, cfg, today_day):
             at = (j or {}).get("at") or ""
             if name not in servers or at > servers[name]["at"]:
                 servers[name] = {"server": name, "status": st, "at": at, "job": job}
+    state = m.get("server_state") if isinstance(m.get("server_state"), dict) else {}
+    for name, srv in servers.items():  # what the last job saw: unreachable | signed-out | missing, with the error
+        e = state.get(name)
+        if isinstance(e, dict) and e.get("state"):
+            srv.update(state=e["state"], error=_cut(e.get("error") or "", 300), error_at=e.get("at"))
     tokens_in = tokens_out = calls = 0
     cost = 0.0
     for job, j in (m.get("jobs") or {}).items():
@@ -891,7 +903,8 @@ def _mcp(h, cfg, today_day):
     return {"servers": sorted(servers.values(), key=lambda s: s["server"]), "configured": configured,
             "calls_today": int(((m.get("calls") or {}).get(today_day)) or 0), "job_tool_calls_today": calls,
             "tokens_in_today": tokens_in, "tokens_out_today": tokens_out, "cost_today": round(cost, 4),
-            "budget": mc.get("daily_call_budget"), "skip": m.get("skip") or {}, "offline": m.get("offline") or {},
+            "budget": mc.get("daily_call_budget"), "skip": m.get("skip") or {}, "offline": _offline(m),
+            "server_state": state, "job_errors": m.get("job_errors") if isinstance(m.get("job_errors"), dict) else {},
             "last_skip_reason": m.get("last_skip_reason") or "", "live": mcp_live()}
 
 
@@ -906,8 +919,10 @@ def mcp_live():
     for role in ("slack", "jira", "database"):
         r = st.get(role)
         if isinstance(r, dict):
-            servers.append({"role": role, "server": r.get("server") or "", "status": r.get("status") or "unknown",
-                            "detail": _cut(r.get("detail"), 400)})
+            status = r.get("status") or "unknown"
+            servers.append({"role": role, "server": r.get("server") or "", "detail": _cut(r.get("detail"), 400),
+                            "status": "unreachable" if status == "offline" else status,  # older caches say offline
+                            "error": _cut(r.get("error") or "", 300), "error_at": r.get("error_at")})
     run = read_json_cached(common.wl("cache", "mcp-check.json")) or {}
     return {"checked_at": st.get("checked") or st.get("checked_at"), "probed": bool(st.get("probed")), "servers": servers,
             "seconds": run.get("seconds"), "check_error": run.get("error") or "", "check_at": run.get("at")}
@@ -983,14 +998,14 @@ def status(cfg=None, now=None, server=None):
         "now": now.isoformat(timespec="seconds"), "day": today_day, "home": common.home(),
         "paused": os.path.exists(common.wl("PAUSED")),
         "hooks": {"last_event": hook_ts, "last_raw_event": raw_ts, "minutes_ago": _ago_minutes(hook_ts, now)},
-        "tick": {"last_tick": h.get("last_tick"), "last_tick_ok": h.get("last_tick_ok"),
-                 "minutes_ago": ago["last_tick"], "ok_minutes_ago": ago["last_tick_ok"]},
+        "tick": dict({"last_tick": h.get("last_tick"), "last_tick_ok": h.get("last_tick_ok"),
+                      "minutes_ago": ago["last_tick"], "ok_minutes_ago": ago["last_tick_ok"]}, **_ticks(now)),
         "push": {"last_push": h.get("last_push"), "last_commit": h.get("last_commit"), "minutes_ago": ago["last_push"],
                  "error": h.get("last_push_error"), "remote_set": bool(cfg.get("github_remote"))},
         "slack": _slack(h, cfg),
         "mcp": _mcp(h, cfg, today_day),
         "today": h.get("today") if (h.get("today") or {}).get("day") == today_day else {"day": today_day},
-        "warnings": list(h.get("warnings") or []),
+        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now)] if w],
         "errors_total": h.get("errors_total") or 0,
         "errors": recent_errors(h),
         "dashboard": server or {},
@@ -998,6 +1013,26 @@ def status(cfg=None, now=None, server=None):
         "pr_sources": h.get("pr_sources") or [],
         "safety": _safety(cfg),
     }
+
+
+def _ticks(now):
+    """The run records (.worklog/logs/ticks.jsonl): the last 10 and how the last hour's runs ended."""
+    from .. import ticklog
+    rec = ticklog.recent()
+    hour = {}
+    for r in rec:
+        t = common.parse_ts(r.get("at"))
+        if t and (now - t).total_seconds() < 3600:
+            hour[r.get("outcome")] = hour.get(r.get("outcome"), 0) + 1
+    return {"recent": rec[-10:], "last_hour": hour}
+
+
+def _stale(h, now):
+    try:
+        from .. import ticklog
+        return ticklog.stale_warning(h, now)
+    except Exception:  # noqa: BLE001 - the rest of the page still shows
+        return ""
 
 
 def _search_stats():
@@ -1051,8 +1086,11 @@ def _setup_item(row, mcp):
             kind, text = "slash", "/cg:doctor"
         elif live in ("missing", "unsupported") or (role == "slack" and st.get("state") == "off"):
             status = "off"
-        elif live in ("signed out", "offline") and role != "slack":
+        elif live == "signed out" and role != "slack":
             kind, text = "claude", "Run /mcp in Claude Code and sign in to the %s server" % (st.get("server") or label)
+        elif live in ("unreachable", "offline") and role != "slack":
+            kind, text = "claude", "Start the %s server or check its URL, then run claude mcp list" % (
+                st.get("server") or label)
     elif name == "last push" and row.get("ok") and "no GitHub remote" in detail:
         status = "off"
     if status == "ok":

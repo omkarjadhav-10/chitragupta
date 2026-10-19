@@ -15,6 +15,7 @@ function liveState(c, lv) {
   if (lv.status === 'connected') return ['ok', 'Connected'];
   if (/sign|auth/i.test(lv.status)) return ['warn', 'Signed out'];
   if (/not listed|missing/i.test(lv.status)) return ['off', 'Missing'];
+  if (/unreachable|offline|fail/i.test(lv.status)) return ['bad', 'Unreachable'];
   return ['bad', lv.status];
 }
 
@@ -50,8 +51,9 @@ export function McpStatusPanel({ mc, onChecked, headingLevel }) {
       return html`<section class="card" key=${c.role} aria-labelledby=${'mcp-' + c.role}><${H} id=${'mcp-' + c.role}>${name}<${Status} kind=${st[0]}>${st[1]}</${Status}></${H}>
         <dl class="kv"><dt>Server</dt><dd class="mono">${c.server || (lv && lv.server) || '—'}</dd>
           <dt>Live</dt><dd>${lv ? lv.status + (live.checked_at ? ', ' + fmtTs(live.checked_at) : '') : 'not seen by the last check'}</dd>
-          <dt>Last job</dt><dd>${job ? job.job + ', ' + fmtTs(job.at) + ' (' + job.status + ')' : 'none yet'}</dd>
-          ${lv && lv.detail && st[0] !== 'ok' ? html`<dt>Last error</dt><dd>${lv.detail}</dd>` : null}</dl>
+          <dt>Last job</dt><dd>${job ? job.job + ', ' + fmtTs(job.at) + ' (' + (job.state || job.status) + ')' : 'none yet'}</dd>
+          ${job && job.error ? html`<dt>Job error</dt><dd>${job.error}${job.error_at ? ', ' + fmtTs(job.error_at) : ''}</dd>` : null}
+          ${lv && st[0] !== 'ok' && (lv.error || lv.detail) ? html`<dt>Last error</dt><dd>${lv.error ? lv.error + (lv.error_at ? ', ' + fmtTs(lv.error_at) + ' · ' : ' · ') : ''}${lv.detail || ''}</dd>` : null}</dl>
         ${st[0] === 'warn' ? html`<p style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">Sign in again in Claude Code: <code>/mcp</code><${CopyButton} text="/mcp" what="the sign-in command" /></p>` : null}
         ${st[1] === 'Missing' && c.enabled ? html`<p>Add it with <code>/cg:setup</code>; only setup adds MCP servers and classifies their tools.</p>` : null}</section>`;
     })}</div>

@@ -140,12 +140,12 @@ These settings control the 20:00 message: your day laid out as Jira worklog entr
 
 One builder makes the 20:00 message: blocks of activity (plus your Jira comments of the day), the allocation to your target, time already logged in Jira subtracted, condensed descriptions, the closing note, the delivery check and, for a changed day, the "Corrected update" header. The sender and every preview (`/cg:today`, `agent worklog-show`) call it, so a preview made from the same inputs is the message, character for character.
 
-- **Jira data.** At 20:00 the sender reads Jira once (one read-only job). A preview uses the latest copy of that data (`data\jira\_evening\<day>.json`) and says "Jira data as of HH:MM". It never calls Jira by itself; *Refresh from Jira* (`agent worklog-show --jira`) runs the one read job within `mcp.daily_call_budget`, keeping the 20:00 calls in reserve.
+- **Jira data.** At 20:00 the sender reads Jira once (one read-only job). When the Slack send fails, the next tries (up to 4 attempts, `why: retry` in the day's history) reuse that Jira data if it was fetched within the last 30 minutes, instead of reading Jira again. A preview uses the latest copy of that data (`data\jira\_evening\<day>.json`) and says "Jira data as of HH:MM". It never calls Jira by itself; *Refresh from Jira* (`agent worklog-show --jira`) runs the one read job within `mcp.daily_call_budget`, keeping the 20:00 calls in reserve.
 - **Condensed descriptions.** Lines that need condensing go to one batched model call, and each result is cached (`.worklog\cache\condense\<day>.json`, kept 14 days, keyed by a hash of that entry's notes and Jira facts). A preview uses the cached lines and marks the others "condensed at 20:00". *Preview exactly* (`agent worklog-show --exact`) condenses them now, within the same budget; the sender then reuses them.
 
 ### Inbox lines for the worklog
 
-`time:` lines and notes are data: each distinct line is read once, however often it appears in `inbox.md`. `resend:` and the calendar marks (`leave:`, `half-day:`, `holiday:`, `workday:`, `clear:`) are actions: every new copy of the same line counts, in file order, so you can mark a day, clear it and mark it again, and `/cg:log` always adds the line. A day has one mark: the newest line wins. `clear: <day>[..<day>]` removes the leave, half-day, holiday or extra-workday mark of those days; hours you logged with `time:` stay. `resend:` sends the day again. Requests that arrive before the next tick go out as one send. Each send, resends included, is kept in the day's history in `data\timesheets\<day>.json` (`versions`: time, why, Slack's answer).
+`time:` lines and notes are data: each distinct line is read once, however often it appears in `inbox.md`. `resend:` and the calendar marks (`leave:`, `half-day:`, `holiday:`, `workday:`, `clear:`) are actions: every new copy of the same line counts, in file order, so you can mark a day, clear it and mark it again, and `/cg:log` always adds the line. A day has one mark: the newest line wins. `clear: <day>[..<day>]` removes the leave, half-day, holiday or extra-workday mark of those days; hours you logged with `time:` stay. `resend:` sends the day again. Requests that arrive before the next tick go out as one send. Each send, resends included, is kept in the day's history in `data\timesheets\<day>.json` (`versions`: time, why (`first`, `retry` after a failed send, `resend`, `correction`), Slack's answer).
 
 ### `jira_worklog.slack`
 
@@ -157,7 +157,7 @@ Setup and `setup slack-user` fill in most of these.
 | `jira_worklog.slack.self_user_id` | string | `""` | Your Slack user ID (looked up by `setup slack-user`). |
 | `jira_worklog.slack.send_tool` | string | `""` | Full name of the Slack MCP send tool (discovered). |
 | `jira_worklog.slack.tools` | list | `[]` | All Slack tools seen at discovery. Every tool except the send tool is disallowed on a send. |
-| `jira_worklog.slack.mode` | `"strict"` \| `"local"` | `"strict"` | `strict` passes only `.worklog\mcp\slack.json` to the send call. `local` runs in the sender folder's local scope. Discovery picks the one that works. |
+| `jira_worklog.slack.mode` | `"strict"` \| `"local"` | `"strict"` | Where the Slack server definition comes from. `strict` passes `.worklog\mcp\slack.json` to the send call. `local` passes the sender folder's local-scope Slack definition exactly as Claude Code has it (copied to `.worklog\cache\mcp\slack-local.json`, so the sign-in for that definition is found), and runs in the sender folder. Both run with `--strict-mcp-config`, so no other MCP server loads in the send call. Discovery picks the one that works. |
 | `jira_worklog.slack.email` | string | `""` | Email to look up in Slack; defaults to the last `git_author_emails` entry. |
 | `jira_worklog.slack.server.url` | string | `"https://mcp.slack.com/mcp"` | Slack MCP endpoint. |
 | `jira_worklog.slack.server.client_id` | string | Slack's published client id for Claude | OAuth client id. |
@@ -169,11 +169,11 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `mcp.daily_call_budget` | int | `10` | Maximum background MCP jobs per day. Runs you ask for are counted separately. |
+| `mcp.daily_call_budget` | int | `10` | Maximum background MCP jobs per day. Only a job that made at least one MCP tool call counts; jobs that made none (a server down) are counted apart under a cap of the same size. Runs you ask for are counted separately. |
 | `mcp.jira.enabled` | bool | `false` | Run the Jira jobs: ticket cards, and the evening facts used by the worklog. |
 | `mcp.jira.cards` | bool | `true` | With Jira on, read the day's tickets (title, status, summary) for the ticket pages. |
 | `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
-| `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. |
+| `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. The read allowlist entry and the server's own read-only mode (`READ_ONLY_MODE`, `ENABLED_TOOLS`) follow this name. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
 | `mcp.git_host.<provider>` | object | — | `{"server", "enabled"}` for `azure-devops` or `github`: the user-scope MCP server PRs are read through when the host CLI isn't installed. Set by `setup use-git-host <server>`, which allows only that provider's classified PR and branch read tools. |
 | `mcp.database.enabled` | bool | `false` | Run the database jobs: schema cards, QA trace and link map. Set by `setup use-database`. |

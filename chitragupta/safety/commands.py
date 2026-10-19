@@ -547,7 +547,7 @@ def claude_reason(args, cwd):
     places = {_norm(sandbox()), _norm(slack.sender_dir())}
     if not cwd or _norm(cwd) not in places:
         return "internal claude calls run in the sandbox folder"
-    if "--strict-mcp-config" not in a and _norm(cwd) != _norm(slack.sender_dir()):
+    if "--strict-mcp-config" not in a:  # no exemption: the Slack sender passes only its server too
         return "internal claude calls use --strict-mcp-config"
     return None
 

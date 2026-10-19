@@ -16,7 +16,8 @@ from . import mcpjobs
 from .redact import redact
 from .safety import paths
 
-OFFLINE_BACKOFF_S = 2 * 3600
+OFFLINE_BACKOFF_S = 2 * 3600  # after a skipped job, that role's jobs wait this long
+OFFLINE_PROBE_S = 2 * 3600  # while a server is known offline, at most one probe job this often
 EVENING_RESERVE = 2  # budget kept for the 20:00 Jira call (and one retry)
 
 
@@ -32,6 +33,44 @@ class KBJobs:
     def _offline(self, key):
         t = common.parse_ts((self.h.get("skip") or {}).get(key))
         return bool(t and (common.now() - t).total_seconds() < OFFLINE_BACKOFF_S)
+
+    def _down(self, role):
+        """The role's server is known offline: a job found it unreachable or signed out (health mcp.offline), or the
+        last `claude mcp list` check did, after the last job that reached it (mcp.last_ok)."""
+        srv = mcpjobs.server_name(self.cfg, role)
+        if not srv:
+            return False
+        if mcpjobs.offline_since(self.a.health, srv):
+            return True
+        from . import setup
+        st = setup.cached_mcp_status() or {}
+        row = st.get(role) if isinstance(st.get(role), dict) else {}
+        if row.get("server") != srv or row.get("status") not in setup.UNREACHABLE + ("signed out",):
+            return False
+        checked = common.parse_ts(row.get("error_at") or st.get("checked"))
+        ok = common.parse_ts((self.h.get("last_ok") or {}).get(srv))
+        return bool(checked and (not ok or checked > ok))
+
+    def _may_run(self, role):
+        """A job of this role may start now: not backing off after a skip, and the server isn't known offline, or a
+        probe is due (one at most every OFFLINE_PROBE_S while it is)."""
+        if self._offline(role):
+            return False
+        if not self._down(role):
+            return True
+        t = common.parse_ts((self.h.get("probe") or {}).get(role))
+        return not (t and (common.now() - t).total_seconds() < OFFLINE_PROBE_S)
+
+    def _job(self, role, fn, *args, **kw):
+        """Run one job function when _may_run allows it. A job that tried (did work or recorded a skip) while the
+        server was known offline was that interval's probe."""
+        if not self._may_run(role):
+            return 0
+        down, before = self._down(role), (self.h.get("skip") or {}).get(role)
+        r = fn(*args, **kw)
+        if down and (r or (self.h.get("skip") or {}).get(role) != before):
+            self.h.setdefault("probe", {})[role] = common.now_iso()
+        return r
 
     def _skipped(self, key, ex):
         self.h.setdefault("skip", {})[key] = common.now_iso()
@@ -50,19 +89,21 @@ class KBJobs:
         self.backup(today, st)  # local, no MCP: independent of NO_MCP_JOBS
         if common.env("NO_MCP_JOBS"):
             return
-        left = mcpjobs.budget_left(self.a.health, self.cfg, today)
-        if mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.cards") and not self._offline("jira")                 and left > EVENING_RESERVE:
-            left -= self.jira_cards(today, limit=min(2, left - EVENING_RESERVE))
+        def left():  # re-read after every job: only runs that made an MCP call spend a unit
+            return mcpjobs.budget_left(self.a.health, self.cfg, today)
+        if mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.cards") and left() > EVENING_RESERVE:
+            self._job("jira", lambda: self.jira_cards(today, limit=min(2, left() - EVENING_RESERVE)))
         if mcpjobs.enabled(self.cfg, "database") and mcpjobs.server_name(self.cfg, "database") \
-                and mcpjobs.database_conn(self.cfg) and not self._offline("database"):
-            if left > EVENING_RESERVE:
-                left -= self.schema_cards(today)
-            if left > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.trace"):
-                left -= self.qa_traces(today)
-            if left > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.linkmap") and st.get("linkmap_day", "") < (_dt.date.fromisoformat(today) - _dt.timedelta(days=7)).isoformat():
-                if self.link_map(today):
+                and mcpjobs.database_conn(self.cfg):  # each job re-checks: one failure stops the rest of the tick
+            if left() > EVENING_RESERVE:
+                self._job("database", self.schema_cards, today)
+            if left() > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.trace"):
+                self._job("database", self.qa_traces, today)
+            week_ago = (_dt.date.fromisoformat(today) - _dt.timedelta(days=7)).isoformat()
+            if left() > EVENING_RESERVE and configstore.on(self.cfg, "mcp.database.linkmap") \
+                    and st.get("linkmap_day", "") < week_ago:
+                if self._job("database", self.link_map, today):
                     st["linkmap_day"] = today
-                    left -= 1
 
     # ------------------------------------------------------------------ Jira cards
     def jira_cards(self, today, limit=2, force=None):
