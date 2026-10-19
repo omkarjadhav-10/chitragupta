@@ -450,6 +450,79 @@ class QueryAndMcpTests(SafetyCase):
         self.assertHookDenies("internal", {"tool_name": "mcp__%s__run_query" % DB,
                                            "tool_input": {"connection_id": "prod-main", "sql": "SELECT TOP 1 * FROM t"}}, "mcp")
 
+    def test_database_calls_name_an_allowed_connection(self):
+        """With `connections` configured, a call without a connection (the server's default would be used), with
+        two, or routed through another argument name to a connection that isn't allowed, is denied."""
+        tool, sql = "mcp__%s__run_query" % DB, "SELECT TOP 1 * FROM shop.orders"
+        for inp in ({"sql": sql}, {"env": "prod", "server": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "server": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "database": "shop-prod", "sql": sql},
+                    {"connection_id": "qa-main", "connectionName": "qa-main", "sql": sql},
+                    {"connection_id": ["qa-main"], "sql": sql}, {"conn": "prod-main", "sql": sql}):
+            with self.subTest(inp=inp):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": inp}, "mcp")
+        self.assertHookDenies("internal", {"tool_name": "mcp__%s__list_tables" % DB, "tool_input": {"schema": "shop"}}, "mcp")
+        self.assertHookAllows("internal", {"tool_name": "mcp__%s__list_tables" % DB,
+                                           "tool_input": {"connectionId": "qa-main", "schema": "shop"}}, "mcp")
+        self.assertHookAllows("internal", {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": sql}}, "mcp")
+        from chitragupta.safety import mcp
+        srv = {"read": ["whoami", "list_connections", "run_query", "describe_table"], "query_tools": ["run_query"],
+               "connections": ["qa-main"]}
+        allow = {"max_rows": 20, "servers": {DB: srv}}
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__whoami" % DB, {}, allow))
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {"connectionId": "prod-main"}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__describe_table" % DB, {"table": "orders"}, allow))
+        srv["connectionless"] = ["whoami", "run_query"]  # a query tool is never connectionless
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__run_query" % DB, {"sql": sql}, allow))
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__list_connections" % DB, {}, allow))
+        srv["connections"] = []  # nothing allowed yet: nothing but the connectionless tools
+        self.assertIsNotNone(mcp.mcp_reason("mcp__%s__run_query" % DB, {"sql": sql}, allow))
+        self.assertIsNone(mcp.mcp_reason("mcp__%s__whoami" % DB, {}, allow))
+
+    def test_own_database_jobs_pass_the_guard(self):
+        """Every call Chitragupta's schema, trace and link-map jobs ask for names its connection and passes the
+        guard with the allowlist the jobs generate."""
+        import re
+        from chitragupta import common, mcpjobs
+        from chitragupta.safety import mcp
+        cfg = self.cfg()
+        cfg["mcp"]["database"].update(connections={"qa": "qa-main"})
+        common.save_config(cfg)
+        os.remove(os.path.join(self.home, ".worklog", "mcp", "allow.json"))
+        allow = mcpjobs.ensure_files(cfg)
+        tasks = []
+
+        def fake_run(job, servers, reads, writes, task, schema, cfg, health, **k):
+            tasks.append(task)
+            return {"calls": [{"name": "mcp__%s__describe_table" % DB, "input": {"table": t},
+                               "result": json.dumps([{"name": "id"}, {"name": "status"}, {"name": "order_id"}]),
+                               "is_error": False} for t in ("orders", "docs")],
+                    "out": {"done": True, "steps": [], "changes": [], "summary": ""}, "input_tokens": 0,
+                    "output_tokens": 0}
+        real = mcpjobs.run
+        mcpjobs.run = fake_run
+        try:
+            mcpjobs.schema_cards(["shop.orders", "shop.docs"], cfg, {})
+            mcpjobs.qa_trace("ABC-1001", ["orderId=42"], {"shop.orders": ["status"]}, cfg, {})
+            mcpjobs.link_map([("shop.docs.order_id", "shop.orders.id", "name")], ["shop.orders", "shop.docs"], cfg, {})
+        finally:
+            mcpjobs.run = real
+        line = re.compile(r"^\d+\. (\w+) connectionId=(\S+)(?: schema=(\S+))?(?: table=(\S+))?(?: limit=(\d+))?"
+                          r"(?: sql=(.*))?$")
+        calls = [ln for t in tasks for ln in t.splitlines() if re.match(r"^\d+\. ", ln)]
+        self.assertGreaterEqual(len(calls), 6)
+        for ln in calls:
+            with self.subTest(call=ln[:90]):
+                m = line.match(ln)
+                self.assertIsNotNone(m, "a job call without connectionId")
+                tool, conn, sch, table, lim, sql = m.groups()
+                inp = {"connectionId": conn}
+                inp.update({k: v for k, v in (("schema", sch), ("table", table)) if v})
+                if sql:
+                    inp.update(limit=int(lim), sql=json.loads(sql))
+                self.assertIsNone(mcp.mcp_reason(mcpjobs.mcp_tool(DB, tool), inp, allow))
+
     def test_jira_writes(self):
         for t in JIRA_WRITES:
             with self.subTest(tool=t):

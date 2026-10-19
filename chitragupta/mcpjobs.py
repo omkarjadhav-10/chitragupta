@@ -22,6 +22,7 @@ from . import common
 from . import extract
 from .redact import redact
 from .safety import claude as builder, commands, paths
+from .safety.mcp import CONNECTIONLESS_DEFAULT
 
 MCP_DIR = None  # set lazily: <home>/.worklog/mcp
 
@@ -327,6 +328,9 @@ DATABASE_ALLOW_DEFAULT = {
     "write": ["create_artifact", "update_artifact", "archive_artifact", "create_write_request", "update_write_request"],
     "query_tools": ["run_query"],
     "connections": {"qa": "", "dev": ""},
+    # tools called without a connection argument (identity, listing connections); every other tool of this server
+    # must name exactly one allowed connection (safety/mcp.py connection_reason)
+    "connectionless": list(CONNECTIONLESS_DEFAULT),
 }
 
 
@@ -368,6 +372,8 @@ def _apply_tool_names(entry, cfg, replace=False):
         lists = [entry.setdefault("read", [])]
         if role == "query":
             lists.append(entry.setdefault("query_tools", []))
+        if role == "list_connections":
+            lists.append(entry.setdefault("connectionless", list(CONNECTIONLESS_DEFAULT)))
         for lst in lists:
             if replace and default in lst:
                 lst[lst.index(default)] = name
@@ -420,6 +426,7 @@ def ensure_files(cfg):
             if (db.get("connections") or {}).get(env):
                 allowed.add(db["connections"][env])
         entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
+        entry.setdefault("connectionless", list(CONNECTIONLESS_DEFAULT))
         _apply_tool_names(entry, cfg)
         entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
     from . import hostmcp

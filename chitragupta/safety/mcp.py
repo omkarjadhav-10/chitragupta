@@ -35,6 +35,14 @@ WRITE_VERB = re.compile(r"(?:^|_)(?:create|update|delete|remove|add|edit|set|tra
 MAX_SLACK_CHARS = 8000
 SLACK_KEYS = {"channel_id", "channel", "message", "text", "unfurl_app_links", "unfurl_links", "unfurl_media"}
 SQL_KEYS = ("query", "sql", "statement", "text", "command", "q")
+# Database servers with `connections` in allow.json: the argument that picks the connection (any key containing
+# "connection", or one of these), and other routing arguments whose value must also be an allowed connection.
+CONN_KEYS = ("conn", "conn_id", "connid", "datasource", "data_source", "database_id", "dsn")
+ROUTING_KEYS = ("env", "environment", "server", "server_name", "servername", "host", "hostname", "instance", "target",
+                "profile", "cluster", "db", "database", "dbname", "db_name")
+# Tools that take no connection (identity, listing the connections). allow.json `connectionless` overrides it per
+# server; a query tool is never connectionless.
+CONNECTIONLESS_DEFAULT = ["whoami", "list_connections"]
 # Git-host MCP read tools per provider, as /cg:setup classifies them (everything else on such a server is a write or
 # unknown, and blocked). tool -> None, or the read values of its `action` / `method` argument.
 # Azure DevOps (microsoft/azure-devops-mcp): v2.4+ names (one tool per area, with an action) and the older names.
@@ -96,13 +104,10 @@ def mcp_reason(tool_name, tool_input, allow=None):
     if srv.get("role") == "git-host":
         return git_host_reason(srv.get("provider"), tool, inp)
     max_rows = int(allow.get("max_rows") or 20)
-    conns = srv.get("connections")
-    if conns is not None:
-        given = [v for k, v in inp.items() if "connection" in k.lower() or k.lower() in ("conn", "datasource", "database_id")]
-        ok = {str(c) for c in conns.values() if c} if isinstance(conns, dict) else {str(c) for c in conns if c}
-        for g in given:
-            if str(g) not in ok:
-                return "connection %s is not an allowed (QA/dev) connection" % g
+    if srv.get("connections") is not None:
+        why = connection_reason(srv, tool, inp)
+        if why:
+            return why
     if tool in (srv.get("query_tools") or []):
         lim = inp.get("limit")
         if lim is not None and (not isinstance(lim, int) or lim > max_rows):
@@ -114,6 +119,39 @@ def mcp_reason(tool_name, tool_input, allow=None):
         if sql is None:
             return "query tool called without a recognisable statement field"
         return query.sql_reason(sql, max_rows)
+    return None
+
+
+def _conn_key(k):
+    k = str(k).lower()
+    return "connection" in k or k in CONN_KEYS
+
+
+def connection_reason(srv, tool, inp):
+    """A database server with `connections`: every tool call names exactly one allowed connection (so the server's
+    default connection is never used), except the identity / list-connections tools on `connectionless` (never a
+    query tool). A routing argument under another name (env, server, database …) must also name an allowed one."""
+    conns = srv.get("connections")
+    if isinstance(conns, dict):
+        ok = {str(c) for c in conns.values() if c}
+    elif isinstance(conns, list):
+        ok = {str(c) for c in conns if c}
+    else:
+        ok = set()
+    given = []
+    for k, v in inp.items():
+        if not (_conn_key(k) or str(k).lower() in ROUTING_KEYS):
+            continue
+        if isinstance(v, bool) or not isinstance(v, (str, int)) or str(v) not in ok:
+            return "connection %s=%s is not an allowed (QA/dev) connection" % (k, str(v)[:80])
+        if _conn_key(k):
+            given.append(v)
+    free = srv.get("connectionless")
+    free = CONNECTIONLESS_DEFAULT if not isinstance(free, list) else free
+    if tool in free and tool not in (srv.get("query_tools") or []):
+        return None
+    if len(given) != 1:
+        return "tool %s needs exactly one allowed connection argument (got %d)" % (tool, len(given))
     return None
 
 

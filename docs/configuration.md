@@ -196,7 +196,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
  "list_schemas": "list_schemas", "list_connections": "list_connections"}
 ```
 
-The tool mapped to `query` is SQL-checked by the guard. The guard reads the statement from an argument named `query`, `sql`, `statement`, `text`, `command` or `q`, and the connection from any argument whose name contains `connection` (or is `conn`, `datasource` or `database_id`). A query tool whose statement it can't find is denied: the guard fails closed. A database example:
+The tool mapped to `query` is SQL-checked by the guard. The guard reads the statement from an argument named `query`, `sql`, `statement`, `text`, `command` or `q`, and the connection from any argument whose name contains `connection` (or is `conn`, `conn_id`, `connid`, `datasource`, `data_source`, `database_id` or `dsn`). Every call to the database server must carry exactly one such argument naming an allowed connection, so the server's own default connection is never used; only the tools on the server's `connectionless` list in `.worklog/mcp/allow.json` (default `["whoami", "list_connections"]`, plus your mapped `list_connections` tool) may leave it out, and a query tool never may. A routing argument under another name (`env`, `server`, `host`, `database`, `instance` …) must also name an allowed connection. A query tool whose statement it can't find is denied: the guard fails closed. A database example:
 
 ```json
 "mcp": {
