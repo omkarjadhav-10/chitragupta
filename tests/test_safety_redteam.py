@@ -455,6 +455,55 @@ class QueryAndMcpTests(SafetyCase):
             with self.subTest(sql=sql[:80]):
                 self.assertIsNone(query.sql_reason(sql, 20))
 
+    def test_reads_that_were_over_blocked(self):
+        """Reads the guard used to refuse: a tool-level limit (int or digit string) <= max_rows caps the rows, a
+        table-free SELECT needs no limit, a SQL call with a `filter` argument isn't Mongo, a column named `copy`."""
+        from chitragupta.safety import mcp, query
+        tool = "mcp__%s__run_query" % DB
+        corpus = ["select id, status from shop.orders where id = :id",
+                  "select o.id, d.title from shop.orders o join shop.docs d on d.order_id = o.id where o.id = 42"]
+        for sql in corpus:
+            for lim in (10, "10", "20", 20):
+                with self.subTest(sql=sql[:40], limit=lim):
+                    self.assertHookAllows("internal", {"tool_name": tool, "tool_input": {
+                        "connection_id": "qa-main", "limit": lim, "sql": sql}}, "mcp")
+            with self.subTest(sql=sql[:40], limit=None):  # without the tool's cap it still needs its own
+                self.assertIsNotNone(query.sql_reason(sql))
+        for lim in (21, "21", "abc", "", True, 0, -1, 5.5, "1e3", [20]):
+            with self.subTest(bad_limit=lim):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {
+                    "connection_id": "qa-main", "limit": lim, "sql": corpus[0]}}, "mcp")
+        for sql in ("SELECT TOP 500 * FROM shop.orders", "UPDATE shop.orders SET a = 1",
+                    "SELECT * FROM shop.orders LIMIT 100", "SELECT 1; DROP TABLE t"):
+            with self.subTest(capped_but_bad=sql):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {
+                    "connection_id": "qa-main", "limit": 10, "sql": sql}}, "mcp")
+        for sql in ("SELECT 1", "SELECT now()", "SELECT current_user", "SELECT @@version", "select 1 as ok;",
+                    "SELECT TOP 5 copy FROM shop.docs", "SELECT TOP 5 id, copy, status FROM shop.docs",
+                    "SELECT copy AS c FROM shop.docs LIMIT 5", "SELECT TOP 5 d.copy FROM shop.docs d"):
+            with self.subTest(ok=sql):
+                self.assertIsNone(query.sql_reason(sql))
+        for sql in ("SELECT generate_series(1, 1000000)", "SELECT unnest(ids) FROM shop.orders",
+                    "COPY shop.orders TO PROGRAM 'x'", "SELECT TOP 5 a FROM t COPY t2 FROM 'x'",
+                    "SELECT TOP 5 copy FROM t COPY t2 FROM 'x'", "SELECT TOP 1 a FROM t\nCOPY INTO t2 FROM 'x'",
+                    "SELECT TOP 5 copy FROM t; COPY t TO PROGRAM 'x'", "SELECT 1 FROM shop.orders"):
+            with self.subTest(denied=sql):
+                self.assertIsNotNone(query.sql_reason(sql))
+        allow = {"max_rows": 20, "servers": {DB: {"read": ["run_query"], "query_tools": ["run_query"],
+                                                  "connections": ["qa-main", "acme-mongo", "qa-docs"],
+                                                  "types": {"qa-docs": "mongodb"}}}}
+        self.assertIsNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "sql": "SELECT TOP 5 id FROM shop.orders",
+                                                "filter": "status = 'open'"}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "sql": "SELECT TOP 5 id FROM shop.orders",
+                                                   "filter": {"$set": {"a": 1}}}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "acme-mongo", "operation": "deleteMany",
+                                                   "sql": "SELECT 1", "filter": {}}, allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-main", "filter": {}, "operation": "deleteMany"},
+                                            allow))
+        self.assertIsNotNone(mcp.mcp_reason(tool, {"connection_id": "qa-docs", "operation": "deleteMany", "sql": "SELECT 1"},
+                                            allow))
+        self.assertIsNone(mcp.mcp_reason(tool, {"connection_id": "acme-mongo", "operation": "find", "filter": {}}, allow))
+
     def test_mongo(self):
         tool = "mcp__%s__run_query" % DB
         for inp in MONGO:

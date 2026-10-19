@@ -1,7 +1,8 @@
 """Query guard: one classifier for every database statement (database MCP jobs, the in-session guard, tests).
 
 Allowed: exactly one SELECT / WITH … SELECT, catalog reads, EXPLAIN without ANALYZE, SHOW / DESCRIBE, and EXEC of a
-read-only metadata procedure (sp_help …). Row reads carry TOP / LIMIT / FETCH FIRST <= max_rows.
+read-only metadata procedure (sp_help …). Row reads carry TOP / LIMIT / FETCH FIRST <= max_rows (not needed for
+catalog-only reads, aggregates, a table-free SELECT, or when the MCP tool's own limit caps the rows: require_limit=False).
 Before any keyword check: Unicode NFKC, look-alike letters mapped to ASCII, zero-width characters dropped, comments
 and string literals stripped, case folded. Anything non-ASCII left outside a literal is refused.
 The guard doesn't know the database's dialect, so syntax the dialects read differently is refused rather than guessed:
@@ -41,6 +42,13 @@ CATALOG_SOURCE = re.compile(r"(?:[\w$#@]+\.)?(?:information_schema|pg_catalog|sy
                             r"class|attribute|index|constraint|proc|trigger|namespace|views|tables|indexes|description|"
                             r"get_\w+)|sqlite_master)")
 _SOURCE_TOKEN = re.compile(r"\(|\)|,|[a-z_#@][a-z0-9_$#@]*(?:\s*\.\s*[a-z_#@][a-z0-9_$#@]*)*|\S")
+# A table-free SELECT (SELECT 1, SELECT now()) needs no row limit, unless it calls a set-returning function.
+_SET_RETURNING = re.compile(r"\b(?:generate_\w+|unnest|\w+_to_table|regexp_matches|json\w*_(?:elements|each|keys|recordset)"
+                            r"\w*|\w+_series|openjson|string_split)\s*\(")
+# COPY is a statement only at the head (it can't nest in a SELECT, and PostgreSQL needs ';' between statements, which
+# is refused); T-SQL's COPY INTO is caught by INTO. So `copy` as a select-list column is a column.
+_COLUMN_NAMED_LIKE_A_WORD = re.compile(r"((?:\bselect|\bdistinct|\ball|\btop\s*\(?\s*\d+\s*\)?|,)\s*)copy"
+                                       r"(?=\s*(?:,|\bfrom\b|\bas\b|$))")
 _FROM_END = {"where", "group", "having", "order", "limit", "offset", "fetch", "union", "intersect", "except", "window",
              "qualify", "for", "select", "returning", "into"}
 
@@ -187,6 +195,11 @@ def _sources(s):
     return out
 
 
+def _no_table(s):
+    """True for a SELECT that reads no table: no FROM anywhere and no set-returning function."""
+    return not re.search(r"\bfrom\b", s) and not _SET_RETURNING.search(s)
+
+
 def _catalog_only(s):
     """True when the statement reads catalog objects only: every source is a catalog object or a CTE name."""
     ctes = set(re.findall(r"([a-z_][a-z0-9_$#@]*)\s*(?:\([^()]*\))?\s+as\s*(?:not\s+)?(?:materialized\s*)?\(", s)) - {"ident"}
@@ -227,8 +240,9 @@ def sql_reason(sql, max_rows=20, require_limit=True):
         return "statement starts with %s" % first.upper()
     if first == "explain" and re.search(r"\banaly[sz]e\b", s):
         return "EXPLAIN ANALYZE runs the statement"
+    cols = _COLUMN_NAMED_LIKE_A_WORD.sub(r"\1column_ref", s)  # SELECT TOP 5 copy FROM t: a column, not COPY
     for w in DENY_WORDS:
-        if re.search(r"(?<![\w.$#@])%s(?![\w$#@])" % w, s):
+        if re.search(r"(?<![\w.$#@])%s(?![\w$#@])" % w, cols):
             return "write or control keyword %s" % w.upper()
     if re.search(r"(?m)^\s*go\s*$", scrubbed):
         return "batch separator"
@@ -252,11 +266,11 @@ def sql_reason(sql, max_rows=20, require_limit=True):
         prev = tok if tok not in ("(", ")") else prev
     if depth != 0:
         return "unbalanced parentheses"
-    if require_limit and first in ("select", "with") and not _catalog_only(s) and not AGG_ONLY.match(s):
+    if first in ("select", "with") and not _catalog_only(s) and not AGG_ONLY.match(s) and not _no_table(s):
         nums = [int(x) for m in LIMIT.finditer(s) for x in m.groups() if x]
-        if not nums:
+        if require_limit and not nums:
             return "row read without TOP/LIMIT"
-        if max(nums) > max_rows:
+        if nums and max(nums) > max_rows:  # even when the tool's own limit caps the rows
             return "row limit %d is over %d" % (max(nums), max_rows)
     return None
 
