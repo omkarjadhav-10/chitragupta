@@ -59,13 +59,13 @@ flowchart LR
 - **The other four events run asynchronously** with windowless `pyw -3`.
 - **Every hook fails open.** Any error is logged and the hook exits 0, so a hook can never break a session.
 
-Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`. The ticket comes from the branch name, else from the prompt. Sessions inside the data home only get time-only events.
+Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`. The ticket comes from the branch name, else from the prompt. Sessions inside the data home only get time-only events. The hooks and the safety net share one rule set, `common.capture_mode`. A session is skipped when `.worklog-ignore` sits in its folder or any folder above it, up to the home folder (`common.path_ignored`), so a repo nested in an ignored checkout is skipped too.
 
 ### 2. The tick
 
 The `Chitragupta` scheduled task runs `agent tick --from-task` through the stable launcher at logon and then every 5 minutes; `--from-task` also starts the dashboard if it is not running. It runs hidden, never overlaps itself and has a 20-minute limit. One lock makes the tick the single writer. Each tick:
 
-1. **Ingests** new raw events, plus the transcript safety net: Claude Code transcripts from the last 48 hours whose hooks didn't fire.
+1. **Ingests** new raw events, plus the transcript safety net: Claude Code transcripts from the last 48 hours whose hooks didn't fire. It applies the hooks' rules (`common.capture_mode`: time-only in the data home, nothing outside the scope, in an ignored folder or in Chitragupta's folders) to each message's folder, and recovers full content only inside a git repo or an include path.
 2. **Reads extra sources:** your commits in watched repos, Bruno request edits, SQL scripts, `inbox.md` lines and files in `_drop/`; then **branch tracking** (read-only git and the host CLI, no model): events, branches, parents, PRs and each active ticket's delivery check (see [branch-tracking.md](branch-tracking.md)).
 3. **Extracts.** Once a session has enough new text and is idle, ended or 20 minutes old, it makes one `claude -p` call per chunk. Each call gets a redacted digest and returns structured JSON: findings, queries, APIs, tables, request calls, DB-flow steps and worklog lines. If the call fails, it backs off and writes a deterministic fallback summary.
 4. **Merges** the results into `data/` with stable hash ids, so re-running never duplicates anything.

@@ -129,6 +129,23 @@ def raw_files():
     return out
 
 
+def time_only_sids():
+    """Session ids with time-only events (raw/<day>/time/<session>.jsonl)."""
+    root = common.wl("raw")
+    out = set()
+    try:
+        days = os.listdir(root)
+    except OSError:
+        return out
+    for d in days:
+        try:
+            names = os.listdir(os.path.join(root, d, "time"))
+        except OSError:
+            continue
+        out |= {fn[:-6] for fn in names if fn.endswith(".jsonl")}
+    return out
+
+
 def attribute(events, prefixes):
     """Ticket per event: branch ticket, else the latest ticket mentioned in my prompts (sticky)."""
     sticky = {}
@@ -197,7 +214,9 @@ class Agent:
         first_run = not self.state.get("transcripts_baselined")
         hook_sids = {sid for sid, s in self.state.get("sessions", {}).items() if s.get("source") == "hook"}
         hook_sids |= {sid for _, sid, _ in raw_files()}
+        hook_sids |= time_only_sids()  # data-home sessions the hooks recorded time-only
         sandbox = common.wl("sandbox")
+        modes = {}
         for path, size, mtime in recent:
             key = common.norm_path(path)
             sid = os.path.splitext(os.path.basename(path))[0]
@@ -218,23 +237,38 @@ class Agent:
             events, new_off, meta = sources.transcript_events(path, st["offset"])
             cwd = meta.get("cwd") or st.get("cwd")
             st["cwd"] = cwd
-            if not cwd or common.path_within(cwd, sandbox) or not common.scope_allows(cwd, self.cfg):
-                st["offset"] = new_off
-                continue
-            repo_root = common.find_repo_root(cwd)
-            if common.repo_ignored(repo_root):
-                st["offset"] = new_off
-                continue
-            st["offset"], st["captured"] = new_off, True
+            st["offset"] = new_off
+            full = timed = 0
             for e in events:
+                ecwd = e.get("cwd") or cwd
+                k = common.norm_path(ecwd)
+                if k not in modes:
+                    modes[k] = self._net_mode(ecwd, sandbox)
+                mode, repo_root = modes[k]
+                if not mode:
+                    continue
                 ts = common.parse_ts(e.get("ts")) or common.now()
+                day = common.workday(ts, self.cfg)
+                if mode == "time":  # like the hook: timestamp + the ticket mentioned, never content
+                    if e["event"] not in ("user-prompt", "post-tool", "stop"):
+                        continue
+                    found = common.find_tickets((e.get("payload") or {}).get("prompt", ""), self.prefixes) \
+                        if e["event"] == "user-prompt" else []
+                    row = {"ts": ts.isoformat(timespec="seconds"), "event": e["event"], "session_id": sid,
+                           "source": "time-only", "ticket": found[0] if found else None}
+                    common.append_line(common.wl("raw", day, "time", sid + ".jsonl"), json.dumps(row))
+                    timed += 1
+                    continue
                 ev = {"ts": ts.isoformat(timespec="seconds"), "event": e["event"], "session_id": sid, "source": "transcript",
-                      "transcript_path": path, "cwd": e.get("cwd") or cwd, "repo_root": repo_root,
+                      "transcript_path": path, "cwd": ecwd, "repo_root": repo_root,
                       "branch": e.get("branch") or meta.get("branch"), "ticket": None, "agent_type": None,
                       "payload": e["payload"]}
                 ev["ticket"] = common.ticket_from_branch(ev["branch"], self.prefixes)
-                common.append_line(common.wl("raw", common.workday(ts, self.cfg), sid + ".jsonl"), json.dumps(ev, ensure_ascii=False))
-            if events:
+                common.append_line(common.wl("raw", day, sid + ".jsonl"), json.dumps(ev, ensure_ascii=False))
+                full += 1
+            if full or timed:
+                st["captured"] = True
+            if full:
                 days = self.state.setdefault("safety_net_days", [])
                 d = common.workday(common.now(), self.cfg)
                 if d not in days:
@@ -251,6 +285,20 @@ class Agent:
                         del tstate[k]
                 except OSError:
                     del tstate[k]
+
+    def _net_mode(self, cwd, sandbox):
+        """(mode, repo root) for a transcript folder: the hook's rules (common.capture_mode), and as a fallback that
+        cannot see who started a session, "full" only for work in a git repo or a configured include path."""
+        if not cwd or common.path_within(cwd, sandbox):
+            return None, None
+        mode = common.capture_mode(cwd, self.cfg)
+        if mode != "full":
+            return mode, None
+        repo_root = common.find_repo_root(cwd)
+        inc = (self.cfg.get("capture_scope") or {}).get("include_paths") or []
+        if not repo_root and not any(common.path_within(cwd, p) for p in inc):
+            return None, None  # e.g. the home folder itself: not a work location
+        return "full", repo_root
 
     # ------------------------------------------------------------------ ingest
     def ingest(self):
@@ -297,7 +345,7 @@ class Agent:
                     self.git_events.append(ev)
                 self._learn(ev)
                 t = ev.get("ticket") or common.ticket_from_branch(ev.get("branch"), self.prefixes)
-                if t:
+                if t and not common.is_placeholder(t):  # raw lines written before a key was a placeholder
                     recent.append([ev.get("ts"), t])
             dd = self.store.day(day)
             meta = dd["sessions"].setdefault(sid, {})
@@ -312,19 +360,31 @@ class Agent:
         return touched_days
 
     def _learn(self, ev):
-        """Auto-add new ticket prefixes (from branch names) and repos seen in sessions."""
+        """Auto-add new ticket prefixes (from branch names) and repos seen in sessions, only from captured work: an
+        event whose folder is outside the capture scope, ignored, under the system temp folder or inside
+        Chitragupta's own folders teaches nothing (common.learnable_path)."""
+        repo = ev.get("repo_root")
+        where = repo or ev.get("cwd")
+        if not where or not self._learnable(where):
+            return
         p = common.new_branch_prefix(ev.get("branch"), self.prefixes)
         if p:
             self.cfg["ticket_prefixes"] = sorted(set(self.prefixes) | {p})
             self.cfg_dirty = True
             common.log("agent", "learned ticket prefix %s from branch %s" % (p, ev.get("branch")))
-        repo = ev.get("repo_root")
-        if repo and not common.repo_ignored(repo) and not common.path_within(repo, common.home()):
+        if repo:
             norm = [common.norm_path(r) for r in self.cfg.get("watched_repos") or []]
             if common.norm_path(repo) not in norm and os.path.exists(os.path.join(repo, ".git")):
                 self.cfg.setdefault("watched_repos", []).append(repo.replace("\\", "/"))
                 self.cfg_dirty = True
                 common.log("agent", "watching new repo %s" % repo)
+
+    def _learnable(self, path):
+        memo = self.__dict__.setdefault("_learnable_memo", {})
+        key = common.norm_path(path)
+        if key not in memo:
+            memo[key] = common.learnable_path(path, self.cfg)
+        return memo[key]
 
     def _apply_carry(self, day):
         carry = self.state.get("carry_todos")

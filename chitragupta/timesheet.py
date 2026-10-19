@@ -395,10 +395,16 @@ TAGS = {"workday": "", "half_day": "half day", "weekend": "weekend", "holiday": 
 
 # --------------------------------------------------------------------------- compose a day
 
-def compose(day, send_day, blocks, manual, cal, ts, already=None, correction=False, describe=None, unassigned_minutes=0):
+def compose(day, send_day, blocks, manual, cal, ts, already=None, correction=False, describe=None, unassigned_minutes=0,
+            placeholders=()):
     """-> {"kind": "message"|"nudge"|"none", "text", "entries", "note"}.
     blocks: per-ticket activity blocks (no-ticket blocks have ticket None); manual: calendar time entries.
-    already: [(ticket, minutes)] logged in Jira by me that day. describe(entries) fills e["desc"]."""
+    already: [(ticket, minutes)] logged in Jira by me that day. describe(entries) fills e["desc"].
+    placeholders: configured example ticket keys; they never get time (their blocks and entries are dropped)."""
+    if placeholders:
+        ph = {str(p).upper() for p in placeholders}
+        blocks = [b for b in blocks if str(b.get("ticket") or "").upper() not in ph]
+        manual = [m for m in manual if str(m.get("ticket") or "").upper() not in ph]
     kind = day_kind(day, cal, ts)
     step = int(ts["step_minutes"])
     unassigned_ticket = ts["unassigned_time"] if ts.get("unassigned_time") not in (None, "", "distribute") else None

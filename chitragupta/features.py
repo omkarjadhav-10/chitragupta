@@ -47,7 +47,8 @@ class Features:
             found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), self.prefixes)
             if found:
                 session["sticky"] = found[0]
-        return ev.get("_t") or common.ticket_from_branch(ev.get("branch"), self.prefixes) or ev.get("ticket") or session.get("sticky")
+        raw_t = None if common.is_placeholder(ev.get("ticket")) else ev.get("ticket")  # raw lines from before
+        return ev.get("_t") or common.ticket_from_branch(ev.get("branch"), self.prefixes) or raw_t or session.get("sticky")
 
     def slot(self, day, t):
         dd = self.store.day(day)
@@ -177,6 +178,9 @@ class Features:
         purposes = self.state.get("artifact_purposes") or {}
         for key, it in list(q.items()):
             try:
+                if artmod.excluded(it.get("path"), self.cfg):  # queued before its folder was ignored
+                    del q[key]
+                    continue
                 if not it.get("ticket"):
                     self._unfiled(it["day"], it["path"], "Claude Code session " + (it.get("session") or "")[:8])
                     del q[key]
@@ -334,7 +338,7 @@ class Features:
         cutoff = common.now().timestamp() - 14 * 86400
         for key, info in list(known.items()):
             ts = common.parse_ts(info.get("seen"))
-            if not ts or ts.timestamp() < cutoff:
+            if not ts or ts.timestamp() < cutoff or artmod.excluded(key, self.cfg):
                 del known[key]
                 continue
             if os.path.isfile(key):

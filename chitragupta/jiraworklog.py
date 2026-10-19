@@ -176,7 +176,7 @@ class JiraWorklog:
         gap = self.ts["block_gap_minutes"] * 60
         for wl in res.get("worklog_lines") or []:
             t, line = (wl.get("ticket") or "").upper(), " ".join((wl.get("line") or "").split())
-            if not t or not line:
+            if not t or not line or common.is_placeholder(t):
                 continue
             stamps = [common.parse_ts(e.get("ts")) for e in evs if e.get("_t") == t and e.get("ts")] or \
                      [common.parse_ts(e.get("ts")) for e in evs if e.get("ts")]
@@ -206,7 +206,7 @@ class JiraWorklog:
                     m = int(te.get("minutes") or 0)
                 except (ValueError, TypeError):
                     continue
-                if m <= 0 or not te.get("ticket"):
+                if m <= 0 or not te.get("ticket") or common.is_placeholder(te["ticket"]):
                     continue
                 st = te.get("start") if re.fullmatch(r"\d{1,2}:\d{2}", te.get("start") or "") else None
                 T.apply_directive(cal, {"kind": "time", "days": [dday], "start": st and st.zfill(5), "minutes": m,
@@ -221,6 +221,8 @@ class JiraWorklog:
         pts = []
 
         def add(ts, t, dur=0):
+            if t and common.is_placeholder(t):  # a configured example key is never work
+                return
             if ts and start <= ts < until:
                 pts.append({"ts": ts, "ticket": t, "dur": dur})
         for ev in self.a.day_events(day):
@@ -236,7 +238,7 @@ class JiraWorklog:
                 except ValueError:
                     pass
             for r in sorted(rows, key=lambda r: r.get("ts") or ""):
-                if r.get("ticket"):
+                if r.get("ticket") and not common.is_placeholder(r["ticket"]):
                     sticky[r.get("session_id")] = r["ticket"]
                 t = sticky.get(r.get("session_id"))
                 if t:  # worklog-system sessions without a ticket are not ticket work
@@ -440,7 +442,7 @@ class JiraWorklog:
 
     # ------------------------------------------------------------------ compose (§2, §4, §7.2)
     def manual_for(self, day, cal):
-        return [dict(m) for m in ((cal.get("time") or {}).get(day) or [])]
+        return [dict(m) for m in ((cal.get("time") or {}).get(day) or []) if not common.is_placeholder(m.get("ticket"))]
 
     def fact_tickets(self, blocks, manual):
         return sorted({b["ticket"] for b in blocks if b.get("ticket")} | {m["ticket"] for m in manual})
@@ -499,7 +501,8 @@ class JiraWorklog:
 
         def fill(entries):
             self.describe(entries, condense=condense, facts=fx, day=day)
-        res = T.compose(day, send_day, bl, manual, cal, self.ts, already=already, correction=correction, describe=fill)
+        res = T.compose(day, send_day, bl, manual, cal, self.ts, already=already, correction=correction, describe=fill,
+                        placeholders=common.placeholder_tickets(self.cfg))
         if res["kind"] == "nudge" and day != send_day:
             res = {"kind": "none", "reason": "nothing tracked (a late nudge is not sent)"}
         res["delivery"] = ""
@@ -508,7 +511,7 @@ class JiraWorklog:
             if delivery:
                 try:  # after the closing note; the Jira entries above stay exactly as composed
                     day_tickets = sorted({e["ticket"] for e in res.get("entries") or [] if e.get("ticket")} |
-                                         set((self.store.day(day).get("tickets") or {}).keys()))
+                                         {t for t in (self.store.day(day).get("tickets") or {}) if not common.is_placeholder(t)})
                     res["delivery"] = delivery_block(self.store, day_tickets)
                     if res["delivery"]:
                         res["text"] = res["text"] + "\n\n" + res["delivery"]

@@ -21,12 +21,12 @@ The hooks never call a model and never touch the network. Only two hooks are wai
 ### What is not captured
 
 - **Sessions inside the data home**, such as asking Claude about your own worklog. Only a timestamp and the ticket you mention are recorded, so that the time counts, never the content.
-- **A repo that contains a `.worklog-ignore` file.** Nothing is captured there, and the background transcript scan skips it too.
+- **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, the background transcript scan skips it too, and no file in it is filed as a ticket artifact, even when a session elsewhere edits it.
 - **Anything while capture is paused**, from `/cg:pause` until `/cg:pause resume`.
 - **Folders outside `capture_scope.include_paths`, or inside `capture_scope.exclude_paths`.**
 - **The engine's own `claude -p` and git processes.** They carry `CHITRAGUPTA_INTERNAL=1`, and the hooks ignore them.
 
-A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules.
+A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder; a session in your home folder itself is skipped.
 
 ## What stays local
 
@@ -142,7 +142,7 @@ The dashboard makes no external requests. Mermaid is served from the plugin itse
 ## Opting out
 
 - **Pause capture:** `/cg:pause`.
-- **Stop capture in one repo:** add a `.worklog-ignore` file to it.
+- **Stop capture in one repo or folder tree:** add a `.worklog-ignore` file to it; it covers every folder below it.
 - **Stop capture in a folder:** add it to `capture_scope.exclude_paths`.
 - **Stop pushing:** clear `github_remote`.
 - **Stop Slack:** set `jira_worklog.slack.enabled: false`.

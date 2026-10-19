@@ -248,6 +248,8 @@ def scan_inbox(cfg, state):
         seen[h] = n
         m = _INBOX_TICKET.match(s)
         ticket, text_ = (m.group(1).upper(), m.group(2)) if m else (None, re.sub(r"^[-*]\s*", "", s))
+        if ticket and common.is_placeholder(ticket):  # a configured example key, e.g. a copied hint line
+            ticket, text_ = None, re.sub(r"^[-*]\s*", "", s)
         out.append({"hash": h, "ts": common.now_iso(), "ticket": ticket, "text": redact(text_)[:1000]})
     state["inbox_hashes"] = seen
     return out

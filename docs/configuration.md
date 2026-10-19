@@ -26,10 +26,11 @@ A minimal config after setup:
 |---|---|---|---|
 | `worklog_home` | string | the resolved data home | Absolute path of the data home. Informational; the home itself is resolved as described [below](#data-home-resolution). |
 | `github_remote` | string | `""` | The only push target, for example `https://github.com/you/worklog`. Empty means nothing is pushed. A local folder or `file://` remote also works. It must be a **private** GitHub repo; see [privacy.md](privacy.md). |
-| `ticket_prefixes` | list of strings | `[]` | Jira project keys, for example `["ABC", "OPS"]`. Grows by itself when a branch names a new UPPERCASE prefix. |
+| `ticket_prefixes` | list of strings | `[]` | Jira project keys, for example `["ABC", "OPS"]`. Grows by itself when a branch names a new UPPERCASE prefix, but only in captured work: never from a folder outside the capture scope, one with `.worklog-ignore` (here or above), the system temp folder, or Chitragupta's own folders (data home, runtime, plugin). |
+| `placeholder_tickets` | list of strings | `[]` | Example ticket keys that are never work, for example `["ABC-0000"]`. Together with `render.example_ticket` and `jira_worklog.example_ticket` they are never detected as tickets (in prompts, branches, the inbox or extraction results), never get time in the evening worklog, never get a ticket hub and never cause a Jira call. The built-in default example `ABC-1234` counts only when listed here. |
 | `capture_scope.include_paths` | list of paths | `[]` | If not empty, capture happens only under these folders. Empty means everywhere. |
 | `capture_scope.exclude_paths` | list of paths | `[]` | Never capture under these folders. The data home itself is always time-only (see [privacy.md](privacy.md)). |
-| `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from sessions. |
+| `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from captured sessions, with the same limits as `ticket_prefixes`. |
 | `git_author_emails` | list of strings | `[]` | Your commit emails, for example `["you@acme.test"]`. They filter "my commits" and identify you in Jira facts. The last one is also the default Slack lookup email. |
 | `bruno_collections` | list of paths | `[]` | Bruno collections outside the data home. Request edits there show up under "Outside Claude Code". |
 | `sql_script_dirs` | list of paths | `[]` | Folders of `.sql` scripts to watch. |
@@ -96,11 +97,11 @@ Absolute paths to executables. Setup fills in any that are empty and replaces a 
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `render.example_ticket` | string | `"ABC-1234"` | Ticket key used in examples inside generated text, such as the "unfiled artifacts" hint and the data home's `.worklog\README.md`. |
+| `render.example_ticket` | string | `"ABC-1234"` | Ticket key used in examples inside generated text, such as the "unfiled artifacts" hint and the data home's `.worklog\README.md`. A value you set is a placeholder: never treated as a ticket (see `placeholder_tickets`). |
 
 ## `artifacts`
 
-Files you produce (Write/Edit output, untracked repo files, published links, plans, `_drop\`) are filed under `tickets\<KEY>\artifacts\`.
+Files you produce (Write/Edit output, untracked repo files, published links, plans, `_drop\`) are filed under `tickets\<KEY>\artifacts\`. Files in a folder with `.worklog-ignore` (in it or above it), and Chitragupta's own files (the data home outside `_drop\` and the ticket folders, the runtime and settings folder, the plugin), are never filed.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
@@ -134,7 +135,7 @@ These settings control the 20:00 message: your day laid out as Jira worklog entr
 | `jira_worklog.point_minutes` | int | `15` | Time credited to a single point event, such as one of your Jira comments. |
 | `jira_worklog.late_days` | int | `3` | Unsent days up to this many days back are still sent late, with an age header. |
 | `jira_worklog.correction_debounce_minutes` | int | `15` | Wait this long after a change to an already-sent day before sending one "Corrected update". |
-| `jira_worklog.example_ticket` | string | `"ABC-1234"` | Ticket key in the "nothing tracked today" nudge. |
+| `jira_worklog.example_ticket` | string | `"ABC-1234"` | Ticket key in the "nothing tracked today" nudge. A value you set is a placeholder: it never gets time (see `placeholder_tickets`). |
 
 ### The message and its preview
 

@@ -90,6 +90,8 @@ def path_within(child, parent):
 
 # --------------------------------------------------------------------------- config
 
+DEFAULT_EXAMPLE_TICKET = "ABC-1234"  # the built-in example key (a placeholder only when listed in placeholder_tickets)
+
 DEFAULT_CONFIG = {
     "worklog_home": "",
     "github_remote": "",
@@ -114,7 +116,7 @@ DEFAULT_CONFIG = {
     "extra_sensitive_patterns": [],
     "allow_patterns": [],
     # Example ticket key shown in generated text (daily "unfiled artifacts" hint, README examples).
-    "render": {"example_ticket": "ABC-1234"},
+    "render": {"example_ticket": DEFAULT_EXAMPLE_TICKET},
     "reminders": {"mcp": True},  # weekly SessionStart line when Slack/Jira isn't connected
     # MCP jobs are off until configured; the database MCP's server name comes only from the user's config.
     "mcp": {"daily_call_budget": 10, "jira": {"enabled": False}, "database": {"enabled": False, "label": "database MCP"}},
@@ -138,6 +140,7 @@ def load_config():
     except (OSError, ValueError):
         cfg = {}
     cfg = _merge(json.loads(json.dumps(DEFAULT_CONFIG)), cfg)  # deep copy: callers may mutate cfg
+    set_placeholders(cfg)
     if not cfg.get("worklog_home"):
         cfg["worklog_home"] = home().replace("\\", "/")
     return cfg
@@ -284,8 +287,48 @@ _TICKET_ANY = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9})-(\d{1,6})(?![A-Z
 _TICKET_ANY_I = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,6})(?![A-Za-z0-9])")
 
 
+_KEY_RX = re.compile(r"^([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,6})$")
+_PLACEHOLDERS = frozenset()  # set by load_config(): the example keys of the loaded config
+
+
+def ticket_key(s):
+    """Canonical form of a ticket key (ABC-0042 -> ABC-42), or None."""
+    m = _KEY_RX.match(str(s or "").strip())
+    return "%s-%s" % (m.group(1).upper(), int(m.group(2))) if m else None
+
+
+def placeholder_tickets(cfg):
+    """Ticket keys that are examples, never work: the configured example tickets (render.example_ticket,
+    jira_worklog.example_ticket) and the optional `placeholder_tickets` list. The built-in default example is a
+    placeholder only when it is listed there. They are never detected as tickets and never get time, a hub or a
+    Jira call."""
+    cfg = cfg or {}
+    out = set()
+    for v in ((cfg.get("render") or {}).get("example_ticket"), (cfg.get("jira_worklog") or {}).get("example_ticket")):
+        k = ticket_key(v)
+        if k and k != DEFAULT_EXAMPLE_TICKET:
+            out.add(k)
+    lst = cfg.get("placeholder_tickets") or []
+    for v in lst if isinstance(lst, list) else []:
+        k = ticket_key(v)
+        if k:
+            out.add(k)
+    return frozenset(out)
+
+
+def set_placeholders(cfg):
+    global _PLACEHOLDERS
+    _PLACEHOLDERS = placeholder_tickets(cfg)
+
+
+def is_placeholder(t):
+    """True for a configured example ticket key (see placeholder_tickets) of the last loaded config."""
+    return bool(t) and bool(_PLACEHOLDERS) and ticket_key(t) in _PLACEHOLDERS
+
+
 def find_tickets(text, prefixes):
-    """Ticket keys in free text, limited to configured prefixes, in order of appearance (unique)."""
+    """Ticket keys in free text, limited to configured prefixes, in order of appearance (unique). Configured
+    example keys (placeholder_tickets) are never tickets."""
     if not text or not prefixes:
         return []
     allowed = {p.upper() for p in prefixes}
@@ -294,7 +337,7 @@ def find_tickets(text, prefixes):
         p = m.group(1)
         if p in allowed and p not in TICKET_DENY:
             key = "%s-%s" % (p, int(m.group(2)))
-            if key not in out:
+            if key not in out and key not in _PLACEHOLDERS:
                 out.append(key)
     return out
 
@@ -309,7 +352,7 @@ def ticket_from_branch(branch, prefixes):
         p = m.group(1).upper()
         if p in TICKET_DENY or p[0].isdigit():
             continue
-        if p in allowed or m.group(1).isupper():
+        if (p in allowed or m.group(1).isupper()) and "%s-%s" % (p, int(m.group(2))) not in _PLACEHOLDERS:
             return "%s-%s" % (p, int(m.group(2)))
     return None
 
@@ -433,5 +476,84 @@ def scope_allows(cwd, cfg):
     return True
 
 
+IGNORE_FILE = ".worklog-ignore"
+_IGNORE_WALK_MAX = 40
+
+
+def path_ignored(path):
+    """True when a `.worklog-ignore` file sits in `path` or in any folder above it, up to and including the user's
+    home folder (never above it), or up to the drive root for paths outside the home folder. So a nested repo
+    inside an ignored checkout (its own git repo, a dev data home…) is ignored too. A few stat calls and no cache:
+    cheap enough for a hook, and a marker added while the tick runs counts at once."""
+    if not path:
+        return False
+    try:
+        d = os.path.abspath(path)
+    except (TypeError, ValueError):
+        return False
+    stop = norm_path(os.path.expanduser("~"))
+    for _ in range(_IGNORE_WALK_MAX):
+        if os.path.exists(os.path.join(d, IGNORE_FILE)):
+            return True
+        if norm_path(d) == stop:
+            return False
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    return False
+
+
 def repo_ignored(repo_root):
-    return bool(repo_root) and os.path.exists(os.path.join(repo_root, ".worklog-ignore"))
+    """A repo (or any folder) is ignored when it, or a folder above it, has `.worklog-ignore` (see path_ignored)."""
+    return bool(repo_root) and path_ignored(repo_root)
+
+
+def capture_mode(cwd, cfg):
+    """What capture does for a session in `cwd`, one rule set for the hooks and the transcript safety net:
+    "time" inside the data home (timestamp + ticket mentioned, never content), None when not captured (outside the
+    capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings folder), else "full"."""
+    if not cwd:
+        return None
+    if path_within(cwd, home()):
+        return "time"
+    if not scope_allows(cwd, cfg) or path_within(cwd, user_dir()) or path_ignored(cwd):
+        return None
+    return "full"
+
+
+def own_folders():
+    """Chitragupta's own folders: the data home, the runtime and settings folder, and the plugin (or runtime copy)
+    this code runs from."""
+    return [home(), user_dir(), os.path.dirname(PACKAGE_DIR)]
+
+
+def in_own_folder(path):
+    return bool(path) and any(path_within(path, p) for p in own_folders())
+
+
+def temp_dirs():
+    """The system temp folder(s): scratch and test folders live there, never work to learn from. The same places
+    tempfile.gettempdir() looks (that module is only for chitragupta/safety)."""
+    cands = [os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")]
+    if os.name == "nt":
+        cands += [os.path.join(os.environ.get("LOCALAPPDATA") or "", "Temp") if os.environ.get("LOCALAPPDATA") else "",
+                  os.path.join(os.environ.get("SystemRoot") or "C:\\Windows", "Temp")]
+    else:
+        cands += ["/tmp", "/var/tmp", "/usr/tmp"]
+    out = []
+    for p in cands:
+        if p and norm_path(p) not in [norm_path(x) for x in out]:
+            out.append(p)
+    return out
+
+
+def learnable_path(path, cfg):
+    """May the engine learn settings (a new ticket prefix, a repo to watch) from work in this folder? Only from
+    captured work: inside the capture scope, not ignored (.worklog-ignore here or above), not under the system temp
+    folder, and not inside Chitragupta's own folders (data home, runtime, plugin)."""
+    if not path or not scope_allows(path, cfg) or in_own_folder(path):
+        return False
+    if any(path_within(path, t) for t in temp_dirs()):
+        return False
+    return not path_ignored(path)

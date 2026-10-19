@@ -228,14 +228,13 @@ def _capture(event, common):
     inp = _read_stdin()
     cwd = inp.get("cwd") or os.getcwd()
     cfg = common.load_config()
-    if common.path_within(cwd, common.home()):
+    mode = common.capture_mode(cwd, cfg)  # the same rules the transcript safety net applies
+    if mode == "time":
         _time_only(event, inp, cfg, common)
         return
-    if not common.scope_allows(cwd, cfg):
+    if mode != "full":
         return
     repo_root = common.find_repo_root(cwd)
-    if common.repo_ignored(repo_root) or (repo_root and common.path_within(repo_root, common.home())):
-        return
     from .redact import redact
 
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
