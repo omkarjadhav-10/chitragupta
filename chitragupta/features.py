@@ -47,7 +47,8 @@ class Features:
             found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), self.prefixes)
             if found:
                 session["sticky"] = found[0]
-        return ev.get("_t") or common.ticket_from_branch(ev.get("branch"), self.prefixes) or ev.get("ticket") or session.get("sticky")
+        raw_t = None if common.is_placeholder(ev.get("ticket")) else ev.get("ticket")  # raw lines from before
+        return ev.get("_t") or common.ticket_from_branch(ev.get("branch"), self.prefixes) or raw_t or session.get("sticky")
 
     def slot(self, day, t):
         dd = self.store.day(day)

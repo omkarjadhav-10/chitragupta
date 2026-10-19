@@ -154,6 +154,8 @@ def valid_ticket(t, known):
         return None
     if known is not None and t.split("-")[0] not in known:
         return None
+    if common.is_placeholder(t):  # a configured example key, e.g. from a hint line the model read
+        return None
     return t
 
 

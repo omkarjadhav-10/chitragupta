@@ -90,6 +90,8 @@ def path_within(child, parent):
 
 # --------------------------------------------------------------------------- config
 
+DEFAULT_EXAMPLE_TICKET = "ABC-1234"  # the built-in example key (a placeholder only when listed in placeholder_tickets)
+
 DEFAULT_CONFIG = {
     "worklog_home": "",
     "github_remote": "",
@@ -114,7 +116,7 @@ DEFAULT_CONFIG = {
     "extra_sensitive_patterns": [],
     "allow_patterns": [],
     # Example ticket key shown in generated text (daily "unfiled artifacts" hint, README examples).
-    "render": {"example_ticket": "ABC-1234"},
+    "render": {"example_ticket": DEFAULT_EXAMPLE_TICKET},
     "reminders": {"mcp": True},  # weekly SessionStart line when Slack/Jira isn't connected
     # MCP jobs are off until configured; the database MCP's server name comes only from the user's config.
     "mcp": {"daily_call_budget": 10, "jira": {"enabled": False}, "database": {"enabled": False, "label": "database MCP"}},
@@ -138,6 +140,7 @@ def load_config():
     except (OSError, ValueError):
         cfg = {}
     cfg = _merge(json.loads(json.dumps(DEFAULT_CONFIG)), cfg)  # deep copy: callers may mutate cfg
+    set_placeholders(cfg)
     if not cfg.get("worklog_home"):
         cfg["worklog_home"] = home().replace("\\", "/")
     return cfg
@@ -284,8 +287,48 @@ _TICKET_ANY = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9})-(\d{1,6})(?![A-Z
 _TICKET_ANY_I = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,6})(?![A-Za-z0-9])")
 
 
+_KEY_RX = re.compile(r"^([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,6})$")
+_PLACEHOLDERS = frozenset()  # set by load_config(): the example keys of the loaded config
+
+
+def ticket_key(s):
+    """Canonical form of a ticket key (ABC-0042 -> ABC-42), or None."""
+    m = _KEY_RX.match(str(s or "").strip())
+    return "%s-%s" % (m.group(1).upper(), int(m.group(2))) if m else None
+
+
+def placeholder_tickets(cfg):
+    """Ticket keys that are examples, never work: the configured example tickets (render.example_ticket,
+    jira_worklog.example_ticket) and the optional `placeholder_tickets` list. The built-in default example is a
+    placeholder only when it is listed there. They are never detected as tickets and never get time, a hub or a
+    Jira call."""
+    cfg = cfg or {}
+    out = set()
+    for v in ((cfg.get("render") or {}).get("example_ticket"), (cfg.get("jira_worklog") or {}).get("example_ticket")):
+        k = ticket_key(v)
+        if k and k != DEFAULT_EXAMPLE_TICKET:
+            out.add(k)
+    lst = cfg.get("placeholder_tickets") or []
+    for v in lst if isinstance(lst, list) else []:
+        k = ticket_key(v)
+        if k:
+            out.add(k)
+    return frozenset(out)
+
+
+def set_placeholders(cfg):
+    global _PLACEHOLDERS
+    _PLACEHOLDERS = placeholder_tickets(cfg)
+
+
+def is_placeholder(t):
+    """True for a configured example ticket key (see placeholder_tickets) of the last loaded config."""
+    return bool(t) and bool(_PLACEHOLDERS) and ticket_key(t) in _PLACEHOLDERS
+
+
 def find_tickets(text, prefixes):
-    """Ticket keys in free text, limited to configured prefixes, in order of appearance (unique)."""
+    """Ticket keys in free text, limited to configured prefixes, in order of appearance (unique). Configured
+    example keys (placeholder_tickets) are never tickets."""
     if not text or not prefixes:
         return []
     allowed = {p.upper() for p in prefixes}
@@ -294,7 +337,7 @@ def find_tickets(text, prefixes):
         p = m.group(1)
         if p in allowed and p not in TICKET_DENY:
             key = "%s-%s" % (p, int(m.group(2)))
-            if key not in out:
+            if key not in out and key not in _PLACEHOLDERS:
                 out.append(key)
     return out
 
@@ -309,7 +352,7 @@ def ticket_from_branch(branch, prefixes):
         p = m.group(1).upper()
         if p in TICKET_DENY or p[0].isdigit():
             continue
-        if p in allowed or m.group(1).isupper():
+        if (p in allowed or m.group(1).isupper()) and "%s-%s" % (p, int(m.group(2))) not in _PLACEHOLDERS:
             return "%s-%s" % (p, int(m.group(2)))
     return None
 

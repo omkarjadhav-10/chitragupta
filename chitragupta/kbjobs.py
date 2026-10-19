@@ -67,7 +67,7 @@ class KBJobs:
     # ------------------------------------------------------------------ Jira cards
     def jira_cards(self, today, limit=2, force=None):
         dd = self.a.store.day(today)
-        want = force or sorted(dd.get("tickets") or {})
+        want = force or sorted(t for t in dd.get("tickets") or {} if not common.is_placeholder(t))
         n = 0
         for t in want:
             if n >= limit:

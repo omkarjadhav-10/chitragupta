@@ -345,7 +345,7 @@ class Agent:
                     self.git_events.append(ev)
                 self._learn(ev)
                 t = ev.get("ticket") or common.ticket_from_branch(ev.get("branch"), self.prefixes)
-                if t:
+                if t and not common.is_placeholder(t):  # raw lines written before a key was a placeholder
                     recent.append([ev.get("ts"), t])
             dd = self.store.day(day)
             meta = dd["sessions"].setdefault(sid, {})
