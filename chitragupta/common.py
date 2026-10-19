@@ -466,6 +466,19 @@ def repo_ignored(repo_root):
     return bool(repo_root) and path_ignored(repo_root)
 
 
+def capture_mode(cwd, cfg):
+    """What capture does for a session in `cwd`, one rule set for the hooks and the transcript safety net:
+    "time" inside the data home (timestamp + ticket mentioned, never content), None when not captured (outside the
+    capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings folder), else "full"."""
+    if not cwd:
+        return None
+    if path_within(cwd, home()):
+        return "time"
+    if not scope_allows(cwd, cfg) or path_within(cwd, user_dir()) or path_ignored(cwd):
+        return None
+    return "full"
+
+
 def own_folders():
     """Chitragupta's own folders: the data home, the runtime and settings folder, and the plugin (or runtime copy)
     this code runs from."""

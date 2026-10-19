@@ -142,5 +142,94 @@ class LearnTests(ScopeCase):
         self.assertFalse(common.learnable_path(_repo(self.work, "in-temp"), common.load_config()))
 
 
+# --------------------------------------------------------------------------- FX-8 (c) the transcript safety net
+
+class SafetyNetTests(ScopeCase):
+    def setUp(self):
+        super().setUp()
+        self.tdir = os.path.join(self.work, "transcripts")
+        os.environ["CHITRAGUPTA_TRANSCRIPTS_DIR"] = self.tdir
+        self.n = 0
+
+    def transcript(self, cwd, prompt="look at DEMO-7 please", branch=None):
+        """A Claude Code transcript the hooks never saw, old enough for the safety net to read."""
+        import time
+        from chitragupta import common
+        self.n += 1
+        sid = "sess-%d" % self.n
+        d = os.path.join(self.tdir, "proj-%d" % self.n)
+        os.makedirs(d)
+        ts = common.now_iso()
+        recs = [{"type": "user", "cwd": cwd, "sessionId": sid, "timestamp": ts, "gitBranch": branch,
+                 "message": {"role": "user", "content": prompt}},
+                {"type": "assistant", "cwd": cwd, "sessionId": sid, "timestamp": ts, "gitBranch": branch,
+                 "message": {"role": "assistant", "content": [{"type": "text", "text": "SECRET_CONTENT answer"}]}}]
+        p = os.path.join(d, sid + ".jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in recs))
+        old = time.time() - 600
+        os.utime(p, (old, old))
+        return sid
+
+    def run_net(self):
+        from chitragupta import agent
+        a = agent.Agent()
+        a.state["transcripts_baselined"] = True
+        a.safety_net(False)
+        return a
+
+    def rows(self):
+        return [json.loads(l) for l in self.raw_lines()]
+
+    def test_home_folder_session_is_not_recovered(self):
+        user_home = os.path.join(self.work, "me")  # the home folder itself: not a repo, not an included folder
+        os.makedirs(user_home)
+        self.transcript(user_home)
+        self.run_net()
+        self.assertEqual(self.rows(), [])
+
+    def test_ignored_excluded_and_own_folders_are_skipped(self):
+        checkout = _repo(self.work, "checkout")
+        _touch(os.path.join(checkout, ".worklog-ignore"))
+        self.transcript(_repo(checkout, ".dev-home"))
+        excluded = _repo(self.work, "excluded")
+        cfg_path = os.path.join(self.home, ".worklog", "config.json")
+        cfg = json.loads(rd(cfg_path))
+        cfg["capture_scope"]["exclude_paths"] = [excluded]
+        write_config(self.home, cfg)
+        self.transcript(excluded)
+        self.transcript(_repo(self.user_dir, "runtime-copy"))
+        self.run_net()
+        self.assertEqual(self.rows(), [])
+
+    def test_data_home_session_is_time_only(self):
+        self.transcript(self.home)
+        self.run_net()
+        rows = self.rows()
+        self.assertTrue(rows)
+        self.assertTrue(all(r.get("source") == "time-only" and "payload" not in r for r in rows), rows)
+        self.assertNotIn("SECRET_CONTENT", "".join(self.raw_lines()))
+        self.assertIn("DEMO-7", [r.get("ticket") for r in rows])
+
+    def test_hook_recorded_time_only_session_is_not_recorded_twice(self):
+        sid = self.transcript(self.home)
+        from chitragupta import common
+        tdir = os.path.join(self.home, ".worklog", "raw", common.workday(common.now(), common.load_config()), "time")
+        os.makedirs(tdir)
+        with open(os.path.join(tdir, sid + ".jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": common.now_iso(), "event": "user-prompt", "session_id": sid,
+                                "source": "time-only", "ticket": None}) + "\n")
+        self.run_net()
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_repo_session_is_recovered(self):
+        repo = _repo(self.work, "shop-api")
+        self.transcript(repo, branch="feature/DEMO-1-selftest")
+        self.run_net()
+        rows = self.rows()
+        self.assertEqual({r["source"] for r in rows}, {"transcript"})
+        self.assertEqual({r["ticket"] for r in rows}, {"DEMO-1"})
+
+
 if __name__ == "__main__":
     unittest.main()

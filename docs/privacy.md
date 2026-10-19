@@ -26,7 +26,7 @@ The hooks never call a model and never touch the network. Only the SessionStart 
 - **Folders outside `capture_scope.include_paths`, or inside `capture_scope.exclude_paths`.**
 - **The engine's own `claude -p` and git processes.** They carry `CHITRAGUPTA_INTERNAL=1`, and the hooks ignore them.
 
-A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules.
+A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder; a session in your home folder itself is skipped.
 
 ## What stays local
 
