@@ -132,12 +132,13 @@ class Features:
     # ------------------------------------------------------------------ after extraction
     def after_extraction(self, res, ctx):
         known = {p.upper() for p in self.prefixes}
-        default_t = ctx["candidates"][0] if len(ctx.get("candidates") or []) == 1 else None
         day = ctx["day"]
         by_t = {}
         for kind in ("api_calls", "data_flow", "table_relations", "artifacts"):
             for it in res.get(kind) or []:
-                t = storemod.valid_ticket(it.get("ticket"), known) or default_t
+                t = storemod.valid_ticket(it.get("ticket"), known)
+                t = None if t and common.is_parent_ticket(t, self.cfg) else t
+                t = t or storemod.turn_of(ctx, it.get("time"))[0]
                 if t:
                     by_t.setdefault(t, {}).setdefault(kind, []).append(it)
         for t, parts in by_t.items():
@@ -476,7 +477,7 @@ class Features:
                     ctx = {"day": day, "session": sid, "time": common.hhmm(devs[0].get("ts")), "repo": s.get("repo_root"),
                            "branch": s.get("branch"), "candidates": cands}
                     for chunk in extract.build_digests(devs, meta, cands, already):
-                        jobs.append((sid, ctx, chunk))
+                        jobs.append((sid, dict(ctx, default=chunk.default, turns=chunk.turns), chunk))
             pending_sids.append(sid)
             log("captured %s (%s) tickets=%s enriched=%d" % (sid[:8], parts[0][0], cands, len(enriched)))
         # model calls in parallel, merged in a fixed order so the result is deterministic

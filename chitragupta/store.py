@@ -163,7 +163,8 @@ def touch_ticket_meta(store, t, day, repo=None, branch=None):
     tk = store.ticket(t)
     if repo:
         tk["repos"] = _union(tk["repos"], [os.path.basename(repo.rstrip("/\\"))])
-    if branch and not branch.startswith("detached@"):
+    # a branch belongs to the ticket it names: a turn about another ticket on this branch doesn't take it
+    if branch and not branch.startswith("detached@") and common.ticket_from_branch(branch, [t.split("-")[0]]) == t:
         tk["branches"] = _union(tk["branches"], [branch])
         if not tk["title"]:
             slug = re.sub(r"^.*?" + re.escape(t) + r"[-_/]?", "", branch, flags=re.I)
@@ -178,12 +179,32 @@ def touch_ticket_meta(store, t, day, repo=None, branch=None):
     return tk
 
 
+def turn_of(ctx, hhmm=None):
+    """(ticket, src) an extracted item falls back to when the model gave it no ticket: the turn it happened in (the
+    chunk's `turns`, by the item's HH:MM time), else the chunk's dominant turn (`default`). Without turns (older
+    callers) the session-day's only candidate, as before."""
+    turns = [t for t in ctx.get("turns") or [] if t]
+    if turns:
+        hit = None
+        for start, t, src in turns:
+            if hhmm and start and start <= hhmm:
+                hit = (t, src)
+        if hit and hit[0]:
+            return hit
+        d = ctx.get("default")
+        return (d, next((s for _, t, s in turns if t == d), None)) if d else (None, None)
+    if "default" in ctx:
+        return ctx.get("default"), None
+    c = ctx.get("candidates") or []
+    return (c[0], None) if len(c) == 1 else (None, None)
+
+
 def merge_extraction(store, res, ctx, prefixes):
     """Merge one validated extraction result. ctx: day, session, time, repo, branch, candidates."""
     day, sid = ctx["day"], ctx["session"]
     known = {p.upper() for p in prefixes}
     dd = store.day(day)
-    default_t = ctx["candidates"][0] if len(ctx.get("candidates") or []) == 1 else None
+    default_t = turn_of(ctx)[0]
     gkey = group_key(ctx.get("repo"), ctx.get("branch"))
 
     cfg = common.load_config()
@@ -225,11 +246,16 @@ def merge_extraction(store, res, ctx, prefixes):
         title = (it.get("title") or "").strip()[:90]
         if not title:
             continue
-        t = resolve(it.get("ticket")) or default_t
+        tt, tsrc = turn_of(ctx, it.get("time"))
+        t = resolve(it.get("ticket"))
+        src = (tsrc if t == tt else "model") if t else tsrc
+        t = t or tt
         rec = {"kind": kind, "title": title, "detail": (it.get("detail") or "").strip(),
                "evidence": [e for e in (it.get("evidence") or []) if e][:8],
                "confidence": it.get("confidence") or "likely", "date": day,
                "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
+        if t and src:
+            rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
         _merge_item(store, dd, t, gkey, rec, it.get("updates"), tslot)
 
     for q in res.get("queries") or []:

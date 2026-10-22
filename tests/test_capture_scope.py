@@ -224,7 +224,7 @@ class SafetyNetTests(ScopeCase):
 
     def test_repo_session_is_recovered(self):
         repo = _repo(self.work, "shop-api")
-        self.transcript(repo, branch="feature/DEMO-1-selftest")
+        self.transcript(repo, prompt="look at the login please", branch="feature/DEMO-1-selftest")  # no id: the branch
         self.run_net()
         rows = self.rows()
         self.assertEqual({r["source"] for r in rows}, {"transcript"})

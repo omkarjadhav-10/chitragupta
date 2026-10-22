@@ -243,7 +243,7 @@ def _capture(event, common):
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
     branch = common.read_branch(repo_root)
     prefixes = cfg.get("ticket_prefixes") or []
-    ticket = common.ticket_from_branch(branch, prefixes)
+    pt = ps = None  # the prompt's ticket; the hook keeps no turn memory (the engine recomputes each turn)
 
     payload = {}
     if event == "session-start":
@@ -252,8 +252,7 @@ def _capture(event, common):
     elif event == "user-prompt":
         prompt = inp.get("user_prompt") or inp.get("prompt") or ""
         payload = {"prompt": redact(common.truncate(str(prompt), LIMITS["prompt"]))}
-        if not ticket:
-            ticket = common.prompt_ticket(str(prompt), prefixes, cfg)[0]
+        pt, ps = common.prompt_ticket(str(prompt), prefixes, cfg)
     elif event == "post-tool":
         tool = str(inp.get("tool_name") or "")
         env = _qa_env(tool, inp.get("tool_input"), cfg, common)
@@ -287,11 +286,12 @@ def _capture(event, common):
     elif event == "session-end":
         payload = {"reason": inp.get("reason")}
 
+    ticket, src = common.ticket_for_turn(cfg, pt, ps, branch, repo_root)
     ts = common.now_iso()
     ev = {
         "ts": ts, "event": event, "session_id": sid, "source": "hook",
         "transcript_path": inp.get("transcript_path"), "cwd": cwd, "repo_root": repo_root,
-        "branch": branch, "ticket": ticket, "agent_type": inp.get("agent_type"),
+        "branch": branch, "ticket": ticket, "ticket_src": src, "agent_type": inp.get("agent_type"),
         "payload": payload,
     }
     day = common.workday(common.now(), cfg)

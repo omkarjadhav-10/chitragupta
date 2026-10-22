@@ -147,24 +147,38 @@ def time_only_sids():
 
 
 def attribute(events, prefixes, cfg=None):
-    """Ticket per event: branch ticket, else the latest ticket mentioned in my prompts (sticky; common.prompt_ticket).
+    """Ticket per event, decided per turn (a user prompt and every event of that session until its next prompt) by
+    common.ticket_for_turn: the prompt's ticket -> the branch of the session's own repo (its first repo; a work branch
+    only) -> the last ticket named earlier in the session. Sets ev["_t"] and ev["_src"]; returns `events` (same order).
     A parent issue (an Epic…) is never an event's ticket."""
-    cfg = cfg if cfg is not None else common.load_config()
-    sticky = {}
+    cfg = dict(cfg if cfg is not None else common.load_config(), ticket_prefixes=list(prefixes or []))
+    turn, carry, own, own_branch, memo = {}, {}, {}, {}, {}
     for ev in sorted(events, key=lambda e: e.get("ts") or ""):
         sid = ev.get("session_id")
-        bt = common.ticket_from_branch(ev.get("branch"), prefixes)
-        if bt and common.is_parent_ticket(bt, cfg):
-            bt = None
-        if ev.get("event") == "user-prompt" and ev.get("_time"):  # time-only: the prompt's ticket, no text
-            if ev.get("ticket"):
-                sticky[sid] = ev["ticket"]
-        elif ev.get("event") == "user-prompt":
-            t = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg)[0]
+        repo = ev.get("repo_root")
+        if repo and sid not in own:
+            own[sid] = repo
+        if ev.get("branch") and (not repo or common.norm_path(repo) == common.norm_path(own.get(sid))):
+            own_branch[sid] = ev["branch"]
+        if ev.get("event") == "user-prompt":
+            if ev.get("_time"):  # time-only: the ticket its prompt named, no text
+                t, src = (ev.get("ticket"), "prompt") if ev.get("ticket") else (None, None)
+            else:
+                t, src = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg)
+            turn[sid] = (t, src)
             if t:
-                sticky[sid] = t
-        ev["_t"] = bt or sticky.get(sid)
+                carry[sid] = t
+        pt, ps = turn.get(sid) or (None, None)
+        key = (pt, ps, own_branch.get(sid), own.get(sid), carry.get(sid))
+        if key not in memo:
+            memo[key] = common.ticket_for_turn(cfg, pt, ps, own_branch.get(sid), None, own.get(sid), carry.get(sid))
+        ev["_t"], ev["_src"] = memo[key]
     return events
+
+
+def fallback_keys(dd, sid):
+    """The day's "AI summary pending" keys of one session (see Agent.set_fallback)."""
+    return [k for k in dd.get("fallback") or {} if k == sid or k.startswith(sid + "|")]
 
 
 def blocks_minutes(stamps):
@@ -246,6 +260,7 @@ class Agent:
             st["cwd"] = cwd
             st["offset"] = new_off
             full = timed = 0
+            turn, carry, own_repo = (None, None), None, None
             for e in events:
                 ecwd = e.get("cwd") or cwd
                 k = common.norm_path(ecwd)
@@ -272,7 +287,12 @@ class Agent:
                       "transcript_path": path, "cwd": ecwd, "repo_root": repo_root,
                       "branch": e.get("branch") or meta.get("branch"), "ticket": None, "agent_type": None,
                       "payload": e["payload"]}
-                ev["ticket"] = common.ticket_from_branch(ev["branch"], self.prefixes)
+                if e["event"] == "user-prompt":  # a turn starts: its prompt's ticket (common.ticket_for_turn)
+                    turn = common.prompt_ticket((e.get("payload") or {}).get("prompt", ""), self.prefixes, self.cfg)
+                    carry = turn[0] or carry
+                own_repo = own_repo or repo_root
+                ev["ticket"], ev["ticket_src"] = common.ticket_for_turn(self.cfg, turn[0], turn[1], ev["branch"], repo_root,
+                                                                        own_repo, carry)
                 common.append_line(common.wl("raw", day, sid + ".jsonl"), json.dumps(ev, ensure_ascii=False))
                 full += 1
             if full or timed:
@@ -323,17 +343,15 @@ class Agent:
                 continue
             if size <= f["read"]:
                 continue
-            evs, new_off = read_lines(path, f["read"])
+            evs, new_off = self._read_turns(path, f["read"])
             f["read"] = new_off
-            evs = self._captured(evs)
             if not evs:
                 continue
             touched_days.add(day)
             if day not in s["days"]:
                 s["days"].append(day)
             try:
-                full = [dict(e) for e in evs if not e.get("_time")]
-                self.features.on_events(day, sid, s, attribute(full, self.prefixes, self.cfg))
+                self.features.on_events(day, sid, s, [dict(e) for e in evs if not e.get("_time")])
             except Exception:
                 common.log("agent", "features failed: " + traceback.format_exc())
             for ev in evs:
@@ -355,7 +373,7 @@ class Agent:
                 if ev.get("event") == "post-tool" and ev.get("repo_root"):
                     self.git_events.append(ev)
                 self._learn(ev)
-                t = ev.get("ticket") or common.ticket_from_branch(ev.get("branch"), self.prefixes)
+                t = ev.get("_t")  # the turn's ticket (common.ticket_for_turn)
                 if t and not common.is_placeholder(t):  # raw lines written before a key was a placeholder
                     recent.append([ev.get("ts"), t])
             dd = self.store.day(day)
@@ -389,6 +407,15 @@ class Agent:
                 self.cfg.setdefault("watched_repos", []).append(repo.replace("\\", "/"))
                 self.cfg_dirty = True
                 common.log("agent", "watching new repo %s" % repo)
+
+    def _read_turns(self, path, start, end=None, keep_time=True):
+        """Captured events of a raw file between byte offsets, each with its turn's ticket (_t, _src). The file's
+        earlier events are read as context, so a turn that began before `start` keeps its prompt's ticket.
+        Returns (events, new_offset)."""
+        before = self._captured(read_lines(path, 0, start)[0], keep_time) if start else []
+        evs, off = read_lines(path, start, end)
+        evs = self._captured(evs, keep_time)
+        return attribute(before + evs, self.prefixes, self.cfg)[len(before):], off
 
     def _captured(self, evs, keep_time=True):
         """Raw events under today's capture rules (common.capture_mode, memoized per folder for this run): events
@@ -524,14 +551,13 @@ class Agent:
         by_day = {}
         for path, f in sorted(s["files"].items()):
             if f["read"] > f["extracted"]:
-                evs, _ = read_lines(path, f["extracted"], f["read"])
+                evs, _ = self._read_turns(path, f["extracted"], f["read"], keep_time=False)
                 day = os.path.basename(os.path.dirname(path))
-                by_day.setdefault(day, []).extend(self._captured(evs, keep_time=False))
+                by_day.setdefault(day, []).extend(evs)
         if not by_day:
             s["pending_chars"] = 0
             return True
         for day, evs in sorted(by_day.items()):
-            evs = attribute([e for e in evs], self.prefixes, self.cfg)
             evs.sort(key=lambda e: e.get("ts") or "")
             if not any(e.get("event") in ("user-prompt", "stop", "post-tool") for e in evs):
                 continue
@@ -552,13 +578,15 @@ class Agent:
                 for chunk in extract.build_digests(all_evs, meta, cands, already):
                     res, c = extract.call_claude("extract", chunk, self.cfg)
                     cost += c
-                    storemod.merge_extraction(self.store, res, ctx, self.prefixes)
-                    self.features.after_extraction(res, ctx)
+                    cctx = dict(ctx, default=chunk.default, turns=chunk.turns)  # untagged items: their turn's ticket
+                    storemod.merge_extraction(self.store, res, cctx, self.prefixes)
+                    self.features.after_extraction(res, cctx)
                     self.jwl.merge_extraction(day, res, evs)
                 dd = self.store.day(day)
                 dd["stats"]["cost_usd"] = round((dd["stats"].get("cost_usd") or 0) + cost, 4)
                 dd["sessions"].setdefault(sid, {})["extracted"] = True
-                dd["fallback"].pop(sid, None)
+                for k in fallback_keys(dd, sid):
+                    dd["fallback"].pop(k, None)
                 self._add_cost(day, cost)
                 self.store.touch_day(day)
                 common.log("agent", "extracted %s day %s cands=%s cost=$%.4f" % (sid[:8], day, cands, cost))
@@ -592,14 +620,27 @@ class Agent:
         common.log("agent", "extraction failed %s: %s" % (sid[:8], msg))
 
     def set_fallback(self, day, sid, evs, ctx, reason):
-        fb = extract.fallback_summary(evs)
-        t = ctx["candidates"][0] if len(ctx.get("candidates") or []) == 1 else None
-        rec = dict(fb, session=sid, reason=reason, ticket=t, group=storemod.group_key(ctx.get("repo"), ctx.get("branch")))
+        """The "AI summary pending" entries of a session: one per turn ticket (key <sid>, or <sid>|<ticket> when the
+        pending events span several tickets), so each ticket shows only its own turns' files, commands and SQL."""
+        groups = {}
+        for e in evs:
+            groups.setdefault(e.get("_t"), []).append(e)
+        recs = {}
+        for t, gevs in groups.items():
+            fb = extract.fallback_summary(gevs)
+            if fb["files"] or fb["commands"] or fb["sql"]:
+                recs[t] = dict(fb, session=sid, reason=reason, ticket=t,
+                               group=storemod.group_key(ctx.get("repo"), ctx.get("branch")))
+        new = {(sid if len(recs) == 1 else "%s|%s" % (sid, t or "-")): r for t, r in recs.items()}
         dd = self.store.day(day)
-        if dd["fallback"].get(sid) != rec:
-            dd["fallback"][sid] = rec
-            if t:
-                self.ensure_tslot(day, t, ctx.get("repo"), ctx.get("branch"))
+        old = {k: dd["fallback"][k] for k in fallback_keys(dd, sid)}
+        if old != new:
+            for k in old:
+                dd["fallback"].pop(k, None)
+            dd["fallback"].update(new)
+            for t in recs:
+                if t:
+                    self.ensure_tslot(day, t, ctx.get("repo"), ctx.get("branch"))
             self.store.touch_day(day)
 
     def refresh_fallbacks(self):
@@ -611,8 +652,7 @@ class Agent:
                 if f["read"] <= f["extracted"]:
                     continue
                 day = os.path.basename(os.path.dirname(path))
-                evs, _ = read_lines(path, f["extracted"], f["read"])
-                evs = attribute(self._captured(evs, keep_time=False), self.prefixes, self.cfg)
+                evs, _ = self._read_turns(path, f["extracted"], f["read"], keep_time=False)
                 if not evs:
                     continue
                 cands = []

@@ -139,5 +139,199 @@ class ParentNeverGetsWorkTests(AttrCase):
         self.assertEqual(rows[0]["ticket"], "ABC-1001")
 
 
+# --------------------------------------------------------------------------- K1 one ticket per turn
+
+class TurnAttributionTests(AttrCase):
+    def att(self, evs):
+        from chitragupta import agent
+        out = agent.attribute([dict(e) for e in evs], ["ABC"])
+        return [e["_t"] for e in out], [e["_src"] for e in out]
+
+    def test_prompt_beats_branch_then_branch_returns(self):
+        b = "fix/ABC-1001-x"
+        t, src = self.att([ev("user-prompt", 10, 0, branch=b, prompt="look at ABC-1002 login"),
+                           ev("post-tool", 10, 2, branch=b), ev("stop", 10, 5, branch=b),
+                           ev("user-prompt", 10, 19, branch=b, prompt="continue"), ev("post-tool", 10, 20, branch=b)])
+        self.assertEqual(t, ["ABC-1002"] * 3 + ["ABC-1001"] * 2)
+        self.assertEqual(src, ["prompt"] * 3 + ["branch"] * 2)
+
+    def test_release_and_base_branches_never_win(self):
+        b = "release/ABC-1003/nov"
+        t, src = self.att([ev("user-prompt", 10, 0, branch=b, prompt="RCA of ABC-1002"), ev("post-tool", 10, 2, branch=b),
+                           ev("user-prompt", 10, 30, branch=b, prompt="how to reproduce"), ev("post-tool", 10, 31, branch=b)])
+        self.assertEqual(t, ["ABC-1002"] * 4)
+        self.assertEqual(src, ["prompt", "prompt", "carry", "carry"])
+        t, _ = self.att([ev("user-prompt", 11, 0, sid="s3", branch="qa", prompt="go"), ev("post-tool", 11, 1, sid="s3", branch="qa")])
+        self.assertEqual(t, [None, None])
+
+    def test_another_repos_branch_is_not_taken(self):
+        x, y = os.path.join(self.work, "shop-api"), os.path.join(self.work, "shop-ui")
+        t, src = self.att([ev("user-prompt", 10, 0, branch="fix/ABC-1001-x", repo=x, prompt="go on"),
+                           ev("post-tool", 10, 1, branch="fix/ABC-1001-x", repo=x),
+                           ev("post-tool", 10, 2, branch="fix/ABC-1368-ui", repo=y),
+                           ev("stop", 10, 3, branch="fix/ABC-1001-x", repo=x)])
+        self.assertEqual(t, ["ABC-1001"] * 4)
+        self.assertEqual(src, ["branch"] * 4)
+
+    def test_ticket_for_turn_order(self):
+        from chitragupta import common
+        cfg = common.load_config()
+        self.assertEqual(common.ticket_for_turn(cfg, "ABC-1002", "prompt", "fix/ABC-1001", carry="ABC-1009"),
+                         ("ABC-1002", "prompt"))
+        self.assertEqual(common.ticket_for_turn(cfg, None, None, "fix/ABC-1001", carry="ABC-1009"), ("ABC-1001", "branch"))
+        self.assertEqual(common.ticket_for_turn(cfg, None, None, "release/ABC-1003/x", carry="ABC-1009"),
+                         ("ABC-1009", "carry"))
+        self.assertEqual(common.ticket_for_turn(cfg, None, None, "uat"), (None, None))
+        self.assertEqual(common.ticket_for_turn(cfg, None, None, "fix/ABC-1001", repo="/w/ui", own_repo="/w/api",
+                                                carry="ABC-1009"), ("ABC-1009", "carry"))
+
+    def test_hook_writes_ticket_src(self):
+        from chitragupta import common
+        repo = self.repo("shop-api", "fix/ABC-1001-x")
+        env = self.child_env()
+        run_hook("user-prompt", {"session_id": "h2", "cwd": repo, "user_prompt": "look at ABC-1002"}, env)
+        run_hook("post-tool", {"session_id": "h2", "cwd": repo, "tool_name": "Read", "tool_input": {"file_path": "a.py"}}, env)
+        rows = [json.loads(l) for l in rd(common.wl("raw", common.workday(common.now(), common.load_config()),
+                                                     "h2.jsonl")).splitlines()]
+        self.assertEqual([(r["ticket"], r["ticket_src"]) for r in rows], [("ABC-1002", "prompt"), ("ABC-1001", "branch")])
+
+
+class TurnExtractionTests(AttrCase):
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        from chitragupta import common, extract
+        self.calls = []
+        self.answers = []
+
+        def fake(kind, stdin_text, cfg, timeout=300):
+            self.calls.append(stdin_text)
+            return (self.answers.pop(0) if self.answers else {}), 0.0
+        for p in (mock.patch.object(extract, "call_claude", fake),
+                  mock.patch.object(common, "now", lambda: at(23, 0))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.repo_dir = self.repo("shop-api", "fix/ABC-1001-x")
+
+    def two_turns(self, big=0):
+        b, r = "fix/ABC-1001-x", self.repo_dir
+        return [ev("user-prompt", 10, 0, branch=b, repo=r, prompt="look at ABC-1002 orders"),
+                ev("post-tool", 10, 1, branch=b, repo=r, payload={"tool": "Edit", "input": {"file_path": "shop/orders.py"}}),
+                ev("stop", 10, 5, branch=b, repo=r, payload={"message": "Orders lose the link. " + "a" * big}),
+                ev("user-prompt", 10, 20, branch=b, repo=r, prompt="now the login part"),
+                ev("post-tool", 10, 21, branch=b, repo=r, payload={"tool": "Edit", "input": {"file_path": "shop/login.py"}}),
+                ev("stop", 10, 25, branch=b, repo=r, payload={"message": "Login checks the lock first. " + "b" * big})]
+
+    def write(self, evs, sid="s1"):
+        from chitragupta import common
+        p = common.wl("raw", D, sid + ".jsonl")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            for e in evs:
+                f.write(json.dumps(dict(e, session_id=sid)) + "\n")
+
+    def test_items_follow_their_turn(self):
+        from chitragupta import agent
+        self.write(self.two_turns(big=1000))
+        self.answers = [{"items": [{"kind": "finding", "title": "Orders lose their link", "ticket": None, "time": "10:05"},
+                                   {"kind": "finding", "title": "Login checks the lock first", "ticket": None, "time": "10:25"}]}]
+        a = agent.Agent()
+        a.ingest()
+        a.run_extractions(any_size=True)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("TURN ticket=ABC-1002 (prompt)", self.calls[0])
+        self.assertIn("TURN ticket=ABC-1001 (branch)", self.calls[0])
+        i2 = list(a.store.ticket("ABC-1002")["items"].values())
+        i1 = list(a.store.ticket("ABC-1001")["items"].values())
+        self.assertEqual([(i["title"], i["src"]) for i in i2], [("Orders lose their link", "prompt")])
+        self.assertEqual([(i["title"], i["src"]) for i in i1], [("Login checks the lock first", "branch")])
+        dd = a.store.day(D)
+        self.assertGreater(dd["tickets"]["ABC-1002"]["minutes"], 0)
+        self.assertGreater(dd["tickets"]["ABC-1001"]["minutes"], 0)
+
+    def test_chunks_split_at_turn_boundaries(self):
+        from unittest import mock
+        from chitragupta import agent, extract
+        evs = agent.attribute([dict(e, session_id="s1") for e in self.two_turns(big=3000)], ["ABC"])
+        with mock.patch.object(extract, "DIGEST_CAP", 5000):
+            chunks = extract.build_digests(evs, {"session": "s1", "day": D}, ["ABC-1002", "ABC-1001"], {})
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual([c.default for c in chunks], ["ABC-1002", "ABC-1001"])
+        self.assertIn("TURN ticket=ABC-1002 (prompt)", chunks[0])
+        self.assertNotIn("now the login part", chunks[0])
+        self.assertIn("now the login part", chunks[1])
+        self.assertNotIn("ABC-1002 (prompt)", chunks[1])
+
+    def test_a_long_turn_still_splits_and_keeps_its_ticket(self):
+        from unittest import mock
+        from chitragupta import agent, extract
+        b, r = "fix/ABC-1001-x", self.repo_dir
+        evs = [ev("user-prompt", 10, 0, branch=b, repo=r, prompt="look at ABC-1002")] + \
+              [ev("stop", 10, i, branch=b, repo=r, payload={"message": "c" * 2000}) for i in range(1, 6)]
+        evs = agent.attribute([dict(e, session_id="s1") for e in evs], ["ABC"])
+        with mock.patch.object(extract, "DIGEST_CAP", 5000):
+            chunks = extract.build_digests(evs, {"session": "s1", "day": D}, ["ABC-1002"], {})
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(c.default == "ABC-1002" and "TURN ticket=ABC-1002 (prompt)" in c for c in chunks))
+
+    def test_chunk_default_is_used_for_untimed_items(self):
+        from unittest import mock
+        from chitragupta import agent, extract
+        self.write(self.two_turns(big=3000))
+        self.answers = [{"items": [{"kind": "finding", "title": "First chunk finding", "ticket": None}]},
+                        {"items": [{"kind": "finding", "title": "Second chunk finding", "ticket": None}]}]
+        with mock.patch.object(extract, "DIGEST_CAP", 5000):
+            a = agent.Agent()
+            a.ingest()
+            a.run_extractions(any_size=True)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual([i["title"] for i in a.store.ticket("ABC-1002")["items"].values()], ["First chunk finding"])
+        self.assertEqual([i["title"] for i in a.store.ticket("ABC-1001")["items"].values()], ["Second chunk finding"])
+
+    def test_summary_pending_fallback_keeps_turn_tickets(self):
+        from chitragupta import agent
+        self.write(self.two_turns())
+        a = agent.Agent()
+        a.ingest()
+        a.refresh_fallbacks()
+        fb = {r["ticket"]: r["files"] for r in a.store.day(D)["fallback"].values()}
+        self.assertEqual(fb, {"ABC-1002": ["shop/orders.py"], "ABC-1001": ["shop/login.py"]})
+        self.answers = [{"items": []}]
+        a.run_extractions(any_size=True)
+        self.assertEqual(a.store.day(D)["fallback"], {})  # extraction clears every turn's entry
+
+    def test_recent_tickets_follow_the_turn(self):
+        from chitragupta import agent
+        self.write(self.two_turns())
+        a = agent.Agent()
+        a.ingest()
+        self.assertEqual([t for _, t in a.state["recent_tickets"]], ["ABC-1002"] * 3 + ["ABC-1001"] * 3)
+
+
+class SafetyNetTurnTests(AttrCase):
+    def test_safety_net_uses_the_prompt_ticket(self):
+        import time
+        from chitragupta import agent, common
+        tdir = os.path.join(self.work, "transcripts")
+        os.environ["CHITRAGUPTA_TRANSCRIPTS_DIR"] = tdir
+        repo = self.repo("shop-api", "fix/ABC-1001-x")
+        ts = common.now_iso()
+        recs = [{"type": "user", "cwd": repo, "sessionId": "t1", "timestamp": ts, "gitBranch": "fix/ABC-1001-x",
+                 "message": {"role": "user", "content": "check ABC-1002 first"}},
+                {"type": "assistant", "cwd": repo, "sessionId": "t1", "timestamp": ts, "gitBranch": "fix/ABC-1001-x",
+                 "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]}}]
+        p = os.path.join(tdir, "proj", "t1.jsonl")
+        os.makedirs(os.path.dirname(p))
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in recs))
+        old = time.time() - 600
+        os.utime(p, (old, old))
+        a = agent.Agent()
+        a.state["transcripts_baselined"] = True
+        a.safety_net(False)
+        rows = [json.loads(l) for l in rd(common.wl("raw", common.workday(common.now(), a.cfg), "t1.jsonl")).splitlines()]
+        self.assertEqual({(r["ticket"], r["ticket_src"]) for r in rows}, {("ABC-1002", "prompt")})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -141,11 +141,27 @@ def event_chars(ev):
     return n + (len(json.dumps(ki, ensure_ascii=False)) if ki else 0) + (300 if p.get("outcome") else 0)
 
 
+class Digest(str):
+    """One extraction chunk: the digest text, plus `turns` [(HH:MM, ticket, src)] of the turns it holds and `default`,
+    the ticket of its dominant turn (an item without a ticket falls back to its turn's ticket, then to this)."""
+    turns = ()
+    default = None
+
+
+def _turn_marker(ev):
+    return "=== TURN ticket=%s (%s) at %s ===" % (ev.get("_t") or "none", ev.get("_src") or "none",
+                                                  common.hhmm(ev.get("ts")) or "--:--")
+
+
 def build_digests(events, meta, candidates, already):
-    """Chronological digest(s) of one session's pending events, chunked at ~DIGEST_CAP chars."""
+    """Chronological digest(s) of one session's pending events, chunked at ~DIGEST_CAP chars. Events attributed per
+    turn (agent.attribute: _t, _src) get a `=== TURN … ticket=<KEY> (<src>) ===` line where each turn starts; chunks
+    split at turn boundaries (inside a turn only when the turn alone exceeds the cap, repeating its TURN line).
+    Returns [Digest]."""
     header = [
         "SESSION: %s   WORK DAY: %s" % (meta.get("session", "")[:8], meta.get("day", "")),
-        "REPO: %s   BRANCH: %s" % (os.path.basename((meta.get("repo") or "").rstrip("/\\")) or "-", meta.get("branch") or "-"),
+        "REPO: %s   BRANCH (fallback only): %s" % (os.path.basename((meta.get("repo") or "").rstrip("/\\")) or "-",
+                                                  meta.get("branch") or "-"),
         "CANDIDATE TICKETS: %s" % (", ".join(candidates) if candidates else "(none detected)"),
         "ALREADY_RECORDED: " + json.dumps(already, ensure_ascii=False)[:20000],
         "CURRENT_WORKLOG_LINES: " + json.dumps(meta.get("lines") or {}, ensure_ascii=False),
@@ -153,15 +169,46 @@ def build_digests(events, meta, candidates, already):
         "=== ACTIVITY (chronological; tool outputs are never recorded) ===",
     ]
     head = redact("\n".join(header)) + "\n"
-    lines = [redact(l) for l in (_line(e) for e in events) if l]
-    chunks, cur = [], head
-    for l in lines:
-        if len(cur) + len(l) + 1 > DIGEST_CAP and cur != head:
-            chunks.append(cur)
-            cur = head + "(continued)\n"
-        cur += l + "\n"
-    if cur != head:
-        chunks.append(cur)
+    turns, cur_key = [], None  # [(marker, (hhmm, ticket, src), [lines])]
+    for e in events:
+        if "_src" in e and (e.get("event") == "user-prompt" or (e.get("_t"), e.get("_src")) != cur_key or not turns):
+            cur_key = (e.get("_t"), e.get("_src"))
+            turns.append((redact(_turn_marker(e)), (common.hhmm(e.get("ts")), e.get("_t"), e.get("_src")), []))
+        elif not turns:
+            turns.append(("", None, []))
+        l = _line(e)
+        if l:
+            turns[-1][2].append(redact(l))
+    chunks = []
+    cur = {"text": head, "turns": [], "weights": {}}
+
+    def close():
+        if cur["text"] != head and cur["text"] != head + "(continued)\n":
+            d = Digest(cur["text"])
+            d.turns = [t for t in cur["turns"] if t]
+            w = cur["weights"]
+            d.default = max(w, key=lambda k: (w[k], k)) if w else None
+            chunks.append(d)
+        cur.update(text=head + "(continued)\n", turns=[], weights={})
+    for marker, info, lines in turns:
+        if not lines:
+            continue
+        size = len(marker) + 1 + sum(len(l) + 1 for l in lines)
+        if len(cur["text"]) + size > DIGEST_CAP and cur["turns"]:
+            close()  # the next turn starts a new chunk
+        if marker:
+            cur["text"] += marker + "\n"
+        cur["turns"].append(info)
+        for l in lines:
+            if len(cur["text"]) + len(l) + 1 > DIGEST_CAP and cur["text"] not in (head, head + "(continued)\n"):
+                close()  # one turn larger than a chunk: split inside it, the TURN line repeated
+                if marker:
+                    cur["text"] += marker + "\n"
+                cur["turns"].append(info)
+            cur["text"] += l + "\n"
+            if info and info[1]:
+                cur["weights"][info[1]] = cur["weights"].get(info[1], 0) + len(l)
+    close()
     return chunks
 
 

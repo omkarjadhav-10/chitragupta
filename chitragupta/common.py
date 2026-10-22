@@ -451,6 +451,37 @@ def prompt_ticket(text, prefixes, cfg=None):
     return None, None
 
 
+def work_branch_ticket(branch, cfg, repo=None):
+    """A work branch's ticket. Base and environment branches (release/…, qa, uat, main…: the repo's branching bases,
+    gitcmd.repo_conf) name no ticket of their own, and neither does a parent issue (is_parent_ticket)."""
+    if not branch or branch.startswith("detached@"):
+        return None
+    if branch.split("/")[0].lower() == "release":
+        return None
+    from . import gitcmd
+    bases = gitcmd.repo_conf(cfg, gitcmd.repo_key(repo) if repo else "")["bases"]
+    if gitcmd.role_of(branch, bases):
+        return None
+    t = ticket_from_branch(branch, cfg.get("ticket_prefixes") or [])
+    return None if t and is_parent_ticket(t, cfg) else t
+
+
+def ticket_for_turn(cfg, prompt_t=None, prompt_src="prompt", branch=None, repo=None, own_repo=None, carry=None):
+    """(ticket, src) for one turn (a prompt and every event until the next one), the single rule for time and
+    knowledge: the ticket the turn's prompt named (src "prompt", or "jira-title" for pasted Jira text; see
+    prompt_ticket) -> the branch's ticket (src "branch"), only when the branch belongs to the session's own repo and
+    is a work branch (work_branch_ticket) -> the last ticket named earlier in the session (src "carry")."""
+    if prompt_t:
+        return prompt_t, prompt_src or "prompt"
+    own = not (repo and own_repo) or norm_path(repo) == norm_path(own_repo)
+    bt = work_branch_ticket(branch, cfg, own_repo or repo) if own else None
+    if bt:
+        return bt, "branch"
+    if carry:
+        return carry, "carry"
+    return None, None
+
+
 def ticket_from_branch(branch, prefixes):
     """Ticket key from a branch name. Configured prefixes match case-insensitively;
     other UPPERCASE prefixes are accepted too (and later auto-added to config)."""
