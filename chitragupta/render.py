@@ -111,6 +111,22 @@ def item_block(items, kinds):
     return L
 
 
+def needs_review(t, items):
+    """Items flagged as maybe another ticket's (K8), collapsed, each with the inbox lines that resolve it."""
+    flagged = sort_items([i for i in items if i.get("review") and not i.get("archived")])
+    if not flagged:
+        return []
+    L = ["<details><summary>Needs review (%d)</summary>" % len(flagged), "",
+         "_Recorded under %s but maybe not about it. Add a line to inbox.md: `%s: keep <id>` keeps it here, "
+         "`%s: move <id> <KEY>` copies it to that ticket and archives it here._" % (t, t, t), ""]
+    for i in flagged:
+        r = i["review"]
+        to = r.get("suggest") or "<KEY>"
+        L.append("%s — _%s_ · `%s: keep %s` · `%s: move %s %s`" % (hub_item(i), r.get("why") or "", t, i["id"], t,
+                                                                  i["id"], to))
+    return L + ["", "</details>"]
+
+
 def sort_items(items, newest_first=True):
     return sorted(items, key=lambda i: (i.get("date", ""), i.get("time", ""), i.get("title", "")), reverse=newest_first)
 
@@ -634,6 +650,9 @@ def render_ticket(store, t):
     sec("How to reproduce / test", rep)
     sec("Decisions", by("decision"))
     sec("Open questions · TODO · blockers", by("question", "todo", "blocker"))
+    rv = needs_review(t, items)
+    if rv:
+        L += ["## Needs review"] + rv + [""]
     sec("Code map", code_map(tk))
     sec("References consulted", by("reference"))
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")

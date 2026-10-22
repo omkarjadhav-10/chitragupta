@@ -26,6 +26,7 @@ from . import modelbudget  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import kbnorm  # noqa: E402
+from . import offticket  # noqa: E402
 from . import sqlsent  # noqa: E402
 from . import supersede  # noqa: E402
 from . import store as storemod  # noqa: E402
@@ -843,6 +844,11 @@ class Agent:
                 continue  # branch-link: / branch-unlink: / branch-abandon: / branch-restore: / strategy: lines
             if self.jwl.handle_inbox(n):
                 continue  # time: / leave: / half-day: / holiday: / workday: / resend: lines (jira worklog)
+            rd = offticket.parse_directive(n["text"]) if n.get("ticket") else None
+            if rd:  # K8: "<KEY>: keep <id>" / "<KEY>: move <id> <OTHER>" resolve a "Needs review" item
+                common.log("agent", "inbox review: " + offticket.apply_directive(self.store, n["ticket"], rd, n.get("ts"),
+                                                                               self.prefixes))
+                continue
             day = common.workday(n["ts"], cfg)
             dd = self.store.day(day)
             dd["outside"]["inbox"].append(n)
@@ -975,7 +981,8 @@ class Agent:
         tickets = {}
         for t, slot in dd["tickets"].items():
             tk = self.store.ticket(t)
-            items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]]
+            items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]
+                     and not tk["items"][i].get("review") and not tk["items"][i].get("archived")]  # K8: not its own
             tickets[t] = {
                 "title": tk.get("title") or tk.get("title_hint"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
                 "activity": [w["time"] + " " + w["text"] for w in sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))],

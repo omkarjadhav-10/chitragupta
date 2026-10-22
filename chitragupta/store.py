@@ -8,6 +8,7 @@ import re
 
 from . import common
 from . import kbnorm
+from . import offticket
 from . import sqlsent
 from .redact import redact_obj
 
@@ -276,6 +277,10 @@ def merge_extraction(store, res, ctx, prefixes):
                "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
         if t and src:
             rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
+        if t:  # K8: maybe another ticket's (or the worklog tool's own) note: flagged for review, never moved
+            rv = offticket.check(store.ticket(t), t, rec, prefixes)
+            if rv:
+                rec["review"] = rv
         _merge_item(store, dd, t, gkey, rec, it.get("updates"), tslot)
 
     for q in res.get("queries") or []:
@@ -540,6 +545,11 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
                          "confidence": old.get("confidence")})
             new = dict(rec, id=iid, first_date=old.get("first_date") or old.get("date"), history=hist[-5:])
             new["evidence"] = _union(rec["evidence"], old.get("evidence"))[:10]
+            for k in ("archived", "review_kept"):  # your decisions survive an update; new text is current again
+                if old.get(k):
+                    new[k] = old[k]
+            if old.get("review_kept") or (old.get("review") and not new.get("review")):
+                new["review"] = None if old.get("review_kept") else old.get("review")
             items[iid] = new
             store.bump(t or gkey, "updates")
         else:

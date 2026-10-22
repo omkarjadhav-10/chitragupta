@@ -22,7 +22,8 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 - `tickets/<TICKET>/README.md` — the ticket hub: quick links, Scenarios (trigger request · DB effect · verify query),
   replay steps, latest artifacts, TL;DR, problem, root cause & findings, how it works, fix, database, APIs,
   integrations, config, errors, repro, decisions, open questions, code map, timeline
-- `tickets/<TICKET>/queries.md` — important queries, dated, with what each revealed
+- `tickets/<TICKET>/queries.md` — SQL that was actually sent, dated, each with the raw line it came from and what it
+  revealed (SQL the notes mention but never sent stays in the data as `sent: false` and isn't listed)
 - `tickets/<TICKET>/requests.md` — the minimal replay set as curl for Git Bash (purpose + expected per step)
 - `tickets/<TICKET>/replay.sh` — run it: `bash tickets/<TICKET>/replay.sh qa` (or `local`) from the worklog folder
 - `bruno/<TICKET>/` — the same requests in the single Bruno collection `{{HOME}}\bruno` (envs in `bruno/environments`,
@@ -58,7 +59,10 @@ available.
    in `.worklog/config.json`).
 2. Cite the file and date for every fact, e.g. "(tickets/ABC-1234/README.md, 2026-10-14)". Quote queries in
    fenced code blocks exactly as recorded.
-3. Never claim more than the files say. If something isn't recorded, say so plainly.
+3. Never claim more than the files say. If something isn't recorded, say so plainly. Answer from current items: in
+   the ticket JSON an item with `status: "superseded"` was replaced by `superseded_by`, `archived` is out of every view,
+   `review` means it may belong to another ticket (the hub's "Needs review"), and a TODO with `status: "done"` was
+   closed by `closed_by` (a PR or a pushed branch). Mention a superseded item only as history.
 4. Standups: use the "Standup for next working day" section of the latest daily file; if it is a draft, build
    Yesterday/Today/Blockers from that day's ticket sections, one line each with ticket refs.
 5. Timesheets: sum the "≈ Time" column of each daily file's Tickets table per ticket and day (or run
@@ -159,7 +163,9 @@ replay.sh or any other request against an API. If the user wants one of those, t
 ## The only writes allowed (only when the user explicitly asks)
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;
   `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `clear:` / `resend:` lines for the Jira worklog, and
-  `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking).
+  `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking;
+  `ABC-1234: keep <item id>` keeps a "Needs review" item on its ticket, `ABC-1234: move <item id> ABC-1235` copies it
+  to ABC-1235 and archives it on ABC-1234, never deleting it).
 - Create a file in `{{HOME}}\_drop\` whose name starts with the ticket ID, e.g. `ABC-1234_lock-analysis.md`
   ("save this analysis to the worklog for ABC-1234"); the agent files it under the ticket's artifacts.
 Never edit any other worklog file.

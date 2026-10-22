@@ -196,7 +196,17 @@ function Overview({ t }) {
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
       <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${count(k)}</span></h2>
       <${KindItems} list=${groups[k]} byId=${byId} /></section>`)
-      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}`;
+      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
+    <${NeedsReview} t=${t} list=${live.filter((i) => i.review)} />`;
+}
+// Items recorded under this ticket that may be another ticket's (K8): never moved, resolved with an inbox line.
+function NeedsReview({ t, list }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>Needs review (${list.length})</summary>
+    <p class="muted small">Recorded under ${t.key} but maybe not about it. A line in inbox.md resolves each: <span class="mono">${t.key}: keep &lt;id&gt;</span> keeps it, <span class="mono">${t.key}: move &lt;id&gt; &lt;KEY&gt;</span> copies it to that ticket and archives it here.</p>
+    <ul class="findings">${list.map((i) => { const keep = t.key + ': keep ' + i.id, move = t.key + ': move ' + i.id + ' ' + (i.review.suggest || '<KEY>');
+      return html`<li key=${i.id}><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+        <div class="m">${i.review.why}</div><div class="m"><span class="mono">${keep}</span> <${CopyButton} text=${keep} what="the keep line" /> · <span class="mono">${move}</span> <${CopyButton} text=${move} what="the move line" /></div></li>`; })}</ul></details>`;
 }
 function Requests({ rq }) {
   if (!rq.steps.length) return html`<${Empty} title=${'No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '')} icon="api">Ask Claude to save the essential requests for this ticket to the worklog.</${Empty}>`;

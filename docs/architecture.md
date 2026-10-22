@@ -125,7 +125,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
 <home>\
   README.md  .gitignore  .gitattributes      pushed (with daily/)
   daily\YYYY\MM\YYYY-MM-DD.md                daily note (pushed)
-  inbox.md                                   one line per note / worklog directive
+  inbox.md                                   one line per note / directive (worklog, branch, review keep / move)
   _drop\                                     files dropped here are filed into tickets
   tickets\INDEX.md
   tickets\<KEY>\README.md                    ticket hub: status, scenarios, findings, timeline, My notes
@@ -179,6 +179,15 @@ A ticket keeps every item it ever recorded; what changes is which ones are curre
 - **TODOs close from git.** A TODO item, or a day's open TODO, about a git action (rebase, push, open or raise a PR, merge, cherry-pick to a target) gets `status: "done"` and `closed_by` (`pr:<n>` or `branch:<name>`) once the ticket's branch and PR data shows it happened: a PR from the ticket's branch (to the named target, after the TODO was written) covers opening it, pushing and rebasing; a merged PR covers a merge; a branch on the remote with nothing left to push covers a push. It runs whenever the ticket's branch picture changes and when a day closes. A day's `open_todos` and `carried_todos` are objects `{text, ticket, closed_by}`; closed ones stay in the day and are not carried. The 0.5.0 migration `kb5-todo-objects` (backs up `data/days` and `state.json`) turns the older strings into objects; nothing is dropped.
 - **Supersession at day close.** For each ticket that got new items that day, one `claude -p` call (purpose `supersede`, `models.supersede`, else `models.consolidate`; prompt `prompts/supersede.md`) gets the ticket's root causes, findings, decisions, fixes, how-it-works items, TODOs and your notes (id, kind, title, 300 characters of detail, day, status; newest first, capped at 80 items / 30,000 characters) and returns `{id, subject, status, superseded_by}` per item. Only ids that exist are applied, only `subject`, `status` (`current`, `superseded`, `hypothesis`, `confirmed`, `done`) and `superseded_by` change, never the text; your own notes (inbox lines) are never superseded by a model item. The call is recorded in the model-spend ledger and waits for tomorrow once `budget.model_daily_usd` is reached (logged in `agent.log`).
 - **Views.** The hub and the dashboard show only current items in each section; done TODOs sit under a collapsed "Done (n)" with what closed them, and replaced items under a collapsed "Superseded (n)", each linked to the item that replaced it. The SessionStart context lists current items only.
+
+### Items that may belong elsewhere
+
+When an extraction is merged, a new item is checked against its ticket (`chitragupta/offticket.py`) and flagged with `review: {why, suggest, at}`, never moved or deleted, when (a) it names another ticket key and not its own, unless the prompt of its turn (or a pasted Jira title) named this ticket (`suggest` is that other key); (b) its ticket came from the branch, an earlier turn or the model, and it shares no file, table, endpoint or title word (four letters or more, common words left out) with the ticket's current items or its Jira title; or (c) it is about the worklog tool itself (`.worklog`, `/cg:`, Chitragupta) while the ticket is work. Flagged items stay out of the hub's sections, the day-close input and the dashboard's kind groups, and sit under a collapsed "Needs review (n)" with their reason and the two inbox lines that resolve them:
+
+| `inbox.md` line | Effect |
+|---|---|
+| `ABC-1001: keep <id>` | Clears the flag (`review: null`, `review_kept`); the item is current again and is not flagged again when updated |
+| `ABC-1001: move <id> ABC-1002` | Copies the item to ABC-1002 (`src: "user"`, `moved_from`) and archives the original (`archived: {at, reason: "moved to ABC-1002"}`); nothing is deleted |
 
 ### Title and status
 
