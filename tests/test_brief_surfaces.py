@@ -101,5 +101,46 @@ class TestDashboard(Base):
             self.assertNotIn("dangerouslySetInnerHTML", src)
 
 
+# --------------------------------------------------------------------------- hub README
+
+class TestReadme(Base):
+    def setUp(self):
+        super().setUp()
+        p = os.path.join(self.home, "data", "tickets", TICKET + ".json")
+        tk = json.loads(support.rd(p))
+        for k, q in tk["queries"].items():
+            q["id"] = k  # the store keeps a query's id on the record; the dashboard fixture leaves it out
+        support.wr(p, json.dumps(tk))
+    def test_brief_section_golden(self):
+        from chitragupta import render
+        got = "\n".join(render.render_brief(fixture_view())) + "\n"
+        want = support.rd(os.path.join(FIX, TICKET + ".README-brief.md"))
+        self.assertEqual(got, want)
+
+    def test_readme_starts_with_the_brief(self):
+        from chitragupta import render
+        from chitragupta.store import Store
+        v = fixture_view()
+        v["sections"][0]["claims"][0]["cites"].append("i1")
+        with patched_view(v):
+            md = render.render_ticket(Store(), TICKET)
+        heads = re.findall(r"(?m)^## .+$", md)
+        self.assertEqual(heads[0], "## Brief")
+        self.assertLess(md.index("## Brief"), md.index("## TL;DR"))
+        # every item line carries its anchor, and the brief's footnote points at it
+        self.assertIn('- <a id="i-i1"></a>', md)
+        self.assertIn("(#i-i1)", md)
+        self.assertRegex(md, r"\[\^\d+\]: \[root cause, ")
+
+    def test_fallback_without_a_brief(self):
+        from chitragupta import render
+        from chitragupta.store import Store
+        md = render.render_ticket(Store(), TICKET)
+        brief = md.split("## Brief", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("No brief yet", brief)
+        self.assertIn("Discount applied twice", brief)
+        self.assertIn("(#i-i1)", brief)
+
+
 if __name__ == "__main__":
     unittest.main()

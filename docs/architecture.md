@@ -128,7 +128,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
   inbox.md                                   one line per note / worklog directive
   _drop\                                     files dropped here are filed into tickets
   tickets\INDEX.md
-  tickets\<KEY>\README.md                    ticket hub: status, scenarios, findings, timeline, My notes
+  tickets\<KEY>\README.md                    ticket hub: status, the brief, scenarios, findings, timeline, My notes
   tickets\<KEY>\queries.md  requests.md  replay.sh  db-flow.md  payloads\  artifacts\
   knowledge\apis.md  db-tables.md  db-map.md  integrations.md  branches.md
   bruno\                                     one Bruno collection, a folder per ticket; .env never read
@@ -170,6 +170,10 @@ A file counts as changed only when a session's Edit/Write tool call wrote it or 
 ### Title and status
 
 A ticket's `title` comes only from its Jira card or from you (`title_source` `jira` or `user`). A guess from the model or the branch name is kept as `title_hint` and only ever shown small, labelled "hint"; until a card arrives the key stands alone. The status is two fields: `jira.status` from the card and `status_inferred` from day close; neither overwrites the other, and the hub shows both ("Jira: QA COMPLETED · Inferred: in_progress"). `status` is still written, computed (the Jira status when a card exists, else the inferred one), for older readers. The 0.5.0 migration `kb5-title-status` moves existing guessed titles to `title_hint` and splits the status, after backing up the ticket files it changes.
+
+### The brief in the hub
+
+The hub `README.md` starts with `## Brief`, rendered from `brief.view(tk)` like every other surface: the root cause with its confidence, helpful findings, how it works today and after the fix, the proposed fix, fixes made (from git and PRs) and possible cons (*Recorded* or *Suggested*). Each claim's evidence is a Markdown footnote (`[^1]`) that links to the item's anchor further down the same file (every item line starts with `<a id="i-<id>"></a>`, plus one per alias), to `queries.md#q-<id>` or to `requests.md`; commits, PRs and tables are named in the footnote. Until a ticket has a brief, the section says so and shows the current root cause. Everything after it is unchanged.
 
 ## Outside the data home
 
