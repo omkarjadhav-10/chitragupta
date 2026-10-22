@@ -29,6 +29,7 @@ function problem(it, v) {
     case 'choice': return it.choices.some((c) => c[0] === v) ? null : 'Pick one of the listed options.';
     case 'days': return Array.isArray(v) && v.length ? null : 'Pick at least one day.';
     case 'prefixes': return (v || []).every((p) => PREFIX.test(p)) ? null : 'Use uppercase project keys of 2 to 10 letters or digits, starting with a letter.';
+    case 'names': return (v || []).length <= 20 && (v || []).every((n) => /^[A-Za-z0-9][A-Za-z0-9 -]{0,39}$/.test(n)) ? null : 'Use one name per line: letters, digits, spaces or -, at most 40 characters.';
     case 'paths': return (v || []).every((p) => /^([A-Za-z]:[\\/]|\/)/.test(p)) ? null : 'Use full paths, one per line.';
     case 'envs_narrow': return (v || []).length ? null : 'Keep at least one environment.';
     case 'name': return typeof v === 'string' && v.length <= 80 && !/[\x00-\x1f]/.test(v) ? null : 'Use one line of at most 80 characters.';
@@ -172,7 +173,7 @@ function Control({ it, value, onChange, err }) {
     case 'name':
       return html`<input type="text" ...${common} maxlength="80" value=${value || ''} onInput=${(e) => onChange(e.currentTarget.value)} />`;
     case 'relations': return html`<${RelationsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
-    case 'prefixes': case 'paths':
+    case 'prefixes': case 'names': case 'paths':
       return html`<textarea ...${common} rows=${Math.min(6, Math.max(2, (value || []).length + 1))} spellcheck="false"
         onInput=${(e) => onChange(e.currentTarget.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))}>${(value || []).join('\n')}</textarea>`;
     default:

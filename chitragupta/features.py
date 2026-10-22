@@ -44,9 +44,9 @@ class Features:
     # ------------------------------------------------------------------ helpers
     def ticket_of(self, ev, session):
         if ev.get("event") == "user-prompt":
-            found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), self.prefixes)
-            if found:
-                session["sticky"] = found[0]
+            t = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), self.prefixes, self.cfg)[0]
+            if t:
+                session["sticky"] = t
         raw_t = None if common.is_placeholder(ev.get("ticket")) else ev.get("ticket")  # raw lines from before
         return ev.get("_t") or common.ticket_from_branch(ev.get("branch"), self.prefixes) or raw_t or session.get("sticky")
 
@@ -442,7 +442,7 @@ class Features:
             for day, path in parts:
                 e, _ = agentmod.read_lines(path, 0)
                 evs += e
-            evs = agentmod.attribute(self.a._captured(evs, keep_time=False), self.prefixes)
+            evs = agentmod.attribute(self.a._captured(evs, keep_time=False), self.prefixes, self.cfg)
             evs.sort(key=lambda e: e.get("ts") or "")
             if not evs:
                 done[sid] = "done"

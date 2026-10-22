@@ -97,8 +97,8 @@ def _time_only(event, inp, cfg, common, cwd=None):
         return
     ticket = None
     if event == "user-prompt":
-        found = common.find_tickets(str(inp.get("user_prompt") or inp.get("prompt") or ""), cfg.get("ticket_prefixes") or [])
-        ticket = found[0] if found else None
+        ticket = common.prompt_ticket(str(inp.get("user_prompt") or inp.get("prompt") or ""), cfg.get("ticket_prefixes") or [],
+                                      cfg)[0]
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
     ev = {"ts": common.now_iso(), "event": event, "session_id": sid, "source": "time-only", "ticket": ticket}
     if common.is_home_folder(cwd):
@@ -253,8 +253,7 @@ def _capture(event, common):
         prompt = inp.get("user_prompt") or inp.get("prompt") or ""
         payload = {"prompt": redact(common.truncate(str(prompt), LIMITS["prompt"]))}
         if not ticket:
-            found = common.find_tickets(str(prompt), prefixes)
-            ticket = found[0] if found else None
+            ticket = common.prompt_ticket(str(prompt), prefixes, cfg)[0]
     elif event == "post-tool":
         tool = str(inp.get("tool_name") or "")
         env = _qa_env(tool, inp.get("tool_input"), cfg, common)

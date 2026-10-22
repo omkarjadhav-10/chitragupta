@@ -146,19 +146,23 @@ def time_only_sids():
     return out
 
 
-def attribute(events, prefixes):
-    """Ticket per event: branch ticket, else the latest ticket mentioned in my prompts (sticky)."""
+def attribute(events, prefixes, cfg=None):
+    """Ticket per event: branch ticket, else the latest ticket mentioned in my prompts (sticky; common.prompt_ticket).
+    A parent issue (an Epic…) is never an event's ticket."""
+    cfg = cfg if cfg is not None else common.load_config()
     sticky = {}
     for ev in sorted(events, key=lambda e: e.get("ts") or ""):
         sid = ev.get("session_id")
         bt = common.ticket_from_branch(ev.get("branch"), prefixes)
+        if bt and common.is_parent_ticket(bt, cfg):
+            bt = None
         if ev.get("event") == "user-prompt" and ev.get("_time"):  # time-only: the prompt's ticket, no text
             if ev.get("ticket"):
                 sticky[sid] = ev["ticket"]
         elif ev.get("event") == "user-prompt":
-            found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), prefixes)
-            if found:
-                sticky[sid] = found[0]
+            t = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg)[0]
+            if t:
+                sticky[sid] = t
         ev["_t"] = bt or sticky.get(sid)
     return events
 
@@ -255,10 +259,10 @@ class Agent:
                 if mode == "time":  # like the hook: timestamp + the ticket mentioned, never content
                     if e["event"] not in ("user-prompt", "post-tool", "stop"):
                         continue
-                    found = common.find_tickets((e.get("payload") or {}).get("prompt", ""), self.prefixes) \
-                        if e["event"] == "user-prompt" else []
+                    t = common.prompt_ticket((e.get("payload") or {}).get("prompt", ""), self.prefixes, self.cfg)[0] \
+                        if e["event"] == "user-prompt" else None
                     row = {"ts": ts.isoformat(timespec="seconds"), "event": e["event"], "session_id": sid,
-                           "source": "time-only", "ticket": found[0] if found else None}
+                           "source": "time-only", "ticket": t}
                     if common.is_home_folder(ecwd):
                         row["where"] = "home"
                     common.append_line(common.wl("raw", day, "time", sid + ".jsonl"), json.dumps(row))
@@ -329,7 +333,7 @@ class Agent:
                 s["days"].append(day)
             try:
                 full = [dict(e) for e in evs if not e.get("_time")]
-                self.features.on_events(day, sid, s, attribute(full, self.prefixes))
+                self.features.on_events(day, sid, s, attribute(full, self.prefixes, self.cfg))
             except Exception:
                 common.log("agent", "features failed: " + traceback.format_exc())
             for ev in evs:
@@ -408,8 +412,7 @@ class Agent:
             elif mode == "time" and keep_time:
                 t = None
                 if ev.get("event") == "user-prompt":
-                    found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), self.prefixes)
-                    t = found[0] if found else None
+                    t = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), self.prefixes, self.cfg)[0]
                 out.append({"ts": ev.get("ts"), "event": ev.get("event"), "session_id": ev.get("session_id"),
                             "source": ev.get("source"), "ticket": t, "_time": True})
         return out
@@ -440,7 +443,7 @@ class Agent:
             if fn.endswith(".jsonl"):
                 e, _ = read_lines(os.path.join(dp, fn), 0)
                 evs += e
-        return attribute(self._captured(evs), self.prefixes)
+        return attribute(self._captured(evs), self.prefixes, self.cfg)
 
     def recompute_minutes(self, day):
         evs = self.day_events(day)
@@ -528,7 +531,7 @@ class Agent:
             s["pending_chars"] = 0
             return True
         for day, evs in sorted(by_day.items()):
-            evs = attribute([e for e in evs], self.prefixes)
+            evs = attribute([e for e in evs], self.prefixes, self.cfg)
             evs.sort(key=lambda e: e.get("ts") or "")
             if not any(e.get("event") in ("user-prompt", "stop", "post-tool") for e in evs):
                 continue
@@ -609,7 +612,7 @@ class Agent:
                     continue
                 day = os.path.basename(os.path.dirname(path))
                 evs, _ = read_lines(path, f["extracted"], f["read"])
-                evs = attribute(self._captured(evs, keep_time=False), self.prefixes)
+                evs = attribute(self._captured(evs, keep_time=False), self.prefixes, self.cfg)
                 if not evs:
                     continue
                 cands = []

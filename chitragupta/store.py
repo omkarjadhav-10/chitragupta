@@ -186,8 +186,11 @@ def merge_extraction(store, res, ctx, prefixes):
     default_t = ctx["candidates"][0] if len(ctx.get("candidates") or []) == 1 else None
     gkey = group_key(ctx.get("repo"), ctx.get("branch"))
 
+    cfg = common.load_config()
+
     def resolve(t):
-        return valid_ticket(t, known) if t else None
+        t = valid_ticket(t, known) if t else None
+        return None if t and common.is_parent_ticket(t, cfg) else t  # a parent issue never gets items
 
     def tslot(t):
         if t:
