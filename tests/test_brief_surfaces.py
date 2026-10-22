@@ -221,5 +221,15 @@ class TestContext(WithQueryIds):
         self.assertLessEqual(len(ctx), 4000)
 
 
+# --------------------------------------------------------------------------- recall skill
+
+class TestRecallSkill(unittest.TestCase):
+    def test_answers_from_the_brief_first(self):
+        body = support.rd(os.path.join(support.ROOT, "user-skill", "chitragupta", "SKILL.md"))
+        for must in ("(sections: brief, findings", "get_ticket(key, section?)", "Refresh brief", "/cg:ticket <KEY> --brief",
+                     "answer from the brief", "corrections win", "## Brief"):
+            self.assertTrue(must in body, must)
+
+
 if __name__ == "__main__":
     unittest.main()

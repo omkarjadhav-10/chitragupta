@@ -19,7 +19,9 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 
 ## Where things live
 - `tickets/INDEX.md` — every ticket: status, first/last worked, ≈ time, TL;DR
-- `tickets/<TICKET>/README.md` — the ticket hub: quick links, Scenarios (trigger request · DB effect · verify query),
+- `tickets/<TICKET>/README.md` — the ticket hub: quick links, then `## Brief` (root cause, helpful findings, how it
+  works today and after the fix, proposed fix, fixes made from git and PRs, possible cons; each claim's evidence is a
+  footnote pointing at the item further down), Scenarios (trigger request · DB effect · verify query),
   replay steps, latest artifacts, TL;DR, problem, root cause & findings, how it works, fix, database, APIs,
   integrations, config, errors, repro, decisions, open questions, code map, timeline
 - `tickets/<TICKET>/queries.md` — important queries, dated, with what each revealed
@@ -45,26 +47,32 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 ## Ask the worklog's MCP tools first
 When the Chitragupta plugin is loaded, its read-only MCP server (`mcp__plugin_cg_chitragupta__*`) answers most
 questions in one call, in compact Markdown with the file paths to open for detail:
-`search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: findings, requests, queries,
-dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
+`search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: brief, findings, requests,
+queries, dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
 `get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name)` ·
 `list_tickets(q?, status?, repo?, since?)` · `get_alerts()`. Long answers end with "more: page=N" — pass `page`.
 Use them before reading files; read the files below only for detail they don't show, or when the tools aren't
 available.
 
 ## How to answer
-1. Search in this order: the MCP tools above → ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
+1. Search in this order: the MCP tools above (for a ticket, its brief first) → ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
    daily files by date → grep across the folder (ticket keys look like ABC-1234; the prefixes are `ticket_prefixes`
    in `.worklog/config.json`).
 2. Cite the file and date for every fact, e.g. "(tickets/ABC-1234/README.md, 2026-10-14)". Quote queries in
    fenced code blocks exactly as recorded.
 3. Never claim more than the files say. If something isn't recorded, say so plainly.
-4. Standups: use the "Standup for next working day" section of the latest daily file; if it is a draft, build
+4. Ticket questions ("what was the root cause of ABC-1234?", "what did we change?", "any risks?"): answer from the brief
+   first (`get_ticket(key)` leads with it; `get_ticket(key, section="brief")` has all of it with what each evidence id
+   is), keep its evidence ids, and go to the findings only for detail it doesn't have. The user's corrections win:
+   an inbox note or a "My notes" line that contradicts the brief or an item is the answer, and say the brief is behind.
+   When the brief says "New findings since …" or there is none yet, say so and mention they can refresh it with
+   *Refresh brief* on the ticket's dashboard page or `/cg:ticket <KEY> --brief` (a model call; you don't run it).
+5. Standups: use the "Standup for next working day" section of the latest daily file; if it is a draft, build
    Yesterday/Today/Blockers from that day's ticket sections, one line each with ticket refs.
-5. Timesheets: sum the "≈ Time" column of each daily file's Tickets table per ticket and day (or run
+6. Timesheets: sum the "≈ Time" column of each daily file's Tickets table per ticket and day (or run
    `py -3 "{{LAUNCHER}}" cli hours --week` / `--month`); label totals as approximate (derived from Claude Code activity).
-6. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
-7. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
+7. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
+8. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
    `bruno/<TICKET>`). Don't run replay.sh yourself: it sends real requests that can change data, so the user runs it.
    Steps marked "changes a shared record" in requests.md need `--yes` on any env but local (say which records change
    and whether a restore step exists before suggesting it).
