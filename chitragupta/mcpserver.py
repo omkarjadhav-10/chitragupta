@@ -28,7 +28,7 @@ INSTRUCTIONS = ("Chitragupta is the user's automatic worklog: tickets (findings,
                 "branches), days, timesheets and a database/API knowledge base. Use these tools before reading "
                 "worklog files; open the file paths they return only for more detail.")
 
-SECTIONS = ("findings", "requests", "queries", "dbflow", "branches", "artifacts", "timeline", "notes")
+SECTIONS = ("brief", "findings", "requests", "queries", "dbflow", "branches", "artifacts", "timeline", "notes")
 SEARCH_TYPES = ("ticket", "finding", "query", "artifact", "api", "table", "integration", "day", "request", "branch")
 PERIODS = ("week", "month", "day")
 
@@ -59,7 +59,8 @@ TOOLS = [
          "q": _s(), "type": _s(enum=SEARCH_TYPES), "ticket": _s(), "repo": _s(), "from": _s(_DATE), "to": _s(_DATE),
          "limit": _s(kind="integer"), "page": _PAGE}, "required": ["q"]}},
     {"name": "get_ticket",
-     "description": "One ticket: summary and counts; `section` returns one part in full.",
+     "description": "One ticket: its brief first, then summary and counts; `section` returns one part in full "
+                    "(`brief`: with its evidence).",
      "inputSchema": {"type": "object", "properties": {
          "key": _s("e.g. ABC-1234"), "section": _s(enum=SECTIONS), "page": _PAGE}, "required": ["key"]}},
     {"name": "get_day",
@@ -285,6 +286,10 @@ def _summary_lines(t):
          " · ".join(x for x in ("status " + t["status"] if t["status"] else "", "first %s" % t["first"] if t["first"] else "",
                                 "last %s" % t["last"] if t["last"] else "", "time " + _hm(t["minutes"]),
                                 "repos " + ", ".join(t["repos"]) if t["repos"] else "") if x)]
+    from .render import brief_context_lines
+    bl = brief_context_lines(t.get("brief"))
+    if bl:
+        L += [""] + bl
     if t.get("tldr"):
         L += ["", "TL;DR: " + _one(t["tldr"], 600)]
     if t.get("problem"):
@@ -298,6 +303,63 @@ def _summary_lines(t):
     return L
 
 
+def _brief_section(t):
+    """The whole brief as plain text: every section with its claims and their evidence ids, then what each id is."""
+    from . import render
+    v = t.get("brief") or {}
+    items = {f.get("id"): f for f in t.get("findings") or []}
+    queries = {q.get("id"): q for q in t.get("queries") or []}
+    seen, L = [], []
+
+    def ids(cites):
+        out = []
+        for c in cites or []:
+            cid = render.cite_parts(c)[0]
+            if cid:
+                out.append(cid)
+                if cid not in [s[0] for s in seen]:
+                    seen.append((cid, c))
+        return " [%s]" % ", ".join(out) if out else ""
+    h = v.get("header") or {}
+    if v.get("stale") and v.get("has_brief"):
+        L.append("New findings since %s: the brief may be behind (/cg:ticket %s --brief, or Refresh brief on the "
+                 "dashboard)." % (str(v["stale"].get("since") or "")[:16].replace("T", " "), t["key"]))
+    if h.get("updated"):
+        L.append("Generated %s." % h["updated"][:16].replace("T", " "))
+    if v.get("epic"):
+        L.append("An Epic: its child tickets instead of a brief.")
+        L += ["- %s %s%s%s" % (c.get("key"), _one(c.get("title"), 120) if c.get("title") else "", " (%s)" % c["status"] if c.get("status") else "",
+                               " · " + _one(c["line"], 200) if c.get("line") else "") for c in v.get("children") or []] or ["No child tickets recorded yet."]
+    elif not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        L.append("No brief yet (written at day close, or /cg:ticket %s --brief)." % t["key"])
+        L.append("Root cause (%s): %s%s" % (rc.get("confidence") or "unknown", _one(rc["text"], 700), ids(rc.get("cites")))
+                 if rc.get("text") else "Root cause: not recorded yet.")
+    else:
+        for s in render.brief_sections(v):
+            head = render.brief_heading(s)
+            if s["id"] == "root_cause" and s.get("confidence"):
+                head += " (%s)" % s["confidence"]
+            if s["id"] == "fixes_made":
+                head += " (%s)" % (s.get("source") or "from git and PRs")
+            if s.get("override"):
+                head += " (your correction)"
+            L += ["", "### " + head]
+            rows = render.claim_texts(s)
+            L += ["- %s%s%s" % (lab + ": " if lab else "", _one(text, 700), ids(cites)) for lab, text, cites in rows] or \
+                 ["- " + (s.get("empty") or render.NOT_YET)]
+    if seen:
+        L += ["", "Evidence:"]
+        for cid, c in seen:
+            _cid, kind, rest, label = render.cite_parts(c)
+            f = items.get(rest) if kind in ("item", "note", "test") else None
+            q = queries.get(rest) if kind == "query" else None
+            what = ("[%s] %s (%s)" % (f.get("kind"), _one(f.get("title"), 160), f.get("date") or "") if f
+                    else "query: %s" % _one(q.get("purpose") or "", 160) if q else label)
+            L.append("- %s: %s" % (cid, what))
+    return L
+
+
 def _notes(readme):
     from .render import NOTES_START, NOTES_END
     if NOTES_START in readme and NOTES_END in readme:
@@ -308,7 +370,10 @@ def _notes(readme):
 def _section(key, t, tk, section):
     p = t["paths"]
     L = ["", "## %s" % section.capitalize()]
-    if section == "findings":
+    if section == "brief":
+        L += _brief_section(t)
+        L.append("\nFile: %s" % p.get("readme", _home("tickets", key, "README.md")))
+    elif section == "findings":
         for f in t["findings"]:
             L.append("- [%s] **%s**%s%s" % (f.get("kind"), _one(f.get("title"), 200),
                                            " (%s)" % f["confidence"] if f.get("confidence") else "",
