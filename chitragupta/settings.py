@@ -65,6 +65,10 @@ STATIC = [
        min="11:00", max="16:00"),
     _i("jira_worklog.hours_per_day", "Hours per day", "A full day's target; half days are half of it.", "number", "worklog",
        min=1, max=12),
+    _i("jira_worklog.turn_tail_minutes", "Time after a turn (minutes)", "Counted after the last event of each turn, for "
+       "reading the answer.", "int", "worklog", min=0, max=30, default_value=5),
+    _i("jira_worklog.idle_minutes", "Idle after (minutes)", "A longer gap inside a turn is not counted.", "int",
+       "worklog", min=5, max=60, default_value=15),
     _i("mcp.jira.enabled", "Use the Jira MCP", "Ticket cards and the evening facts the worklog subtracts.", "bool", "jira",
        affects="Background Jira reads (within the daily budget)"),
     _i("jira.parent_issue_types", "Parent issue types", "Jira issue types that only group work (one per line). They "

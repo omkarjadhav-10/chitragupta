@@ -24,6 +24,7 @@ from . import gitsync  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import store as storemod  # noqa: E402
+from . import timesheet  # noqa: E402
 from .redact import redact  # noqa: E402
 from .store import Store  # noqa: E402
 from .safety import paths  # noqa: E402
@@ -32,7 +33,8 @@ LOCK_STALE_S = 30 * 60
 LOCK_WAIT_S = 300  # how long CLI commands that change state wait for a running tick
 LOCK_POLL_S = 10
 LOOP_INTERVAL_S = 300
-BLOCK_GAP_MIN = 20
+BLOCK_GAP_MIN = 20  # the old block model (blocks_minutes), kept for reference
+time_params = timesheet.time_params  # (turn tail, idle) minutes of the time model
 
 
 # --------------------------------------------------------------------------- lock
@@ -473,27 +475,40 @@ class Agent:
         return attribute(self._captured(evs), self.prefixes, self.cfg)
 
     def recompute_minutes(self, day):
+        """Minutes per ticket (and per no-ticket repo/branch group) of a work day, from its raw events: turn intervals
+        with a short tail (timesheet.active_intervals; session-start/end are not activity), unioned across sessions,
+        overlapping time split evenly between the tickets active then (timesheet.union_minutes)."""
         evs = self.day_events(day)
         if not evs:
             return
         dd = self.store.day(day)
-        per_t, per_g, where = {}, {}, {}
+        per_t, where = {}, {}
         for ev in evs:
             ts = common.parse_ts(ev.get("ts"))
-            if not ts:
-                continue
             t = ev.get("_t")
-            if t:
+            if ts and t and ev.get("event") not in ("session-start", "session-end"):
                 per_t.setdefault(t, []).append(ts)
                 where.setdefault(t, set()).add(storemod.group_key(ev.get("repo_root"), ev.get("branch")))
-            else:
-                per_g.setdefault(storemod.group_key(ev.get("repo_root"), ev.get("branch")), []).append(ts)
+
+        def key(e):  # a turn without a ticket counts for its repo/branch group (never for time-only rows)
+            if e.get("_t") or e.get("_time"):
+                return e.get("_t")
+            return ("other", storemod.group_key(e.get("repo_root"), e.get("branch")))
+        tail, idle = time_params(self.cfg)
+        mins = timesheet.union_minutes(timesheet.active_intervals(evs, tail, idle, key=key))
+        for t, slot in dd["tickets"].items():  # recomputed from raw: a ticket that lost its turns loses its time
+            if t not in per_t and slot.get("minutes"):
+                slot["minutes"] = 0
+                tl = self.store.ticket(t)["timeline"].get(day)
+                if tl:
+                    tl["minutes"] = 0
+                self.store.touch_ticket(t)
         for t, stamps in per_t.items():
             first = min(stamps)
             repo = next((e.get("repo_root") for e in evs if e.get("_t") == t and e.get("repo_root")), None)
             branch = next((e.get("branch") for e in evs if e.get("_t") == t and e.get("branch")), None)
             slot = self.ensure_tslot(day, t, repo, branch)
-            slot["minutes"] = blocks_minutes(stamps)
+            slot["minutes"] = int(round(mins.get(t, 0)))
             slot["where"] = sorted(where.get(t, []))
             slot.setdefault("first_time", first.strftime("%H:%M"))
             tk = self.store.ticket(t)
@@ -502,12 +517,11 @@ class Agent:
             if not tl.get("line"):
                 tl["line"] = "worked in " + ", ".join(slot["where"])
             self.store.touch_ticket(t)
-        for g, stamps in per_g.items():
-            if len(stamps) < 2:
-                continue
-            slot = dd["other"].setdefault(g, {"minutes": 0, "items": {}, "queries": {}, "apis": {}, "tables": {},
-                                              "integrations": {}, "files_changed": [], "what_i_did": []})
-            slot["minutes"] = blocks_minutes(stamps)
+        for k, m in mins.items():
+            if isinstance(k, tuple) and m >= 1:
+                slot = dd["other"].setdefault(k[1], {"minutes": 0, "items": {}, "queries": {}, "apis": {}, "tables": {},
+                                                     "integrations": {}, "files_changed": [], "what_i_did": []})
+                slot["minutes"] = int(round(m))
         self.store.touch_day(day)
 
     # ------------------------------------------------------------------ extraction

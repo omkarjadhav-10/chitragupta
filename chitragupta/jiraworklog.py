@@ -215,21 +215,18 @@ class JiraWorklog:
 
     # ------------------------------------------------------------------ activity -> blocks (§2.1)
     def points(self, day, until=None, jira_comments=None):
+        """The day's activity as intervals [(start, end, ticket|None)], cut to [day start, until): Claude Code turns
+        (timesheet.active_intervals, per-turn ticket from agent.attribute), time-only sessions (their last named
+        ticket; home-folder time without one stays unassigned), and the 15 minutes BEFORE each commit, Bruno run and
+        Jira comment of mine (the work that led to it). Bruno file times count only for today: a file's last change
+        says nothing about a past day. Placeholder tickets never count."""
         start, end = common.day_bounds(day, self.cfg)
         until = min(until or end, end)
-        pm = self.ts["point_minutes"]
-        pts = []
-
-        def add(ts, t, dur=0):
-            if t and common.is_placeholder(t):  # a configured example key is never work
-                return
-            if ts and start <= ts < until:
-                pts.append({"ts": ts, "ticket": t, "dur": dur})
-        for ev in self.a.day_events(day):
-            add(common.parse_ts(ev.get("ts")), ev.get("_t"))
+        pm = _dt.timedelta(minutes=self.ts["point_minutes"])
+        tail, idle = T.time_params(self.cfg)
+        evs = list(self.a.day_events(day))
         # time-only sessions (the worklog folder, the home folder itself): ticket via the session's last mentioned one
         tdir = common.wl("raw", day, "time")
-        sticky = {}
         for fn in sorted(os.listdir(tdir)) if os.path.isdir(tdir) else []:
             rows = []
             for line in common.read_text(os.path.join(tdir, fn)).splitlines():
@@ -237,42 +234,48 @@ class JiraWorklog:
                     rows.append(json.loads(line))
                 except ValueError:
                     pass
+            sticky = None
             for r in sorted(rows, key=lambda r: r.get("ts") or ""):
                 if r.get("ticket") and not common.is_placeholder(r["ticket"]):
-                    sticky[r.get("session_id")] = r["ticket"]
-                t = sticky.get(r.get("session_id"))
-                if t:
-                    add(common.parse_ts(r.get("ts")), t)
-                elif r.get("where") == "home":  # home-folder time without a ticket: unassigned time of the day
-                    add(common.parse_ts(r.get("ts")), None)
-                # worklog-system sessions without a ticket are not work
+                    sticky = r["ticket"]
+                if sticky or r.get("where") == "home":  # worklog-system sessions without a ticket are not work
+                    evs.append({"ts": r.get("ts"), "event": r.get("event"), "session_id": "time:" + fn, "_t": sticky})
+        iv = T.active_intervals(evs, tail, idle)
+
+        def before(ts, t):
+            if ts and t:
+                iv.append((ts - pm, ts, t))
         dd = self.store.day(day)
         for c in dd.get("commits") or []:
-            if c.get("ticket"):
-                add(common.parse_ts(c.get("date")), c["ticket"], pm)
+            before(common.parse_ts(c.get("date")), c.get("ticket"))
         for b in (dd.get("outside") or {}).get("bruno") or []:
-            if b.get("ticket"):
-                add(common.parse_ts(b.get("ts")), b["ticket"], pm)
-        gen = (common.read_json(common.hp("data", "generated.json"), {}) or {}).get("files") or {}
+            before(common.parse_ts(b.get("ts")), b.get("ticket"))
         broot = common.hp("bruno")
-        for t in os.listdir(broot) if os.path.isdir(broot) else []:
-            if not re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d+", t):
-                continue
-            for fn in os.listdir(os.path.join(broot, t)):
-                rel = "bruno/%s/%s" % (t, fn)
-                if (gen.get(rel) or {}).get("owner") == "engine":
+        if day == common.workday(common.now(), self.cfg):
+            gen = (common.read_json(common.hp("data", "generated.json"), {}) or {}).get("files") or {}
+            for t in os.listdir(broot) if os.path.isdir(broot) else []:
+                if not re.fullmatch(r"[A-Z][A-Z0-9]{1,9}-\d+", t):
                     continue
-                try:
-                    mt = _dt.datetime.fromtimestamp(os.path.getmtime(os.path.join(broot, t, fn))).astimezone()
-                except OSError:
-                    continue
-                add(mt, t, pm)
+                for fn in os.listdir(os.path.join(broot, t)):
+                    if (gen.get("bruno/%s/%s" % (t, fn)) or {}).get("owner") == "engine":
+                        continue
+                    try:
+                        before(_dt.datetime.fromtimestamp(os.path.getmtime(os.path.join(broot, t, fn))).astimezone(), t)
+                    except OSError:
+                        continue
         for c in jira_comments or []:
-            add(common.parse_ts(c.get("time")), c.get("ticket"), pm)
-        return pts
+            before(common.parse_ts(c.get("time")), c.get("ticket"))
+        out = []
+        for a, b, t in iv:
+            if t and common.is_placeholder(t):  # a configured example key is never work
+                continue
+            a, b = max(a, start), min(b, until)
+            if b > a:
+                out.append((a, b, t))
+        return out
 
     def blocks(self, day, until=None, jira_comments=None):
-        bl = T.build_blocks(self.points(day, until, jira_comments), self.ts["block_gap_minutes"])
+        bl = T.interval_blocks(self.points(day, until, jira_comments), T.time_params(self.cfg)[1])
         lines = (self.store.day(day).get("worklog_lines") or {})
         gap = _dt.timedelta(minutes=self.ts["block_gap_minutes"])
         used = set()
