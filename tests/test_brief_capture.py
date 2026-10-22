@@ -80,5 +80,46 @@ class ExtractSchema(Isolated, unittest.TestCase):
         self.assertNotIn("phase", items["Odd phase dropped"])
 
 
+class FixState(Isolated, unittest.TestCase):
+    def setUp(self):
+        self.isolate()
+        write_config(self.home, {"ticket_prefixes": ["ABC"], "day_starts_at": "04:00", "paths": {"python": PY}})
+
+    def fixes(self, st):
+        return {i["title"]: i for i in st.ticket("ABC-1001")["items"].values() if i["kind"] == "fix"}
+
+    def test_edit_of_a_named_file_applies_the_fix(self):
+        from chitragupta import store
+        st = store.Store()
+        res = {"items": [item("fix", "Release stock in CancelService.java", detail="call release() before save"),
+                         item("fix", "Retry in StockJob.java", confidence="hypothesis")],
+               "files": [{"path": "src/shop/CancelService.java", "ticket": "ABC-1001", "role": "service", "changed": True}]}
+        store.merge_extraction(st, res, ctx(edited=["C:/w/shop-api/src/shop/CancelService.java"]), ["ABC"])
+        f = self.fixes(st)
+        a = f["Release stock in CancelService.java"]
+        self.assertEqual((a["state"], a["applied_by"], a["applied_file"]), ("applied", "edit", "src/shop/CancelService.java"))
+        self.assertEqual(f["Retry in StockJob.java"]["state"], "proposed")
+
+    def test_commit_of_a_named_file_applies_the_fix(self):
+        from chitragupta import store
+        st = store.Store()
+        store.merge_extraction(st, {"items": [item("fix", "Retry in StockJob.java")]}, ctx(), ["ABC"])
+        tk = st.ticket("ABC-1001")
+        self.assertEqual(self.fixes(st)["Retry in StockJob.java"]["state"], "proposed")
+        tk["files"]["src/shop/StockJob.java"] = {"path": "src/shop/StockJob.java", "changed": True, "verified": True,
+                                                 "verified_by": "commit"}
+        self.assertEqual(store.mark_applied_fixes(tk, DAY), 1)
+        self.assertEqual(self.fixes(st)["Retry in StockJob.java"]["applied_by"], "commit")
+
+    def test_a_named_but_unverified_file_does_not_apply(self):
+        from chitragupta import store
+        st = store.Store()
+        store.merge_extraction(st, {"items": [item("fix", "Guard in Ghost.java")]}, ctx(), ["ABC"])
+        tk = st.ticket("ABC-1001")
+        tk["files"]["src/Ghost.java"] = {"path": "src/Ghost.java", "changed": False, "verified": None,
+                                         "claimed_changed": True}
+        self.assertEqual(store.mark_applied_fixes(tk, DAY), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

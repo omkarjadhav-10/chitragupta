@@ -173,7 +173,7 @@ A ticket's `title` comes only from its Jira card or from you (`title_source` `ji
 
 ### What the brief draws on
 
-Extraction digests start each activity line with its raw line number (`[10:02 L57]`), and an item the model ties to a line keeps it as `ref: "raw/<day>/<session>.jsonl:<line>"`. How-it-works items carry `phase` (`before` the ticket's fix, `after` it, or `both`); the item kind `risk` holds a regression, side effect or open concern the session showed. All of these are optional fields: older items simply have none.
+Extraction digests start each activity line with its raw line number (`[10:02 L57]`), and an item the model ties to a line keeps it as `ref: "raw/<day>/<session>.jsonl:<line>"`. How-it-works items carry `phase` (`before` the ticket's fix, `after` it, or `both`); the item kind `risk` holds a regression, side effect or open concern the session showed. Fix items have `state`: `proposed` until a file they name (its repo path, or its file name as a whole word) is changed by an Edit/Write tool call or a commit, then `applied` (with `applied_by` edit or commit, `applied_file`, `applied_at`); nothing turns it back. All of these are optional fields: older items simply have none (a fix without `state` reads as proposed).
 
 ## Outside the data home
 

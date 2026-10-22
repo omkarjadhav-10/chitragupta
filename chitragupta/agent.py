@@ -790,6 +790,7 @@ class Agent:
                                                    verified=True, verified_by="commit", repo=old.get("repo") or c["repo_name"])
                     if fl["path"] not in slot["files_changed"]:
                         slot["files_changed"].append(fl["path"])
+                storemod.mark_applied_fixes(tk, day)  # a fix naming a committed file is applied
                 self.store.touch_ticket(c["ticket"])
         if commits:
             self.extras.append("+%d commit%s" % (len(commits), "" if len(commits) == 1 else "s"))
