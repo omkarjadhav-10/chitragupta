@@ -264,9 +264,9 @@ def _run(dry_run):
         state_changed = isinstance(state, dict) and migrate_inbox_state(state, notes)
     cfg["chitragupta_migrations"] = done + pending
     out["changes"] = notes
-    out["applied"] = pending
+    out["applied"] = list(pending)
     if dry_run:
-        return out
+        return _run_steps(steps, cfg, cpath, done + pending, out, dry_run) if steps else out
     common.write_json(cpath, cfg)
     if health_changed:
         common.write_json(hpath, health)

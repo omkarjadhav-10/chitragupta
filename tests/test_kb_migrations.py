@@ -87,6 +87,16 @@ class StepTests(Isolated, unittest.TestCase):
         self.assertIsNone(migrate.run_in_tick())
         self.assertEqual(CALLS, [("ok", True), ("ok", False)])
 
+    def test_dry_run_lists_the_steps_after_pending_legacy_ones(self):
+        from chitragupta import common, migrate
+        common.write_json(common.wl("config.json"), {"chitragupta_migrations": ["database-mcp-rename", "branch-tracking"]})
+        migrate.KB_STEPS[:] = [("kb-test-ok", "tests.test_kb_migrations:step_ok")]
+        dry = migrate.run(dry_run=True)
+        self.assertEqual(dry["applied"], ["inbox-counts", "kb-test-ok"])
+        self.assertEqual(CALLS, [("ok", True)])
+        self.assertEqual(common.read_json(common.hp("data", "x.json"), {}), {"v": 1})
+        self.assertEqual(self.cfg()["chitragupta_migrations"], ["database-mcp-rename", "branch-tracking"])
+
     def test_a_failing_step_stays_pending_and_stops_later_ones(self):
         from chitragupta import migrate
         migrate.KB_STEPS[:] = [("kb-test-boom", "tests.test_kb_migrations:step_boom"),
