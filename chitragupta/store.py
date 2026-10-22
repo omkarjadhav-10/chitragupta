@@ -7,6 +7,7 @@ import os
 import re
 
 from . import common
+from . import kbnorm
 from .redact import redact_obj
 
 ITEM_KINDS = ["finding", "root_cause", "how_it_works", "fix", "decision", "config", "error",
@@ -234,23 +235,19 @@ def merge_extraction(store, res, ctx, prefixes):
         if not text:
             continue
         t = resolve(q.get("ticket")) or default_t
-        qid = common.stable_id(t or gkey, "query", re.sub(r"\s+", " ", text))
+        qid = query_id(t or gkey, text)
         rec = {"id": qid, "date": day, "time": ctx.get("time", ""), "dialect": q.get("dialect") or "other",
                "text": text, "purpose": q.get("purpose") or "", "tables": q.get("tables") or [],
-               "kind": q.get("kind") or "read", "revealed": q.get("revealed") or ""}
+               "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
         slot = tslot(t)
-        if t:
-            tk = store.ticket(t)
-            if qid not in tk["queries"]:
-                tk["queries"][qid] = rec
-                store.bump(t, "queries")
-            elif rec["revealed"] and not tk["queries"][qid].get("revealed"):
-                tk["queries"][qid]["revealed"] = rec["revealed"]
-            if qid not in slot["query_ids"]:
-                slot["query_ids"].append(qid)
-        elif qid not in slot["queries"]:
-            slot["queries"][qid] = rec
-            store.bump(gkey, "queries")
+        qs = store.ticket(t)["queries"] if t else slot["queries"]
+        if qid not in qs:
+            qs[qid] = rec
+            store.bump(t or gkey, "queries")
+        else:
+            add_query_sighting(qs[qid], rec)
+        if t and qid not in slot["query_ids"]:
+            slot["query_ids"].append(qid)
 
     cat = store.catalog()
     for tb in res.get("tables") or []:
@@ -258,19 +255,20 @@ def merge_extraction(store, res, ctx, prefixes):
         if not name:
             continue
         t = resolve(tb.get("ticket")) or default_t
-        key = name.lower()
+        slot = tslot(t)
+        own = store.ticket(t)["tables"] if t else slot["tables"]
+        key = kbnorm.table_key(name, [k for k in own if "." in k])
+        if "." not in key:
+            key = kbnorm.table_key(name, [k for k in cat["tables"] if "." in k])
         rec = {"name": name, "db": tb.get("db") or "", "purpose": tb.get("purpose") or "",
                "key_columns": tb.get("key_columns") or [], "relations": tb.get("relations") or [], "last": day}
         _merge_catalog(cat["tables"], key, rec, t, day)
+        fold_bare(cat["tables"], ".", table_name)
         store.catalog_dirty = True
-        slot = tslot(t)
+        own[key] = _merge_rec(own.get(key), rec)
+        folded = fold_bare(own, ".", table_name)
         if t:
-            tk = store.ticket(t)
-            tk["tables"][key] = _merge_rec(tk["tables"].get(key), rec)
-            if key not in slot["table_keys"]:
-                slot["table_keys"].append(key)
-        else:
-            slot["tables"][key] = rec
+            slot["table_keys"] = _union([folded.get(k, k) for k in slot["table_keys"]], [key])
 
     for a in res.get("apis") or []:
         path = (a.get("path") or "").strip()
@@ -278,11 +276,12 @@ def merge_extraction(store, res, ctx, prefixes):
             continue
         method = (a.get("method") or "").upper().strip() or "ANY"
         t = resolve(a.get("ticket")) or default_t
-        key = "%s %s %s" % (method, path, (a.get("host_or_service") or "").strip().lower())
-        rec = {"method": method, "path": path, "host_or_service": a.get("host_or_service") or "",
+        key = kbnorm.api_key(method, path)
+        host = (a.get("host_or_service") or "").strip()
+        rec = {"method": method, "path": path, "host_or_service": host,
                "direction": a.get("direction") or "", "purpose": a.get("purpose") or "",
                "request_fields": a.get("request_fields") or [], "response_fields": a.get("response_fields") or [],
-               "auth_type": a.get("auth_type") or "", "last": day}
+               "auth_type": a.get("auth_type") or "", "hosts": [host] if host else [], "paths": [path], "last": day}
         _merge_catalog(cat["apis"], key, rec, t, day)
         store.catalog_dirty = True
         slot = tslot(t)
@@ -320,11 +319,20 @@ def merge_extraction(store, res, ctx, prefixes):
             continue
         t = resolve(fl.get("ticket")) or default_t
         slot = tslot(t)
+        repo = os.path.basename((ctx.get("repo") or "").rstrip("/\\"))
         if t:
             tk = store.ticket(t)
+            p = file_key_for(tk, p, ctx.get("repo"))
             old = tk["files"].get(p) or {}
-            tk["files"][p] = {"path": p, "role": fl.get("role") or old.get("role", ""),
-                              "changed": bool(fl.get("changed")) or old.get("changed", False), "last": day}
+            tk["files"][p] = dict(old, path=p, role=fl.get("role") or old.get("role", ""),
+                                  changed=bool(fl.get("changed")) or old.get("changed", False), last=day)
+            if repo and not old.get("repo"):
+                tk["files"][p]["repo"] = repo
+            folded = fold_bare(tk["files"], "/")
+            p = folded.get(p, p)
+            slot["files_changed"] = [folded.get(x, x) for x in slot["files_changed"]]
+        else:
+            p = kbnorm.file_key(p, ctx.get("repo"), [repo])
         if fl.get("changed") and p not in slot["files_changed"]:
             slot["files_changed"].append(p)
 
@@ -341,6 +349,99 @@ def _merge_rec(old, new):
         elif v and (not old.get(k) or k == "last"):
             out[k] = v
     return out
+
+
+# --------------------------------------------------------------------------- one record per thing (K7)
+
+def query_id(owner, text):
+    """A query's id: the same SQL up to spacing, case outside literals, a session SET prefix or a trailing ';'."""
+    return common.stable_id(owner, "query", kbnorm.sql_key(text))
+
+
+def add_query_sighting(cur, rec):
+    """The same query seen again: keep the first record, add the day and any differently written text."""
+    cur["days"] = _union(cur.get("days") or [cur.get("date")], rec.get("days") or [rec.get("date")])
+    if rec.get("text") and rec["text"].strip() != (cur.get("text") or "").strip():
+        cur["variants"] = _union(cur.get("variants"), [rec["text"]])[:5]
+    for k in ("revealed", "purpose"):
+        if rec.get(k) and not cur.get(k):
+            cur[k] = rec[k]
+
+
+def table_name(key, recs):
+    """The display name of a merged table: a written name that is this key, else the key itself."""
+    for r in recs:
+        if kbnorm.table_key(r.get("name")) == key:
+            return r["name"]
+    return key
+
+
+def file_key_for(tk, path, repo_root=None):
+    """A file's key in a ticket: repo-relative posix; a bare name takes the one known full path with that name."""
+    names = [os.path.basename(str(repo_root or "").rstrip("/\\"))] + list(tk.get("repos") or [])
+    k = kbnorm.file_key(path, repo_root, [n for n in names if n])
+    if "/" not in k:
+        hits = [x for x in tk.get("files") or {} if x.endswith("/" + k)]
+        if len(hits) == 1:
+            return hits[0]
+    return k
+
+
+def merge_dup(keep, other, keep_key, other_key):
+    """Two records of one thing: every list is united, a value is filled only where `keep` has none, the newest
+    last / last_seen wins, `changed` is either, and the other key becomes an alias. Nothing is dropped."""
+    out = dict(keep)
+    for k, v in other.items():
+        if k in ("last", "last_seen"):
+            out[k] = max(str(out.get(k) or ""), str(v or ""))
+        elif k == "changed":
+            out[k] = bool(out.get(k)) or bool(v)
+        elif k in ("aliases", "id"):
+            continue
+        elif isinstance(v, list):
+            out[k] = _union(out.get(k), v)
+        elif v not in (None, "", {}) and out.get(k) in (None, "", {}, []):
+            out[k] = v
+    if "text" in other and (other.get("text") or "").strip() != (out.get("text") or "").strip():
+        out["variants"] = _union(out.get("variants"), [other["text"]])[:5]
+    if "host_or_service" in other:
+        out["hosts"] = _union(out.get("hosts"), [x for x in (keep.get("host_or_service"), other.get("host_or_service")) if x])
+    if "text" in other and "date" in other:  # a query: every day it was seen
+        days = _union(out.get("days") or [keep.get("date")], other.get("days") or [other.get("date")])
+        out["days"] = sorted(d for d in days if d)
+    al = _union(out.get("aliases"), [other_key] + list(other.get("aliases") or []))
+    out["aliases"] = [a for a in al if a != keep_key]
+    if not out["aliases"]:
+        out.pop("aliases")
+    return out
+
+
+def fold_bare(d, sep, namefn=None):
+    """Merge each bare key ("orders", "Order.java") into the one qualified key ending in it ("shop.orders",
+    "src/Order.java"), in place. Ambiguous names stay as they are. Returns {old key: new key}."""
+    moved = {}
+    for k in [k for k in d if sep not in k]:
+        hits = [x for x in d if x != k and x.endswith(sep + k)]
+        if len(hits) != 1:
+            continue
+        old = d.pop(k)
+        d[hits[0]] = merge_dup(d[hits[0]], old, hits[0], k)
+        if namefn:
+            d[hits[0]]["name"] = namefn(hits[0], [d[hits[0]], old])
+        if sep == "/":
+            d[hits[0]]["path"] = hits[0]
+        moved[k] = hits[0]
+    return moved
+
+
+def lookup(d, key):
+    """d[key], or the record that took `key` over as an alias."""
+    if key in d:
+        return d[key]
+    for rec in d.values():
+        if isinstance(rec, dict) and key in (rec.get("aliases") or ()):
+            return rec
+    return None
 
 
 def _merge_catalog(table, key, rec, ticket, day):

@@ -6,7 +6,7 @@ import re
 
 from . import common
 from .redact import redact
-from .store import Store
+from .store import Store, lookup
 
 NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
@@ -385,15 +385,15 @@ def ticket_section(store, dd, t, slot):
     if finds:
         L.append("- **Findings**")
         L += ["  - " + item_line(i) for i in finds]
-    tables = [tk["tables"][k]["name"] for k in slot.get("table_keys", []) if k in tk["tables"]]
-    qs = [tk["queries"][q] for q in slot.get("query_ids", []) if q in tk["queries"]]
+    tables = [r["name"] for r in _found(tk["tables"], slot.get("table_keys"))]
+    qs = _found(tk["queries"], slot.get("query_ids"))
     if tables or qs:
         L.append("- **DB**" + (" — tables: " + ", ".join(code(x) for x in tables) if tables else ""))
         for q in qs:
             L.append("  - query: [%s](../../../tickets/%s/queries.md#q-%s) _(%s · %s)_" % (
                 cell(q.get("purpose") or common.truncate(q.get("text"), 60)), t, q["id"],
                 DIALECT.get(q.get("dialect"), ("SQL",))[0], q.get("kind")))
-    apis = [tk["apis"][k] for k in slot.get("api_keys", []) if k in tk["apis"]]
+    apis = _found(tk["apis"], slot.get("api_keys"))
     igs = [tk["integrations"][k] for k in slot.get("integration_keys", []) if k in tk["integrations"]]
     if apis or igs:
         L.append("- **APIs / integrations**")
@@ -425,6 +425,16 @@ def ticket_section(store, dd, t, slot):
             L += fallback_lines(fb)
     L.append("")
     return L
+
+
+def _found(d, keys):
+    """The records of a day slot's keys, each once (an old key resolves through the record's aliases)."""
+    out = []
+    for k in keys or []:
+        r = lookup(d, k)
+        if r is not None and not any(r is x for x in out):
+            out.append(r)
+    return out
 
 
 def other_section(dd, g, slot):
@@ -527,7 +537,7 @@ def render_ticket(store, t):
     fix = ["- " + item_line(i, True) for i in by("fix")]
     changed = [f for f in tk["files"].values() if f.get("changed")]
     if changed:
-        fix += ["", "Files changed:"] + ["- %s%s" % (code(f["path"]), " — " + f["role"] if f.get("role") else "") for f in sorted(changed, key=lambda f: f["path"])]
+        fix += ["", "%s changed — see the Code map below." % ("1 file" if len(changed) == 1 else "%d files" % len(changed))]
     if tk.get("commits"):
         fix += ["", "Commits:"] + ["- %s %s %s %s _(%s)_" % (c.get("date", "")[:10], c.get("repo_name"), code(c.get("short")), c.get("subject"), c.get("ref"))
                                    for c in sorted(tk["commits"].values(), key=lambda c: c.get("date", ""), reverse=True)]
@@ -565,13 +575,23 @@ def render_ticket(store, t):
     sec("How to reproduce / test", rep)
     sec("Decisions", ["- " + item_line(i, True) for i in by("decision")])
     sec("Open questions · TODO · blockers", ["- " + item_line(i, True) for i in by("question", "todo", "blocker")])
-    sec("Code map", ["- %s — %s" % (code(f["path"]), f.get("role") or ("changed" if f.get("changed") else "")) for f in sorted(tk["files"].values(), key=lambda f: f["path"])])
+    sec("Code map", code_map(tk))
     sec("References consulted", ["- " + item_line(i, True) for i in by("reference")])
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     sec("Timeline", tl)
     L += ["## My notes", NOTES_BLOCK, ""]
     return "\n".join(L)
+
+
+def code_map(tk):
+    """One table of the ticket's files: changed ones first, each listed once."""
+    files = sorted(tk.get("files", {}).values(), key=lambda f: (not f.get("changed"), f.get("path") or ""))
+    if not files:
+        return None
+    L = ["| File | Role | Changed |", "|---|---|---|"]
+    L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in files]
+    return L
 
 
 def quick_links(t, tk):
@@ -679,8 +699,8 @@ def render_queries(store, t):
         L.append("_No queries recorded yet._")
     for q in qs:
         lang = DIALECT.get(q.get("dialect"), ("SQL", "sql"))
-        L += ['<a id="q-%s"></a>' % q["id"],
-              "## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query")]
+        L += ['<a id="q-%s"></a>' % x for x in [q["id"]] + list(q.get("aliases") or [])]
+        L.append("## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query"))
         if q.get("tables"):
             L.append("Tables: " + ", ".join(code(x) for x in q["tables"]))
         if q.get("revealed"):

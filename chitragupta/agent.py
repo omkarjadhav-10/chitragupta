@@ -671,7 +671,7 @@ class Agent:
             if q["ticket"]:
                 slot = self.ensure_tslot(day, q["ticket"])
                 tk = self.store.ticket(q["ticket"])
-                qid = common.stable_id(q["ticket"], "query", " ".join(q["text"].split()))
+                qid = storemod.query_id(q["ticket"], q["text"])
                 if qid not in tk["queries"]:
                     tk["queries"][qid] = {"id": qid, "date": day, "time": common.hhmm(q["ts"]), "dialect": q["dialect"],
                                           "text": q["text"], "purpose": "SQL script " + q["name"], "tables": [], "kind": "read",
@@ -1008,7 +1008,9 @@ class Agent:
             self.cfg_base = copy.deepcopy(self.cfg)
         self.store.save()
         self.update_health()
-        changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets)
+        from . import kb5
+        changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,
+                                    everything=kb5.take_rerender())  # once after a data migration
         day = common.workday(common.now(), self.cfg)
         msg = gitsync.commit_message(day, self.store.delta, " ".join(self.extras + [self.features.commit_extras()]).strip())
         committed = gitsync.commit(self.cfg, msg, h)
