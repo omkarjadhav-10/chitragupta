@@ -333,7 +333,7 @@ export function TicketPage({ route }) {
   return html`<${Wrap} rail=${rail} railLabel="Tickets">
     <${Load} res=${res} lines=${10}>${(t) => html`
       <div class="tkhead"><div class="tkhead-row"><div>
-        ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a href="#/tickets">Tickets</a></p>`}
+        ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a class="crumb" href="#/tickets">Tickets</a></p>`}
         <h1 id="page-title" tabindex="-1">${t.key}${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
         ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
         <${BriefMeta} t=${t} />

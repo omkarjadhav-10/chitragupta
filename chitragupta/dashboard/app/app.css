@@ -316,6 +316,7 @@ dialog.dlg[open] { animation: pop var(--dur-2) var(--ease); }
 
 /* ------------------------------------------------------------ Ticket */
 .tkhead { margin: 0 0 var(--s2); }
+.crumb { display: inline-block; min-height: 24px; padding: 2px 0; }
 .tkhead h1 { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
 .tkhead h1 .title { font-size: var(--fs-xl); color: var(--ink-2); font-weight: 500; }
 .tkhead .chips { margin: var(--s2) 0 0; }

@@ -71,6 +71,7 @@ export function BriefMeta({ t }) {
     ${h.jira_type ? html`<${Chip} title="Jira issue type">${h.jira_type}</${Chip}>` : null}
     ${js ? html`<${Status} kind="info">Jira: ${js}</${Status}>` : null}
     ${inf ? html`<${Status} kind="off">Inferred: ${inf}</${Status}>` : null}
+    ${!js && !inf && t.status ? html`<${Chip} title="Status">${t.status}</${Chip}>` : null}
     ${st ? html`<${Status} kind=${(t.delivery && (t.delivery.gaps || []).length) ? 'warn' : STAGE[st.kind] || 'off'}>Delivery: ${st.text || st.kind}</${Status}>` : null}
     ${where.length ? html`<span class="small">${where.map((w, i) => html`${i ? ' · ' : ''}${w}`)}</span>` : null}
     <span class="grow"></span>
