@@ -819,7 +819,7 @@ class Agent:
             tk = self.store.ticket(t)
             items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]]
             tickets[t] = {
-                "title": tk.get("title"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
+                "title": tk.get("title") or tk.get("title_hint"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
                 "activity": [w["time"] + " " + w["text"] for w in sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))],
                 "items": [{"kind": i["kind"], "title": i["title"], "detail": i.get("detail"), "confidence": i.get("confidence")} for i in items],
                 "queries": [{"purpose": tk["queries"][q].get("purpose"), "tables": tk["queries"][q].get("tables"),
@@ -877,7 +877,7 @@ class Agent:
                     if pt.get("tldr"):
                         tk["tldr"], tk["tldr_date"] = pt["tldr"], day
                     if pt.get("status_inferred"):
-                        tk["status"] = pt["status_inferred"]
+                        tk["status_inferred"] = pt["status_inferred"]  # never the Jira status (jira.status)
                     if pt.get("problem") and not tk.get("problem"):
                         tk["problem"] = pt["problem"]
                 tl = tk["timeline"].setdefault(day, {"minutes": dd["tickets"][t].get("minutes", 0), "line": ""})

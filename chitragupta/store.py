@@ -32,8 +32,8 @@ def branches_path():
 
 
 def new_ticket(t):
-    return {"id": t, "title": "", "title_source": "", "repos": [], "branches": [], "first": "", "last": "",
-            "status": "", "tldr": "", "tldr_date": "", "problem": "", "items": {}, "queries": {},
+    return {"id": t, "title": "", "title_source": "", "title_hint": "", "repos": [], "branches": [], "first": "", "last": "",
+            "status": "", "status_inferred": "", "tldr": "", "tldr_date": "", "problem": "", "items": {}, "queries": {},
             "tables": {}, "apis": {}, "integrations": {}, "files": {}, "commits": {}, "timeline": {},
             "bruno": {}, "api_calls": {}, "replay": {}, "data_flow": {}, "table_relations": {}, "dbflow_conflicts": [],
             "artifacts": {}}
@@ -108,6 +108,7 @@ class Store:
 
     def save(self):
         for t in self.dirty_tickets:
+            self.tickets[t]["status"] = status_of(self.tickets[t])  # computed, for readers of the old single field
             common.write_json(ticket_path(t), redact_obj(self.tickets[t]))
         for d in self.dirty_days:
             common.write_json(day_path(d), redact_obj(self.days[d]))
@@ -143,6 +144,23 @@ def _union(a, b):
     return out
 
 
+TITLE_SOURCES = ("jira", "user")  # the only sources of a ticket's title; anything else is a hint
+
+
+def display_title(tk):
+    """The ticket's title from its Jira card or the user; "" until one exists (show the key instead)."""
+    return (tk.get("title") or "") if tk.get("title_source") in TITLE_SOURCES else ""
+
+
+def jira_status(tk):
+    return ((tk.get("jira") or {}).get("status") or "") if isinstance(tk.get("jira"), dict) else ""
+
+
+def status_of(tk):
+    """The single `status` older readers expect: the Jira status when a card exists, else the inferred one."""
+    return jira_status(tk) or tk.get("status_inferred") or ""
+
+
 def group_key(repo, branch):
     return "%s · %s" % (os.path.basename((repo or "").rstrip("/\\")) or "no-repo", branch or "-")
 
@@ -166,11 +184,11 @@ def touch_ticket_meta(store, t, day, repo=None, branch=None):
         tk["repos"] = _union(tk["repos"], [os.path.basename(repo.rstrip("/\\"))])
     if branch and not branch.startswith("detached@"):
         tk["branches"] = _union(tk["branches"], [branch])
-        if not tk["title"]:
+        if not tk.get("title_hint"):
             slug = re.sub(r"^.*?" + re.escape(t) + r"[-_/]?", "", branch, flags=re.I)
             slug = re.sub(r"[-_/]+", " ", slug).strip()
-            if slug:
-                tk["title"], tk["title_source"] = slug[:90], "branch"
+            if slug:  # a hint only: the title comes from the Jira card or the user
+                tk["title_hint"], tk["title_hint_source"] = slug[:90], "branch"
     if not tk["first"] or day < tk["first"]:
         tk["first"] = day
     if not tk["last"] or day > tk["last"]:
@@ -204,8 +222,8 @@ def merge_extraction(store, res, ctx, prefixes):
         t = resolve(link.get("ticket"))
         if t and link.get("title_hint"):
             tk = touch_ticket_meta(store, t, day, ctx.get("repo"), ctx.get("branch"))
-            if tk["title_source"] in ("", "branch"):
-                tk["title"], tk["title_source"] = link["title_hint"][:90], "hint"
+            if tk.get("title_hint_source") in (None, "", "branch"):
+                tk["title_hint"], tk["title_hint_source"] = link["title_hint"][:90], "model"
 
     # activity line (what I did)
     summ = (res.get("activity_summary") or "").strip()
@@ -491,7 +509,7 @@ def already_recorded(store, tickets, limit=80):
         tk = store.ticket(t)
         items = sorted(tk["items"].values(), key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)[:limit]
         out[t] = {
-            "title": tk.get("title", ""),
+            "title": tk.get("title") or tk.get("title_hint") or "",
             "items": [{"id": i["id"], "kind": i["kind"], "title": i["title"], "confidence": i.get("confidence")}
                       for i in items],
             "queries": [q.get("purpose") or q["text"][:80] for q in list(tk["queries"].values())[-30:]],

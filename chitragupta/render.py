@@ -6,7 +6,7 @@ import re
 
 from . import common
 from .redact import redact
-from .store import Store, lookup
+from .store import Store, display_title, jira_status, lookup
 
 NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
@@ -268,7 +268,7 @@ def render_day(store, day, cfg, health):
             tk = store.ticket(t)
             nf = len([i for i in slot.get("item_ids", []) if tk["items"].get(i, {}).get("kind") not in OPEN_KINDS])
             L.append("| [%s](../../../tickets/%s/README.md) | %s | %s | %s | %d | %d | %d |" % (
-                t, t, cell(tk.get("title")), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
+                t, t, title_cell(tk), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
                 nf, len(slot.get("query_ids", [])), len(slot.get("api_keys", []))))
         L.append("")
         for t, slot in tickets:
@@ -365,13 +365,30 @@ def render_day(store, day, cfg, health):
     return "\n".join(L) + "\n"
 
 
+def heading(t, tk, level="#"):
+    """`# KEY — Jira title`, or just `# KEY` while the ticket has no card (a hint is never shown as the title)."""
+    title = display_title(tk)
+    return "%s %s — %s" % (level, t, title) if title else "%s %s" % (level, t)
+
+
+def title_cell(tk):
+    title = display_title(tk)
+    return cell(title) if title else ("_hint: %s_" % cell(tk["title_hint"]) if tk.get("title_hint") else "")
+
+
+def status_text(tk):
+    """'Jira: QA COMPLETED · Inferred: in_progress' (the parts that are known)."""
+    parts = [("Jira", jira_status(tk)), ("Inferred", tk.get("status_inferred") or "")]
+    return " · ".join("%s: %s" % (k, v) for k, v in parts if v) or "—"
+
+
 def fmt_time(m):
     return ("≈ " + common.fmt_minutes(m)) if m else "—"
 
 
 def ticket_section(store, dd, t, slot):
     tk = store.ticket(t)
-    L = ["### %s — %s" % (t, tk.get("title") or "(untitled)")]
+    L = [heading(t, tk, "###")]
     cons = (dd.get("consolidated") or {}).get(t) or {}
     did = cons.get("what_i_did") or []
     if did:
@@ -484,7 +501,7 @@ def draft_standup(store, dd):
     for t, slot in dd.get("tickets", {}).items():
         tk = store.ticket(t)
         last = sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))
-        y.append("%s: %s" % (t, last[-1]["text"] if last else (tk.get("title") or "worked on it")))
+        y.append("%s: %s" % (t, last[-1]["text"] if last else (display_title(tk) or "worked on it")))
         for i in slot.get("item_ids", []):
             it = tk["items"].get(i) or {}
             if it.get("kind") == "todo":
@@ -520,12 +537,14 @@ def render_ticket(store, t):
     tk = store.ticket(t)
     items = list(tk["items"].values())
     by = lambda *kinds: sort_items([i for i in items if i.get("kind") in kinds])
-    L = ["# %s — %s" % (t, tk.get("title") or "(untitled)")]
+    L = [heading(t, tk)]
     ql = quick_links(t, tk)
     if ql:
         L += [ql, ""]
-    L += ["| Status (inferred) | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
-         "| %s | %s | %s | %s | %s |" % (tk.get("status") or "—", cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
+    if not display_title(tk) and tk.get("title_hint"):
+        L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
+    L += ["| Status | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
+         "| %s | %s | %s | %s | %s |" % (status_text(tk), cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
                                        tk.get("last") or "—", fmt_time(total_minutes(tk))), ""]
     sec = lambda title, lines: L.extend(["## " + title] + (lines or ["_Nothing recorded yet._"]) + [""])
     L += hub_sections(t, tk)
@@ -717,7 +736,7 @@ def render_index(store):
         rows.append((tk.get("last") or "", t, tk))
     for _, t, tk in sorted(rows, reverse=True):
         L.append("| [%s](%s/README.md) | %s | %s | %s | %s | %s | %s |" % (
-            t, t, cell(tk.get("title")), tk.get("status") or "—", tk.get("first") or "—", tk.get("last") or "—",
+            t, t, title_cell(tk), status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
             fmt_time(total_minutes(tk)), cell(common.truncate(tk.get("tldr"), 220))))
     if not rows:
         L.append("| — | _No tickets yet_ | | | | | |")
@@ -766,9 +785,10 @@ def render_context(store, t):
     tk = store.ticket(t)
     path = os.path.join(common.home(), "tickets", t, "README.md")
     al = alert_line(t, tk)
-    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + tk["title"] if tk.get("title") else "", path),
-         "Status (inferred): %s. First worked %s, last worked %s, about %s in total." % (
-             tk.get("status") or "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
+    title = display_title(tk)
+    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + title if title else "", path),
+         "Status: %s. First worked %s, last worked %s, about %s in total." % (
+             status_text(tk) if status_text(tk) != "—" else "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
          if tk.get("first") else "No Claude Code activity recorded for it yet."]
     if tk.get("tldr"):
         L.append("TL;DR: " + tk["tldr"])

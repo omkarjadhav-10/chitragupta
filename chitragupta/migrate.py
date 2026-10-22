@@ -282,6 +282,7 @@ def _run(dry_run):
 # raises to stop the run, and then neither it nor any later step is marked done. Forward-only: nothing is ever undone.
 KB_STEPS = [
     ("kb5-dedupe-keys", "kb5:dedupe_keys"),
+    ("kb5-title-status", "kb5:title_status"),
 ]
 
 

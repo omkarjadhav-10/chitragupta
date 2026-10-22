@@ -192,3 +192,38 @@ def dedupe_keys(dry_run, notes, backup):
     for p, dd in days.items():
         common.write_json(p, dd)
     request_rerender(dry_run)
+
+
+# --------------------------------------------------------------------------- kb5-title-status (K4)
+
+def title_status(dry_run, notes, backup):
+    """K4: a title that came from a branch slug or the model moves to title_hint (title stays only from Jira or you);
+    the one `status` field splits into jira.status (already in the card) and status_inferred (day close)."""
+    changed = {}
+    for t in S.Store.all_ticket_ids():
+        tk = common.read_json(S.ticket_path(t), None)
+        if not isinstance(tk, dict) or not tk:
+            continue
+        new = dict(tk)
+        if new.get("title") and new.get("title_source") not in S.TITLE_SOURCES:
+            if not new.get("title_hint"):
+                new["title_hint"], new["title_hint_source"] = new["title"], {"hint": "model"}.get(new.get("title_source"),
+                                                                                              new.get("title_source") or "")
+            new["title"], new["title_source"] = "", ""
+        st = new.get("status") or ""
+        if st and not new.get("status_inferred") and st.lower() != S.jira_status(new).lower():
+            new["status_inferred"] = st  # what day close wrote; a value equal to the card's status was the card's
+        new["status"] = S.status_of(new)
+        if _changed(tk, new):
+            changed[t] = new
+            notes.append("%s: title %r -> %r (hint %r), status %r -> jira %r, inferred %r" % (
+                t, tk.get("title", ""), new["title"], new.get("title_hint", ""), st, S.jira_status(new),
+                new.get("status_inferred", "")))
+    if not changed:
+        return
+    backup([S.ticket_path(t) for t in changed])
+    if dry_run:
+        return
+    for t, tk in changed.items():
+        common.write_json(S.ticket_path(t), tk)
+    request_rerender(dry_run)

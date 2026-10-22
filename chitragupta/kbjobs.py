@@ -134,8 +134,7 @@ class KBJobs:
             if card.get("summary") and (not tk.get("problem") or tk.get("problem_source") == "jira"):
                 tk["problem"], tk["problem_source"] = card["summary"], "jira"
             tk["jira"] = {k: card.get(k) for k in ("type", "status", "priority", "sprint", "parent")}
-            tk["jira"]["fetched"] = rec.get("fetched_at")
-            tk["status"] = card.get("status") or tk.get("status")
+            tk["jira"]["fetched"] = rec.get("fetched_at")  # its status stays in jira.status; day close keeps status_inferred
             tk.pop("jira_missing", None)
         elif card.get("found") is False and self.h.get("jira_auth_ok"):
             tk["jira_missing"] = rec.get("fetched_at")  # a look-alike key: reading works, but Jira has no such issue

@@ -12,7 +12,7 @@ const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 
 function sinceDay(n) { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); }
 function filterTickets(list, p) {
   const q = (p.q || '').trim().toLowerCase();
-  return list.filter((t) => (!q || (t.key + ' ' + t.title + ' ' + t.tldr).toLowerCase().indexOf(q) >= 0)
+  return list.filter((t) => (!q || (t.key + ' ' + t.title + ' ' + (t.title_hint || '') + ' ' + t.tldr).toLowerCase().indexOf(q) >= 0)
     && (!p.status || (t.status || 'No status') === p.status)
     && (!p.repo || (t.repos || []).indexOf(p.repo) >= 0)
     && (!p.alerts || (t.alerts || []).length)
@@ -55,8 +55,8 @@ export function TicketsPage({ route }) {
   const shown = useMemo(() => filterTickets(all, p), [all, p.q, p.status, p.repo, p.alerts, p.since]);
   const cols = [
     { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}` },
-    { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || '—'}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
-    { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${Chip}>${t.status}</${Chip}>` : html`<span class="muted">No status</span>`}
+    { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || html`<${Hint} t=${t} />`}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
+    { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${StatusChips} t=${t} />` : html`<span class="muted">No status</span>`}
       ${(t.repos || []).length ? html`<div class="muted small" style="margin-top:4px;overflow-wrap:anywhere">${t.repos.join(', ')}</div>` : null}` },
     { id: 'last', label: 'Last active', hideSm: true, value: (t) => t.last || '', render: (t) => html`<span class="nowrap">${t.last ? fmtDay(t.last, true) : '—'}</span>` },
     { id: 'minutes', label: 'Time', num: true, value: (t) => t.minutes, render: (t) => fmtMin(t.minutes) },
@@ -148,6 +148,18 @@ function GitTab({ g }) {
         <p class="muted small">Highlighted dots start the base branches (their own history isn't drawn); crossed commits are missing from a target; tags mark merged PRs and cherry-picked copies.${ks.length ? ' Renamed in the graph: ' + ks.map((k) => k + ' = ' + lg[k]).join(', ') + '.' : ''}</p>`
         : e.graph_why ? html`<p class="muted small">No graph (${e.graph_why}); the tables below have everything.</p>` : null}
       <${GitMatrix} e=${e} /><${GitBranches} e=${e} /><${GitPrs} e=${e} /></div>`; })}`;
+}
+
+// A guessed title (the model's or the branch name's) is never shown as the title, only labelled as a hint.
+function Hint({ t }) {
+  return t.title_hint ? html`<span class="muted small" title="A guess from the work or the branch name, not the Jira title">hint: ${t.title_hint}</span>` : '—';
+}
+// The Jira status and the status inferred from the work, each labelled; never one passed off as the other.
+function StatusChips({ t }) {
+  const js = t.jira_status, inf = t.status_inferred;
+  if (!js && !inf) return t.status ? html`<${Chip} title="Status">${t.status}</${Chip}>` : null;
+  return html`${js ? html`<${Chip} title="Jira status">Jira: ${js}</${Chip}>` : null}
+    ${inf ? html`<${Chip} title="Inferred from the recorded work at day close">Inferred: ${inf}</${Chip}>` : null}`;
 }
 
 // ------------------------------------------------------------------ ticket tabs
@@ -272,17 +284,18 @@ export function TicketPage({ route }) {
   const rq = railQ.trim().toLowerCase();
   const rail = EXPORT ? null : html`<div class="rail-tools"><label class="sr" for="tk-rail-q">Filter the ticket list</label>
       <input id="tk-rail-q" type="search" placeholder="Filter tickets" value=${railQ} onInput=${(e) => setRailQ(e.currentTarget.value)} autocomplete="off" /></div>
-    <ul class="rlist">${all.filter((x) => !rq || (x.key + ' ' + x.title).toLowerCase().indexOf(rq) >= 0).map((x) => html`<li key=${x.key}>
+    <ul class="rlist">${all.filter((x) => !rq || (x.key + ' ' + x.title + ' ' + (x.title_hint || '')).toLowerCase().indexOf(rq) >= 0).map((x) => html`<li key=${x.key}>
       <a href=${'#/tickets/' + encodeURIComponent(x.key)} aria-current=${x.key === key ? 'page' : null}><span class="sw" style=${{ background: x.key === key ? 'var(--accent)' : 'var(--rule)' }}></span>
-        <span><span class="k">${x.key}${(x.alerts || []).length ? html`<${Icon} name="warn" size=${14} label="has delivery alerts" />` : null}</span><span class="t">${x.title}</span></span><span class="m">${fmtMin(x.minutes)}</span></a></li>`)}</ul>`;
+        <span><span class="k">${x.key}${(x.alerts || []).length ? html`<${Icon} name="warn" size=${14} label="has delivery alerts" />` : null}</span><span class="t">${x.title || (x.title_hint ? 'hint: ' + x.title_hint : '')}</span></span><span class="m">${fmtMin(x.minutes)}</span></a></li>`)}</ul>`;
   const Wrap = EXPORT ? Plain : Desk;
   return html`<${Wrap} rail=${rail} railLabel="Tickets">
     <${Load} res=${res} lines=${10}>${(t) => html`
       <div class="tkhead"><div class="tkhead-row"><div>
         ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a href="#/tickets">Tickets</a></p>`}
         <h1 id="page-title" tabindex="-1">${t.key}${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
+        ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
         <div class="chips">
-          ${t.status ? html`<${Chip} title="Jira status">${t.status}</${Chip}>` : null}
+          <${StatusChips} t=${t} />
           ${(t.repos || []).map((r) => html`<${Chip} key=${'r' + r} icon="branch" title="Repo">${r}</${Chip}>`)}
           ${(t.branches || []).slice(0, 2).map((b) => html`<${Chip} key=${'b' + b} title=${'Branch ' + b}><span class="mono">${b}</span></${Chip}>`)}
           ${(t.branches || []).length > 2 ? html`<${Chip} title=${t.branches.slice(2).join(', ')}>+${t.branches.length - 2} branches</${Chip}>` : null}
