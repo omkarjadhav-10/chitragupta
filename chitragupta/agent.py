@@ -23,6 +23,7 @@ from . import features as featmod  # noqa: E402
 from . import gitsync  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
+from . import kbnorm  # noqa: E402
 from . import store as storemod  # noqa: E402
 from .redact import redact  # noqa: E402
 from .store import Store  # noqa: E402
@@ -506,6 +507,7 @@ class Agent:
             last = evs[-1]
             ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                    "branch": last.get("branch"), "candidates": cands}
+            ctx["edited"] = kbnorm.edited_files(evs)  # K6a: a file is "changed" only when a tool call wrote it
             already = storemod.already_recorded(self.store, cands)
             meta = {"session": sid, "day": day, "repo": ctx["repo"], "branch": ctx["branch"],
                     "lines": self.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
@@ -638,7 +640,8 @@ class Agent:
                 tk["commits"][c["sha"]] = rec
                 for fl in c["files"]:
                     old = tk["files"].get(fl["path"]) or {}
-                    tk["files"][fl["path"]] = {"path": fl["path"], "role": old.get("role", ""), "changed": True, "last": day}
+                    tk["files"][fl["path"]] = dict(old, path=fl["path"], role=old.get("role", ""), changed=True, last=day,
+                                                   verified=True, verified_by="commit", repo=old.get("repo") or c["repo_name"])
                     if fl["path"] not in slot["files_changed"]:
                         slot["files_changed"].append(fl["path"])
                 self.store.touch_ticket(c["ticket"])
@@ -995,6 +998,11 @@ class Agent:
                 self.features.curate_and_generate(self.force)
             except Exception:
                 common.log("agent", "replay failed: " + traceback.format_exc())
+            try:
+                from . import pathcheck
+                pathcheck.run(self.store, self.cfg)  # model-mentioned file paths checked against git (read-only)
+            except Exception:
+                common.log("agent", "pathcheck failed: " + traceback.format_exc())
             self.close_days()
             try:
                 self.jwl.tick()

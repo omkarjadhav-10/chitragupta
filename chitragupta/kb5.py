@@ -227,3 +227,31 @@ def title_status(dry_run, notes, backup):
     for t, tk in changed.items():
         common.write_json(S.ticket_path(t), tk)
     request_rerender(dry_run)
+
+
+# --------------------------------------------------------------------------- kb5-paths-verified (K6a)
+
+def paths_verified(dry_run, notes, backup):
+    """K6a: every file record gets `verified`. Old records can't tell a model's claim from an edit or a commit, so
+    they become None (pending): the pathcheck tick step confirms each against git. `changed` is kept as it was."""
+    changed = {}
+    for t in S.Store.all_ticket_ids():
+        tk = common.read_json(S.ticket_path(t), None)
+        if not isinstance(tk, dict) or not tk:
+            continue
+        n = 0
+        for rec in (tk.get("files") or {}).values():
+            if isinstance(rec, dict) and "verified" not in rec:
+                rec["verified"] = None
+                n += 1
+        if n:
+            changed[t] = tk
+            notes.append("%s: %d file path(s) pending a check against git" % (t, n))
+    if not changed:
+        return
+    backup([S.ticket_path(t) for t in changed])
+    if dry_run:
+        return
+    for t, tk in changed.items():
+        common.write_json(S.ticket_path(t), tk)
+    request_rerender(dry_run)

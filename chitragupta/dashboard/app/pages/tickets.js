@@ -217,10 +217,13 @@ function Timeline({ days }) {
 }
 function Notes({ t }) {
   const paths = Object.keys(t.paths || {});
+  const files = (t.files || []).filter((f) => f.verified === true);
+  const unverified = (t.files || []).filter((f) => f.verified !== true);
   return html`${t.readme ? html`<${Markdown} text=${t.readme} />` : html`<${Empty} title="No notes file yet" icon="file">The ticket's README.md is written by the background tick.</${Empty}>`}
     ${paths.length ? html`<h2 style="margin:24px 0 8px">Files in the data home</h2><ul class="findings">${paths.map((k) => html`<li key=${k} style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <${Chip}>${k}</${Chip}><span class="mono small" style="flex:1;min-width:0;overflow-wrap:anywhere">${t.paths[k]}</span><${CopyButton} text=${t.paths[k]} label="Copy path" what=${k} /></li>`)}</ul>` : null}
-    ${(t.files || []).length ? html`<details class="more"><summary>Code files touched (${t.files.length})</summary><ul class="findings">${t.files.map((f, i) => html`<li key=${i} class="mono small">${f.path || f.file || JSON.stringify(f)}</li>`)}</ul></details>` : null}`;
+    ${files.length ? html`<details class="more"><summary>Code files touched (${files.length})</summary><ul class="findings">${files.map((f, i) => html`<li key=${i} class="mono small">${f.path || f.file || JSON.stringify(f)}${f.changed ? html` <span class="muted">changed</span>` : null}</li>`)}</ul></details>` : null}
+    ${unverified.length ? html`<details class="more"><summary>Unverified paths (${unverified.length})</summary><p class="muted small">Named in the notes but not found in the repo: not edited in a session, not in a commit.</p><ul class="findings">${unverified.map((f, i) => html`<li key=${i} class="mono small">${f.path || ''}</li>`)}</ul></details>` : null}`;
 }
 function DbFlow({ df }) {
   if (!df.markdown) return html`<${Empty} title="No DB flow traced yet" icon="db">Ask Claude to map this ticket's DB flow, or run /cg:trace for a QA worked example.</${Empty}>`;

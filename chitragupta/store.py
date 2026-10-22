@@ -331,27 +331,39 @@ def merge_extraction(store, res, ctx, prefixes):
         else:
             slot["integrations"][key] = rec
 
+    repo = os.path.basename((ctx.get("repo") or "").rstrip("/\\"))
+    edited = [kbnorm.file_key(x, ctx.get("repo"), [repo]) for x in ctx.get("edited") or []]
     for fl in res.get("files") or []:
         p = (fl.get("path") or "").strip()
         if not p:
             continue
         t = resolve(fl.get("ticket")) or default_t
         slot = tslot(t)
-        repo = os.path.basename((ctx.get("repo") or "").rstrip("/\\"))
+        # the model's path is a claim: `changed` only when this session edited it (or a commit has it, agent.py);
+        # an unedited path stays verified None until the pathcheck step finds it in git
         if t:
             tk = store.ticket(t)
             p = file_key_for(tk, p, ctx.get("repo"))
+            did = p in edited
             old = tk["files"].get(p) or {}
             tk["files"][p] = dict(old, path=p, role=fl.get("role") or old.get("role", ""),
-                                  changed=bool(fl.get("changed")) or old.get("changed", False), last=day)
+                                  changed=did or old.get("changed", False), last=day)
+            rec = tk["files"][p]
+            if did:
+                rec.update(verified=True, verified_by=old.get("verified_by") or "edit")
+            elif "verified" not in old:
+                rec["verified"] = None
+            if fl.get("changed") and not did:
+                rec["claimed_changed"] = True
             if repo and not old.get("repo"):
-                tk["files"][p]["repo"] = repo
+                rec["repo"], rec["repo_root"] = repo, ctx.get("repo")
             folded = fold_bare(tk["files"], "/")
             p = folded.get(p, p)
             slot["files_changed"] = [folded.get(x, x) for x in slot["files_changed"]]
         else:
             p = kbnorm.file_key(p, ctx.get("repo"), [repo])
-        if fl.get("changed") and p not in slot["files_changed"]:
+            did = p in edited
+        if did and p not in slot["files_changed"]:
             slot["files_changed"].append(p)
 
     store.touch_day(day)

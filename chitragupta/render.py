@@ -557,7 +557,7 @@ def render_ticket(store, t):
     sec("Root cause & key findings", ["- " + item_line(i, True) for i in by("root_cause", "finding", "note")])
     sec("How it works", ["- " + item_line(i, True) for i in by("how_it_works")])
     fix = ["- " + item_line(i, True) for i in by("fix")]
-    changed = [f for f in tk["files"].values() if f.get("changed")]
+    changed = [f for f in tk["files"].values() if f.get("changed") and f.get("verified") is True]
     if changed:
         fix += ["", "%s changed — see the Code map below." % ("1 file" if len(changed) == 1 else "%d files" % len(changed))]
     if tk.get("commits"):
@@ -607,12 +607,23 @@ def render_ticket(store, t):
 
 
 def code_map(tk):
-    """One table of the ticket's files: changed ones first, each listed once."""
+    """One table of the ticket's verified files (edited, committed or found in git), changed ones first, each listed
+    once; paths only the model named, and that git hasn't confirmed, go under a collapsed list."""
     files = sorted(tk.get("files", {}).values(), key=lambda f: (not f.get("changed"), f.get("path") or ""))
     if not files:
         return None
-    L = ["| File | Role | Changed |", "|---|---|---|"]
-    L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in files]
+    ok = [f for f in files if f.get("verified") is True]
+    rest = [f for f in files if f.get("verified") is not True]
+    L = []
+    if ok:
+        L += ["| File | Role | Changed |", "|---|---|---|"]
+        L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in ok]
+    if rest:
+        L += ["", "<details><summary>Unverified paths (%d)</summary>" % len(rest), "",
+              "_Named in the notes but not (yet) found in the repo: not edited in a session, not in a commit._", ""]
+        L += ["- %s%s%s" % (code(f["path"]), " — " + cell(f.get("role")) if f.get("role") else "",
+                            " _(pending check)_" if f.get("verified") is None else "") for f in rest]
+        L += ["", "</details>"]
     return L
 
 

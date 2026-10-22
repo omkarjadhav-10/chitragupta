@@ -86,8 +86,9 @@ class MergeAndRender(Isolated, unittest.TestCase):
         from chitragupta import render, store
         st = store.Store()
         tk = st.ticket("ABC-1001")
-        tk["files"] = {"src/Order.java": {"path": "src/Order.java", "role": "entity", "changed": True, "last": DAY},
-                       "src/Read.java": {"path": "src/Read.java", "role": "read only", "changed": False, "last": DAY}}
+        tk["files"] = {"src/Order.java": {"path": "src/Order.java", "role": "entity", "changed": True, "last": DAY, "verified": True},
+                       "src/Read.java": {"path": "src/Read.java", "role": "read only", "changed": False, "last": DAY,
+                                         "verified": True}}
         md = render.render_ticket(st, "ABC-1001")
         self.assertEqual(md.count("src/Order.java"), 1)
         self.assertIn("| File | Role | Changed |", md)

@@ -70,3 +70,15 @@ def file_key(path, repo_root=None, repo_names=()):
                 return "/".join(segs[at[-1] + 1:])
     return re.sub(r"^\./", "", p)
 
+
+
+def edited_files(events):
+    """Paths written by Edit/Write tool events: with a commit, the only proof that a file was changed."""
+    out = []
+    for e in events or []:
+        p = e.get("payload") or {}
+        ki = p.get("input") or {}
+        if e.get("event") == "post-tool" and p.get("tool") in ("Edit", "Write", "MultiEdit", "NotebookEdit") \
+                and ki.get("file_path") and ki["file_path"] not in out:
+            out.append(ki["file_path"])
+    return out
