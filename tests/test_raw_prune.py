@@ -24,6 +24,11 @@ class RawPrune(Isolated, unittest.TestCase):
         os.utime(p, (old, old))
         return p
 
+    @staticmethod
+    def key(p):
+        from chitragupta import agent
+        return agent.raw_key(os.path.basename(os.path.dirname(p)), os.path.basename(p)[:-len(".jsonl")])
+
     def test_processed_old_raw_pruned_without_a_push(self):
         from chitragupta import agent
         a_p, b_p, c_p = self.raw(40, "aaa"), self.raw(40, "bbb"), self.raw(2, "ccc")
@@ -31,9 +36,9 @@ class RawPrune(Isolated, unittest.TestCase):
         self.assertFalse(a.health.get("last_push"))
         size = os.path.getsize(a_p)
         a.state["sessions"] = {
-            "aaa": {"files": {a_p: {"read": size, "extracted": size}}, "last_event": "2020-01-01"},
-            "bbb": {"files": {b_p: {"read": size, "extracted": 0}}, "last_event": "2020-01-01"},
-            "ccc": {"files": {c_p: {"read": size, "extracted": size}}, "last_event": "2020-01-01"}}
+            "aaa": {"files": {self.key(a_p): {"read": size, "extracted": size}}, "last_event": "2020-01-01"},
+            "bbb": {"files": {self.key(b_p): {"read": size, "extracted": 0}}, "last_event": "2020-01-01"},
+            "ccc": {"files": {self.key(c_p): {"read": size, "extracted": size}}, "last_event": "2020-01-01"}}
         a.prune()
         self.assertFalse(os.path.exists(a_p), "processed raw older than 30 days is pruned")
         self.assertTrue(os.path.exists(b_p), "unprocessed raw is never pruned")
@@ -47,7 +52,7 @@ class RawPrune(Isolated, unittest.TestCase):
         a = agent.Agent()
         a.health["last_push"] = (common.now() - dt.timedelta(days=60)).isoformat(timespec="seconds")
         size = os.path.getsize(p)
-        a.state["sessions"] = {"ddd": {"files": {p: {"read": size, "extracted": size}}, "last_event": "2020-01-01"}}
+        a.state["sessions"] = {"ddd": {"files": {self.key(p): {"read": size, "extracted": size}}, "last_event": "2020-01-01"}}
         a.prune()
         self.assertFalse(os.path.exists(p))
 
