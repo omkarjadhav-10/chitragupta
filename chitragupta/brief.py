@@ -69,7 +69,9 @@ def current_queries(tk):
 
 def kind_of(tk, cfg=None):
     """"epic" for a parent issue type (jira.parent_issue_types), "story" for stories and tasks, else "bug"."""
-    t = str((tk.get("jira") or {}).get("type") or "").strip().lower()
+    t = str((tk.get("jira") or {}).get("type") or "").strip().lower() if isinstance(tk.get("jira"), dict) else ""
+    if not t and tk.get("id"):
+        t = str(common._card(tk["id"]).get("type") or "").strip().lower()  # a card not yet applied to the record
     if t and t in {x.lower() for x in common.parent_issue_types(cfg if cfg is not None else common.load_config())}:
         return "epic"
     return "story" if t in STORY_TYPES else "bug"
@@ -712,9 +714,49 @@ def view(tk, key=None, cfg=None):
 
 # --------------------------------------------------------------------------- Epics
 
+_KEY_AT_START = re.compile(r"^\s*([A-Z][A-Z0-9]{1,9}-\d{1,6})\b")
+
+
+def _first_sentence(s):
+    s = " ".join(str(s or "").split())
+    m = re.match(r"^(.+?[.!?])(?:\s|$)", s)
+    return common.truncate(m.group(1) if m else s, 200)
+
+
+def child_line(tk):
+    """A child's one line: your root-cause note, else its brief's root cause (or why, for a story), else its current
+    root cause, else its goal (the first sentence of the problem or TL;DR)."""
+    ov = overrides(tk).get("root_cause")
+    if ov:
+        return ov[1]
+    b = tk.get("brief") if isinstance(tk.get("brief"), dict) else {}
+    items = current_items(tk)
+    cur = {i["id"] for i in items}
+    for c in ((b.get("sections") or {}).get("root_cause") or {}).get("claims") or []:
+        if all(x in cur or ":" in x for x in c.get("cites") or []):
+            return c["text"]
+    if any(i.get("kind") == "root_cause" for i in items):
+        return _fallback(tk)["root_cause"]["title"]
+    return _first_sentence(tk.get("problem") or tk.get("tldr") or "")
+
+
 def children(key):
-    """An Epic's children: [{key, title, status, line}]."""
-    return []
+    """An Epic's children: tickets whose Jira card names it as parent, or that a pasted breadcrumb put under it
+    (tk.crumb_parents). [{key, title, status, line}], by key."""
+    out = []
+    for t in S.Store.all_ticket_ids():
+        if t == key:
+            continue
+        tk = common.read_json(S.ticket_path(t), None)
+        if not isinstance(tk, dict):
+            continue
+        par = str((tk.get("jira") or {}).get("parent") or "") if isinstance(tk.get("jira"), dict) else ""
+        m = _KEY_AT_START.match(par.upper())
+        if not ((m and m.group(1) == key) or key in (tk.get("crumb_parents") or [])):
+            continue
+        out.append({"key": t, "title": S.display_title(tk) or tk.get("title_hint") or "",
+                    "status": S.jira_status(tk) or tk.get("status_inferred") or "", "line": child_line(tk)})
+    return out
 
 
 # --------------------------------------------------------------------------- plain text (CLI)

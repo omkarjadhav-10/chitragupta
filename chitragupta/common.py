@@ -451,6 +451,29 @@ def prompt_ticket(text, prefixes, cfg=None):
     return None, None
 
 
+def breadcrumb_parents(text, prefixes):
+    """{child: [parents]} from the breadcrumb runs of a prompt ("Shop / ABC-1000 / ABC-1001": ABC-1000 is the parent
+    of ABC-1001, the run's last id), in your own text or pasted. A lone id is no breadcrumb."""
+    out = {}
+    if not text or not prefixes:
+        return out
+    run = []
+
+    def flush():
+        if len(run) > 1:
+            out.setdefault(run[-1], [])
+            out[run[-1]] += [p for p in run[:-1] if p not in out[run[-1]]]
+        del run[:]
+    for line in _PASTED.sub(lambda m: "\n" + m.group(1) + "\n", str(text)).splitlines():
+        ids = _crumb_line(line, prefixes)
+        if ids:
+            run.extend(i for i in ids if i not in run)
+        elif line.strip():
+            flush()
+    flush()
+    return out
+
+
 def work_branch_ticket(branch, cfg, repo=None):
     """A work branch's ticket. Base and environment branches (release/…, qa, uat, main…: the repo's branching bases,
     gitcmd.repo_conf) name no ticket of their own, and neither does a parent issue (is_parent_ticket)."""
