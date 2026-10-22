@@ -131,7 +131,8 @@ def _is_http(cmd):
 
 
 def _outcome(tool, ti, resp, cwd, redact):
-    """Outcome facts kept from tool_response: HTTP status + response key skeleton, artifact share links."""
+    """Outcome facts kept from tool_response: HTTP status + response key skeleton, artifact share links, a test run's
+    status and pass/fail counts (numbers only)."""
     ti = ti if isinstance(ti, dict) else {}
     from . import capture
     if tool in ("Bash", "PowerShell") and _is_http(str(ti.get("command", ""))):
@@ -140,6 +141,10 @@ def _outcome(tool, ti, resp, cwd, redact):
     if tool == "Artifact":
         links = capture.artifact_links(resp)
         return {"artifact_links": links} if links else {}
+    if tool in ("Bash", "PowerShell"):
+        from . import testruns
+        if testruns.is_test_command(str(ti.get("command", ""))):
+            return {"test": testruns.outcome(resp)}
     if tool in ("Bash", "PowerShell") and _PR_CREATE.search(str(ti.get("command", ""))):
         from . import gittrack  # PR link only: nothing else from the output is kept
         r = resp if isinstance(resp, dict) else {"stdout": str(resp or "")}

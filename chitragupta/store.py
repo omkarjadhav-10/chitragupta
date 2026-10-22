@@ -37,7 +37,7 @@ def new_ticket(t):
             "status": "", "status_inferred": "", "tldr": "", "tldr_date": "", "problem": "", "items": {}, "queries": {},
             "tables": {}, "apis": {}, "integrations": {}, "files": {}, "commits": {}, "timeline": {},
             "bruno": {}, "api_calls": {}, "replay": {}, "data_flow": {}, "table_relations": {}, "dbflow_conflicts": [],
-            "artifacts": {}}
+            "artifacts": {}, "tests": {}}
 
 
 def new_day(d):

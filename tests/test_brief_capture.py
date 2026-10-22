@@ -121,5 +121,62 @@ class FixState(Isolated, unittest.TestCase):
         self.assertEqual(store.mark_applied_fixes(tk, DAY), 0)
 
 
+class TestRuns(Isolated, unittest.TestCase):
+    """A Bash call that runs a test runner records a test on the turn's ticket: command, status, counts. No model."""
+
+    def setUp(self):
+        self.isolate()
+        write_config(self.home, {"ticket_prefixes": ["ABC"], "day_starts_at": "04:00", "paths": {"python": PY}})
+
+    def test_runner_commands(self):
+        from chitragupta import testruns
+        yes = ["pytest -q tests/test_cancel.py", "py -3 -m unittest tests.test_cancel", "python -m pytest -x",
+               "mvn -q test -Dtest=CancelTest", "./gradlew test", "npm test", "npm run test -- cancel", "go test ./...",
+               "dotnet test Shop.sln", "bru run --env QA", "cd shop && pytest"]
+        no = ["git status", "cat test.txt", "npm install", "echo pytest is great > notes.txt", "ls tests"]
+        self.assertEqual([c for c in yes if not testruns.is_test_command(c)], [])
+        self.assertEqual([c for c in no if testruns.is_test_command(c)], [])
+
+    def test_counts(self):
+        from chitragupta import testruns
+        p = testruns.parse_counts
+        self.assertEqual(p("==== 2 failed, 10 passed, 1 skipped in 3.2s ===="), {"passed": 10, "failed": 2, "skipped": 1})
+        self.assertEqual(p("Ran 12 tests in 0.31s\n\nFAILED (failures=1, errors=2)"), {"total": 12, "failed": 1, "errors": 2})
+        self.assertEqual(p("Ran 4 tests in 0.1s\n\nOK"), {"total": 4, "passed": 4})
+        self.assertEqual(p("Tests run: 9, Failures: 0, Errors: 0, Skipped: 1"), {"total": 9, "failed": 0, "errors": 0, "skipped": 1})
+        self.assertEqual(p("Tests:       1 failed, 11 passed, 12 total"), {"failed": 1, "passed": 11, "total": 12})
+        self.assertEqual(p("nothing to see"), {})
+
+    def test_hook_keeps_only_numbers(self):
+        from chitragupta import hook
+        from chitragupta.redact import redact
+        resp = {"stdout": "tests/test_cancel.py ..F\nE AssertionError: secret-ish output\n=== 1 failed, 2 passed in 0.5s ===",
+                "stderr": "", "interrupted": False}
+        oc = hook._outcome("Bash", {"command": "pytest tests"}, resp, self.home, redact)
+        self.assertEqual(oc, {"test": {"status": "failed", "counts": {"failed": 1, "passed": 2}}})
+        self.assertNotIn("AssertionError", json.dumps(oc))
+        self.assertEqual(hook._outcome("Bash", {"command": "git status"}, resp, self.home, redact), {})
+
+    def test_recorded_on_the_turns_ticket(self):
+        from chitragupta import features, store
+        st = store.Store()
+        ag = types.SimpleNamespace(store=st, cfg={"ticket_prefixes": ["ABC"]}, state={},
+                                   ensure_tslot=lambda day, t, repo=None, branch=None: st.day(day)["tickets"].setdefault(t, {}))
+        f = features.Features(ag)
+        ev = {"ts": "2026-09-01T10:05:00+05:30", "event": "post-tool", "_t": "ABC-1001", "_src": "prompt", "_ln": 9,
+              "payload": {"tool": "Bash", "input": {"command": "py -3 -m pytest tests/test_cancel.py --token=abc"},
+                          "outcome": {"test": {"status": "passed", "counts": {"passed": 3}}}}}
+        f.on_events(DAY, SID, {}, [ev])
+        tests = st.ticket("ABC-1001")["tests"]
+        self.assertEqual(len(tests), 1)
+        rec = list(tests.values())[0]
+        self.assertEqual((rec["status"], rec["counts"], rec["at"], rec["day"]), ("passed", {"passed": 3}, ev["ts"], DAY))
+        self.assertEqual(rec["ref"], "raw/%s/%s.jsonl:9" % (DAY, SID))
+        self.assertTrue(rec["command"].startswith("py -3 -m pytest tests/test_cancel.py"))
+        self.assertLessEqual(len(rec["command"]), 200)
+        f.on_events(DAY, SID, {}, [dict(ev)])  # the same event again: one record
+        self.assertEqual(len(st.ticket("ABC-1001")["tests"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

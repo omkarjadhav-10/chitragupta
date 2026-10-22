@@ -175,6 +175,8 @@ A ticket's `title` comes only from its Jira card or from you (`title_source` `ji
 
 Extraction digests start each activity line with its raw line number (`[10:02 L57]`), and an item the model ties to a line keeps it as `ref: "raw/<day>/<session>.jsonl:<line>"`. How-it-works items carry `phase` (`before` the ticket's fix, `after` it, or `both`); the item kind `risk` holds a regression, side effect or open concern the session showed. Fix items have `state`: `proposed` until a file they name (its repo path, or its file name as a whole word) is changed by an Edit/Write tool call or a commit, then `applied` (with `applied_by` edit or commit, `applied_file`, `applied_at`); nothing turns it back. All of these are optional fields: older items simply have none (a fix without `state` reads as proposed).
 
+A shell call that runs a test runner (pytest, `python -m unittest`, `mvn test`, `gradle test`, `npm test`, `go test`, `dotnet test`, `bru run`, …) becomes a `tests` record on the turn's ticket: `{id, at, day, session, command (redacted, ≤ 200 chars), status passed|failed|interrupted|unknown, exit?, counts?, ref}`. The hook keeps only the status, exit code and counts from the tool's output (`chitragupta/testruns.py`); no model is involved, and the newest 50 per ticket are kept. A failing call that Claude Code reports as a tool error never reaches the PostToolUse hook, so a missing run is not proof that none failed.
+
 ## Outside the data home
 
 | Path | Written by |

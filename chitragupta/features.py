@@ -22,6 +22,7 @@ from . import dbflow
 from . import extract
 from . import replay
 from . import store as storemod
+from . import testruns
 from .redact import redact
 
 SCHEMA_VERSION = 2
@@ -81,6 +82,7 @@ class Features:
                 for c in replay.calls_from_event(ev, t):
                     if replay.add_call(self.store, t, c, day):
                         self.extras["requests"] += 0  # counted when saved
+                testruns.record(self.store, t, ev, day, sid)  # a test runner: one test record, no model
             elif tool in ("Write", "Edit", "MultiEdit") and ki.get("file_path") and not artmod.excluded(ki["file_path"], self.cfg):
                 self.queue_artifact(ki["file_path"], t, day, sid, ev.get("ts"), ki.get("content") if ki.get("content_mode") == "full" else None,
                                     ev.get("repo_root"), session.get("first") or ev.get("ts"))

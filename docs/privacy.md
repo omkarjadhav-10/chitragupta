@@ -10,7 +10,7 @@ The hooks record five Claude Code events into `<home>\.worklog\raw\<work day>\<s
 |---|---|
 | SessionStart | The session's folder, repo, branch, ticket and model |
 | UserPromptSubmit | Your prompt, up to 4,000 characters |
-| PostToolUse | The tool's **input**, not its output. For a shell command: the command and its description. For HTTP commands such as curl or `Invoke-RestMethod`: the HTTP status and the *names* of the response's JSON keys, never the values. For files: the path. For MCP tools: the arguments. |
+| PostToolUse | The tool's **input**, not its output. For a shell command: the command and its description. For HTTP commands such as curl or `Invoke-RestMethod`: the HTTP status and the *names* of the response's JSON keys, never the values. For a test runner (pytest, `python -m unittest`, `mvn test`, `gradle test`, `npm test`, `go test`, `dotnet test`, `bru run`…): the status and the pass/fail counts, never the output. For files: the path. For MCP tools: the arguments. |
 | Stop | Claude's last message, up to 12,000 characters, plus any `worklog-requests` / `worklog-dbflow` blocks |
 | SessionEnd | The fact that the session ended |
 
