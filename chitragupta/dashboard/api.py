@@ -345,6 +345,9 @@ def ticket(key):
         "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
         "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
     })
+    from .. import delivery
+    out["delivery"] = delivery.stage(tk.get("git") or {})
+    out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
     return out
 
 

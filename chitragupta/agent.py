@@ -829,6 +829,7 @@ class Agent:
                 "branches": [{"branch": b["branch"], "parent": b.get("parent"), "status": b.get("status")}
                              for x in ((tk.get("git") or {}).get("repos") or {}).values() for b in x.get("branches", [])],
                 "delivery": (tk.get("git") or {}).get("summary"),
+                "delivery_stage": (delivery.stage(tk.get("git") or {}) or {}).get("text"),
                 "previous_tldr": tk.get("tldr"),
             }
         other = {g: {"activity": [w["text"] for w in s.get("what_i_did", [])],

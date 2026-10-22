@@ -547,9 +547,12 @@ def render_ticket(store, t):
          "| %s | %s | %s | %s | %s |" % (status_text(tk), cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
                                        tk.get("last") or "—", fmt_time(total_minutes(tk))), ""]
     sec = lambda title, lines: L.extend(["## " + title] + (lines or ["_Nothing recorded yet._"]) + [""])
+    st = delivery_stage(tk)
+    if st:
+        L += ["**%s:** %s" % (stage_label(st), st["text"]), ""]
     L += hub_sections(t, tk)
 
-    sec("TL;DR", [tk["tldr"] + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
+    sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
     sec("Problem / context", [tk["problem"]] if tk.get("problem") else None)
     sec("Root cause & key findings", ["- " + item_line(i, True) for i in by("root_cause", "finding", "note")])
     sec("How it works", ["- " + item_line(i, True) for i in by("how_it_works")])
@@ -611,6 +614,24 @@ def code_map(tk):
     L = ["| File | Role | Changed |", "|---|---|---|"]
     L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in files]
     return L
+
+
+def delivery_stage(tk):
+    from . import delivery
+    return delivery.stage(tk.get("git") or {})
+
+
+def stage_label(st):
+    return "Delivery (computed from git and PRs%s)" % (", checked " + st["checked_at"][:10] if st.get("checked_at") else "")
+
+
+def tldr_text(tk, st, md=True):
+    """The model's TL;DR with every sentence that contradicts the computed delivery stage marked outdated."""
+    from . import delivery
+    out = []
+    for s, note in delivery.check_tldr(tk.get("tldr"), st):
+        out.append(s if not note else ("_%s:_ ~~%s~~" % (note, s) if md else "(%s) %s" % (note, s)))
+    return " ".join(out)
 
 
 def quick_links(t, tk):
@@ -790,8 +811,11 @@ def render_context(store, t):
          "Status: %s. First worked %s, last worked %s, about %s in total." % (
              status_text(tk) if status_text(tk) != "—" else "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
          if tk.get("first") else "No Claude Code activity recorded for it yet."]
+    st = delivery_stage(tk)
+    if st:
+        L.append("%s: %s." % (stage_label(st), st["text"]))
     if tk.get("tldr"):
-        L.append("TL;DR: " + tk["tldr"])
+        L.append("TL;DR: " + tldr_text(tk, st, md=False))
     final = (tk.get("replay") or {}).get("final") or []
     if final:
         L.append("Saved requests (bash tickets/%s/replay.sh qa; Bruno folder bruno/%s): %s." % (

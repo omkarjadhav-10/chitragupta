@@ -537,6 +537,87 @@ def summarize(git):
     return "Branches %d · PRs %s · %s" % (nb, prs or "none", dl)
 
 
+# --------------------------------------------------------------------------- the delivery stage (computed, never model text)
+
+STAGES = ("not started", "committed", "pushed", "pr open", "merged", "in release")
+
+
+def stage(git):
+    """The ticket's delivery stage from its branch and PR data (tk['git']), or None when branch tracking has none.
+    {"kind": one of STAGES, "text": "Merged to qa (PR #7, 2026-09-02) · not yet in release/x", "merged": [{pr, target,
+    date}], "open": [...], "gaps": [target names], "checked_at"}. Pure: no git, no I/O."""
+    repos = (git or {}).get("repos") or {}
+    if not repos:
+        return None
+    branches = [b for x in repos.values() for b in x.get("branches") or [] if b.get("status") != "abandoned"]
+    prs = [p for x in repos.values() for p in x.get("prs") or []]
+    merged = sorted(({"pr": p.get("number"), "target": p.get("target") or "?", "date": (p.get("merged_at") or "")[:10]}
+                     for p in prs if p.get("state") == "merged"), key=lambda m: (m["date"], str(m["pr"])))
+    opened = [{"pr": p.get("number"), "target": p.get("target") or "?"} for p in prs if p.get("state") in ("open", "draft")]
+    released, gaps, has_release = True, [], False
+    for x in repos.values():
+        for t in x.get("targets") or []:
+            cells = [(row.get("cells") or {}).get(t.get("role")) or {} for row in x.get("rows") or []]
+            if not cells:
+                continue
+            bad = [c for c in cells if c.get("s") not in GOOD]
+            if t.get("role") == "release":
+                has_release = True
+                released = released and not bad
+            if any(c.get("s") != "open" for c in bad) and t.get("name") not in gaps:
+                gaps.append(t.get("name") or t.get("role"))
+    unpushed = sum(int(b.get("unpushed") or 0) for b in branches)
+    own = sum(int(b.get("own") or 0) for b in branches)
+    if has_release and released and merged:
+        kind, text = "in release", "In release (%s)" % ", ".join(sorted({m["target"] for m in merged}))
+    elif merged:
+        last = {}
+        for m in merged:
+            last[m["target"]] = m
+        kind = "merged"
+        text = "Merged to " + "; ".join("%s (PR #%s, %s)" % (t, m["pr"], m["date"] or "date unknown") for t, m in last.items())
+    elif opened:
+        kind, text = "pr open", ""
+    elif any(b.get("on_remote") for b in branches) and own:
+        kind, text = "pushed", "Pushed, no PR yet"
+    elif own:
+        kind, text = "committed", "Committed locally"
+    else:
+        kind, text = "not started", "No commits yet"
+    parts = [text] if text else []
+    parts += ["PR #%s open → %s" % (o["pr"], o["target"]) for o in opened]
+    if unpushed and kind in ("committed", "pushed", "pr open", "merged"):
+        parts.append(_n(unpushed, "commit") + " not pushed")
+    if kind in ("merged", "in release"):
+        parts += ["not yet in %s" % g for g in gaps]
+    return {"kind": kind, "text": " · ".join(parts), "merged": merged, "open": opened, "gaps": gaps,
+            "checked_at": (git or {}).get("checked_at") or ""}
+
+
+_SENT = re.compile(r"(?<=[.!?])\s+")
+_CLAIM = re.compile(r"(?i)\b(pending|not (yet )?(been )?(committed|pushed|merged|deployed|raised|opened|on|in)\b|"
+                    r"unmerged|yet to be (merged|pushed|committed)|awaiting (merge|review)|(open|raise) (the|a) pr)")
+_TOPIC = re.compile(r"(?i)\b(commit\w*|push\w*|merg\w*|prs?|pull request|branch\w*|deploy\w*|server)\b")
+
+
+def check_tldr(text, st):
+    """[(sentence, note or None)]: a sentence that says the work is pending / not merged / not on a target while a PR
+    already merged gets the note "outdated: PR #<n> merged <date>". A plain keyword check, deterministic."""
+    sents = [s for s in _SENT.split((text or "").strip()) if s]
+    if not st or not st.get("merged"):
+        return [(s, None) for s in sents]
+    out = []
+    for s in sents:
+        note = None
+        if _CLAIM.search(s):
+            hit = [m for m in st["merged"] if re.search(r"(?i)(?<![\w/-])%s(?![\w/-])" % re.escape(m["target"]), s)]
+            if hit or _TOPIC.search(s):
+                m = (hit or st["merged"])[-1]
+                note = "outdated: PR #%s merged %s" % (m["pr"], m["date"] or "")
+        out.append((s, note.strip() if note else None))
+    return out
+
+
 def update_ticket(store, key, rx, cfg, now=None, force=False):
     """Recompute tk['git'] for every repo in `rx` ({name: Repo}) that has branches for the ticket. Returns True if changed."""
     tk = store.ticket(key)

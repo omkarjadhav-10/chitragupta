@@ -175,7 +175,9 @@ function Overview({ t }) {
   t.findings.forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
   const order = Object.keys(KIND).filter((k) => groups[k]).concat(Object.keys(groups).filter((k) => !KIND[k]));
   return html`<${GitAlerts} g=${t.git} />
-    ${t.tldr ? html`<p class="lede"><strong>In short:</strong> ${t.tldr}</p>` : null}
+    ${t.delivery ? html`<p class="lede"><strong>Delivery:</strong> ${t.delivery.text} <span class="muted small">(computed from git and PRs${t.delivery.checked_at ? ', checked ' + fmtTs(t.delivery.checked_at) : ''})</span></p>` : null}
+    ${t.tldr ? html`<p class="lede"><strong>In short:</strong> ${(t.tldr_check && t.tldr_check.length ? t.tldr_check : [{ text: t.tldr }]).map((x, i) => x.outdated
+      ? html`<span key=${i}><span class="muted small">${x.outdated}:</span> <s>${x.text}</s> </span>` : x.text + ' ')}</p>` : null}
     ${t.problem ? html`<p class="lede">${t.problem}</p>` : null}
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
       <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${groups[k].length}</span></h2>
