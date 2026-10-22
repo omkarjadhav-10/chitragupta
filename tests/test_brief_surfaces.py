@@ -103,7 +103,7 @@ class TestDashboard(Base):
 
 # --------------------------------------------------------------------------- hub README
 
-class TestReadme(Base):
+class WithQueryIds(Base):
     def setUp(self):
         super().setUp()
         p = os.path.join(self.home, "data", "tickets", TICKET + ".json")
@@ -111,6 +111,9 @@ class TestReadme(Base):
         for k, q in tk["queries"].items():
             q["id"] = k  # the store keeps a query's id on the record; the dashboard fixture leaves it out
         support.wr(p, json.dumps(tk))
+
+
+class TestReadme(WithQueryIds):
     def test_brief_section_golden(self):
         from chitragupta import render
         got = "\n".join(render.render_brief(fixture_view())) + "\n"
@@ -175,6 +178,47 @@ class TestExport(Base):
         self.assertNotIn("C:\\Users", text)
         self.assertNotIn("wiki.acme.test", text)
         self.assertIn("<path>", text)
+
+
+# --------------------------------------------------------------------------- SessionStart context
+
+class TestContext(WithQueryIds):
+    def add_findings(self, n):
+        p = os.path.join(self.home, "data", "tickets", TICKET + ".json")
+        tk = json.loads(support.rd(p))
+        for k in range(n):
+            tk["items"]["f%02d" % k] = {"id": "f%02d" % k, "kind": "finding", "title": "Finding number %d about the mail queue" % k,
+                                        "detail": "Long detail " + "x" * 200, "date": "2026-10-%02d" % (1 + k % 20), "time": "10:00",
+                                        "evidence": ["MailRetryJob.java:%d" % k]}
+        tk["items"]["old"] = {"id": "old", "kind": "todo", "title": "Superseded todo", "status": "superseded", "date": "2026-10-20"}
+        support.wr(p, json.dumps(tk))
+
+    def test_brief_first_findings_fill_the_rest(self):
+        from chitragupta import render
+        from chitragupta.store import Store
+        self.add_findings(40)
+        with patched_view():
+            ctx = render.render_context(Store(), TICKET)
+        self.assertLessEqual(len(ctx), 4000)
+        rc = ctx.index("Root cause (confirmed): The retry job resends the email")
+        for part in ("Fixes made (from git and PRs): 2 commits on feature/ABC-1001", "Possible cons: Recorded: A crash can leave rows",
+                     "Suggested: A second worker", "Open TODOs / questions:", "- Add a regression test"):
+            self.assertGreater(ctx.index(part), rc - 1, part)
+        self.assertIn("[c607fa7d13", ctx)  # evidence ids stay, for get_ticket section=brief
+        self.assertNotIn("Superseded todo", ctx)
+        fi = ctx.index("Recent findings:")
+        self.assertGreater(fi, ctx.index("- Add a regression test"))
+        shown = ctx.count("Finding number")
+        self.assertTrue(1 <= shown < 40, shown)
+        self.assertNotIn("…", ctx[-3:], "the findings stop on a whole line, not a cut one")
+
+    def test_fallback_root_cause_without_a_brief(self):
+        from chitragupta import render
+        from chitragupta.store import Store
+        ctx = render.render_context(Store(), TICKET)
+        self.assertIn("Root cause (confirmed; no brief yet): Discount applied twice", ctx)
+        self.assertIn("TL;DR: Discount applied twice in OrderService.total.", ctx)
+        self.assertLessEqual(len(ctx), 4000)
 
 
 if __name__ == "__main__":

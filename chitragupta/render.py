@@ -993,6 +993,13 @@ def render_context(store, t):
     st = delivery_stage(tk)
     if st:
         L.append("%s: %s." % (stage_label(st), st["text"]))
+    v = brief_view(tk, t)
+    L += brief_context_lines(v)
+    cur = [i for i in current_items(tk) if isinstance(i, dict)]
+    opens = sort_items([i for i in cur if i.get("kind") in OPEN_KINDS])[:6]
+    if opens:
+        L.append("Open TODOs / questions:")
+        L += ["- %s" % common.truncate(i["title"], 200) for i in opens]
     if tk.get("tldr"):
         L.append("TL;DR: " + tldr_text(tk, st, md=False))
     final = (tk.get("replay") or {}).get("final") or []
@@ -1016,19 +1023,78 @@ def render_context(store, t):
                 continue
             L.append("- %s (%s): from %s, %s%s" % (b["branch"], name, b.get("parent") or "?", b["status"],
                                                  "; PR " + ", ".join("#%s" % n for n in b["prs"]) if b.get("prs") else ""))
-    finds = sort_items([i for i in tk["items"].values() if i.get("kind") not in OPEN_KINDS])[:8]
-    if finds:
-        L.append("Recent findings:")
+    # the newest findings fill what is left of the 4000 characters, whole lines only
+    txt = common.truncate("\n".join(L), CONTEXT_MAX)
+    finds = sort_items([i for i in cur if i.get("kind") not in OPEN_KINDS])[:40]
+    if finds and len(txt) + 20 < CONTEXT_MAX:
+        rows = []
         for i in finds:
             ev = "; ".join((i.get("evidence") or [])[:2])
-            L.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
-                                        " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
-    opens = sort_items([i for i in tk["items"].values() if i.get("kind") in OPEN_KINDS])[:6]
-    if opens:
-        L.append("Open TODOs / questions:")
-        L += ["- %s" % i["title"] for i in opens]
-    txt = "\n".join(L)
-    return redact(common.truncate(txt, 4000))
+            rows.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
+                                           " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
+        add = "\nRecent findings:"
+        for r in rows:
+            if len(txt) + len(add) + 1 + len(r) > CONTEXT_MAX:
+                break
+            add += "\n" + r
+        if add != "\nRecent findings:":
+            txt += add
+    return redact(common.truncate(txt, CONTEXT_MAX))
+
+
+CONTEXT_MAX = 4000
+CONTEXT_CLAIM = 300
+
+
+def current_items(tk):
+    """The ticket's current items: the brief engine's definition when it has one, else not archived, not superseded,
+    not flagged for review, and (files) not unverified / (queries) not unsent."""
+    from . import brief
+    fn = getattr(brief, "current_items", None)
+    if fn:
+        return fn(tk)
+    return [i for i in (tk.get("items") or {}).values() if isinstance(i, dict) and not i.get("archived")
+            and (i.get("status") or "current") != "superseded" and not i.get("review")
+            and i.get("verified") is not False and i.get("sent") is not False]
+
+
+def _cite_ids(cites, n=3):
+    ids = [cite_parts(c)[0] for c in cites or []]
+    ids = [x for x in ids if x][:n]
+    return " [%s]" % ", ".join(ids) if ids else ""
+
+
+def brief_context_lines(v):
+    """The brief for the SessionStart context: root cause, fixes made and possible cons, each claim with its first
+    evidence ids; the fallback's root cause until there is a brief; an Epic's children."""
+    v = v or {}
+    if v.get("epic"):
+        ch = v.get("children") or []
+        return ["Epic. Child tickets: %s." % "; ".join("%s %s%s" % (c.get("key"), common.truncate(c.get("title"), 80) or "",
+                                                                     " (%s)" % c["status"] if c.get("status") else "") for c in ch[:12])] if ch else []
+    if not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        if not rc.get("text"):
+            return []
+        return ["Root cause (%s; no brief yet): %s%s" % (rc.get("confidence") or "unknown", common.truncate(rc["text"], CONTEXT_CLAIM),
+                                                         _cite_ids(rc.get("cites")))]
+    by = {s["id"]: s for s in brief_sections(v)}
+    out = ["Brief (generated %s%s; evidence ids in brackets, get_ticket section=brief has them all):" % (
+        ((v.get("header") or {}).get("updated") or "?")[:16].replace("T", " "),
+        "; new findings since %s" % str(v["stale"].get("since") or "")[:16].replace("T", " ") if v.get("stale") else "")]
+    rc = by.get("root_cause")
+    if rc and not brief_empty(rc):
+        out.append("Root cause (%s): %s" % (rc.get("confidence") or "unknown", " ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(rc))))
+    fm = by.get("fixes_made")
+    if fm and not brief_empty(fm):
+        out.append("Fixes made (%s): %s" % (fm.get("source") or "from git and PRs", "; ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(fm))))
+    cons = by.get("cons")
+    if cons and not brief_empty(cons):
+        out.append("Possible cons: %s" % "; ".join(("%s: " % lab if lab else "") + common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites)
+                                                   for lab, text, cites in claim_texts(cons)))
+    return out if len(out) > 1 else []
 
 
 def example_ticket(cfg):
