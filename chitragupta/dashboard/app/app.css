@@ -348,6 +348,51 @@ dialog.dlg[open] { animation: pop var(--dur-2) var(--ease); }
 .url { font-family: var(--mono); font-size: 13px; word-break: break-all; color: var(--ink-2); }
 details.more { margin-top: var(--s2); }
 details.more > summary { cursor: pointer; color: var(--ink-2); font-size: var(--fs-s); min-height: 24px; }
+/* ticket brief (FX-20): the header line, sections, and the three brief-only patterns: the cite chip, the
+   claim/evidence grid (evidence in the margin when wide, under the claim when narrow) and the before/after grid */
+.bmeta { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; margin: var(--s2) 0 0; color: var(--ink-2); }
+.bmeta .grow { flex: 1; }
+.bmeta .status { white-space: normal; }
+.brief { container-type: inline-size; max-width: 1080px; }
+.brief .alert p { margin: 0; }
+.alert.quietalert { background: var(--sunk); } .alert.quietalert > .ic { color: var(--ink-3); }
+.alert.stale { align-items: center; flex-wrap: wrap; }
+.bsec { margin: 0 0 var(--s6); }
+.bsec > h2 { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s2); }
+.bsec .src { font: 500 var(--fs-xs)/1 var(--sans); color: var(--ink-3); }
+.rc { font: 600 var(--fs-l)/1.5 var(--serif); max-width: 70ch; margin: 0; }
+.bempty { color: var(--ink-3); font-style: italic; margin: 0; }
+.claims { list-style: none; padding: 0; margin: 0; }
+.claim { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 220px); gap: var(--s4); padding: var(--s2) 0; border-bottom: 1px solid var(--rule); }
+.claim:last-child { border-bottom: 0; }
+.claim .txt::before { content: "•"; color: var(--ink-3); margin-right: var(--s2); }
+.claims.plain .claim .txt::before { content: none; margin: 0; }
+.cites { display: flex; flex-wrap: wrap; gap: var(--s1); align-content: start; justify-content: flex-end; }
+.card .cites, .fixes .cites, .fsum .cites { display: inline-flex; justify-content: flex-start; vertical-align: 1px; }
+.card .cites { display: flex; margin-top: var(--s2); }
+a.cite, .cite.static { display: inline-flex; align-items: center; min-height: 24px; font-size: var(--fs-xs); color: var(--ink-2); background: var(--sunk);
+  border: 1px solid var(--rule); border-radius: 999px; padding: 0 8px; text-decoration: none; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+a.cite:hover { border-color: var(--rule-strong); color: var(--ink); }
+.cite.static { border-style: dashed; }
+.lab { font-weight: 600; font-size: var(--fs-s); }
+.lab.rec { color: var(--ink); } .lab.sug { color: var(--warn); } .lab.ro { color: var(--ink-2); }
+.ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); }
+.ba ol { margin: 0; padding-left: 1.4em; } .ba li { margin: var(--s1) 0; }
+.ba .ver { margin-top: var(--s3); font-size: var(--fs-s); }
+.fixes { margin: 0 0 var(--s2); padding-left: 1.2em; } .fixes li { margin: var(--s1) 0; }
+.fsum { margin: 0; }
+.alld { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); padding-top: var(--s4); border-top: 1px solid var(--rule); font-size: var(--fs-s); color: var(--ink-2); }
+.alld a { display: inline-block; min-height: 24px; padding: 2px 0; }
+.allfind { margin-top: var(--s4); }
+.allfind > summary { font-size: var(--fs-m); padding: var(--s1) 0; }
+.allfind > .kindgroup:first-of-type { margin-top: var(--s3); }
+.hit { background: var(--accent-soft); border-radius: var(--r-row); transition: background var(--dur-2) var(--ease); }
+@container (max-width: 640px) {
+  .claim { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+  .claim .cites { justify-content: flex-start; padding-left: 1.1em; }
+  .claims.plain .claim .cites { padding-left: 0; }
+  .ba { grid-template-columns: minmax(0, 1fr); }
+}
 .dv { white-space: nowrap; font-size: var(--fs-s); }
 .dv.good { color: var(--ok); } .dv.bad { color: var(--bad); font-weight: 600; } .dv.open { color: var(--warn); } .dv.check { color: var(--info); }
 .gitrepo { margin-bottom: var(--s6); }
@@ -439,6 +484,10 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
 @media print {
   .top, nav.nav, .rail, .diagram-tools, .btn { display: none !important; }
   .desk { display: block; } .pane { padding: 0; }
+  /* a ticket prints its brief on page one; the details start on a new page */
+  .tkbar, .alld, .pagehead-act { display: none !important; }
+  .brief .bsec, .ba .card { break-inside: avoid; }
+  .allfind { break-before: page; }
 }
 
 /* ------------------------------------------------------------ Settings */

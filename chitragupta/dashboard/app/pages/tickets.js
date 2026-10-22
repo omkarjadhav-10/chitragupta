@@ -6,6 +6,7 @@ import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT,
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { ShareButton } from '../lib/share.js';
+import { Brief, BriefMeta } from './brief.js';
 
 // ------------------------------------------------------------------ list
 const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days']];
@@ -166,28 +167,48 @@ function StatusChips({ t }) {
 const KIND = { root_cause: 'Root cause', finding: 'Findings', how_it_works: 'How it works', fix: 'Fix', decision: 'Decisions', config: 'Config',
   repro_test: 'Repro and tests', reference: 'References', blocker: 'Blockers', question: 'Open questions', todo: 'To do' };
 const KIND_ICON = { root_cause: 'warn', blocker: 'bad', fix: 'ok', decision: 'check', question: 'info', todo: 'wait' };
-function Finding({ i }) {
-  return html`<li><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+function Finding({ i, items }) {
+  const by = i.superseded_by && items ? items[i.superseded_by] : null;
+  const rv = i.review || null;
+  return html`<li id=${'i-' + i.id} tabindex="-1"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+    ${i.status === 'superseded' ? html`<div class="m"><strong>Superseded</strong>${by ? ' by “' + by.title + '”' : ''}</div>` : null}
+    ${rv ? html`<div class="m"><strong>Needs review:</strong> ${rv.why || 'maybe not this ticket'}${rv.suggest ? ' (suggested: ' + rv.suggest + ')' : ''}</div>` : null}
     <div class="m">${[i.date, i.time].filter(Boolean).join(' ')}${i.confidence ? ' · ' + i.confidence + ' confidence' : ''}${i.evidence && i.evidence.length ? ' · ' + [].concat(i.evidence).slice(0, 2).join('; ') : ''}</div></li>`;
 }
-function Overview({ t }) {
-  const groups = {};
-  t.findings.forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
+// Items out of the current view stay one click away: superseded ones, ones flagged as maybe another ticket's, archived.
+function Collapsed({ title, list, items }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>${title} (${list.length})</summary>
+    <ul class="findings">${list.map((i) => html`<${Finding} key=${i.id} i=${i} items=${items} />`)}</ul></details>`;
+}
+function AllFindings({ t }) {
+  const items = {}, groups = {}, superseded = [], review = [], archived = [];
+  t.findings.forEach((i) => { items[i.id] = i; });
+  t.findings.forEach((i) => {
+    if (i.archived) archived.push(i);
+    else if (i.status === 'superseded') superseded.push(i);
+    else if (i.review) review.push(i);
+    else (groups[i.kind] = groups[i.kind] || []).push(i);
+  });
   const order = Object.keys(KIND).filter((k) => groups[k]).concat(Object.keys(groups).filter((k) => !KIND[k]));
-  return html`<${GitAlerts} g=${t.git} />
-    ${t.delivery ? html`<p class="lede"><strong>Delivery:</strong> ${t.delivery.text} <span class="muted small">(computed from git and PRs${t.delivery.checked_at ? ', checked ' + fmtTs(t.delivery.checked_at) : ''})</span></p>` : null}
-    ${t.tldr ? html`<p class="lede"><strong>In short:</strong> ${(t.tldr_check && t.tldr_check.length ? t.tldr_check : [{ text: t.tldr }]).map((x, i) => x.outdated
-      ? html`<span key=${i}><span class="muted small">${x.outdated}:</span> <s>${x.text}</s> </span>` : x.text + ' ')}</p>` : null}
-    ${t.problem ? html`<p class="lede">${t.problem}</p>` : null}
+  return html`<details class="more allfind" id="all-findings"><summary>All findings (${t.findings.length})</summary>
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
       <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${groups[k].length}</span></h2>
-      <ul class="findings">${groups[k].map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></section>`)
-      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}`;
+      <ul class="findings">${groups[k].map((i) => html`<${Finding} key=${i.id} i=${i} items=${items} />`)}</ul></section>`)
+      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
+    <${Collapsed} title="Superseded" list=${superseded} items=${items} />
+    <${Collapsed} title="Needs review: maybe another ticket's" list=${review} items=${items} />
+    <${Collapsed} title="Archived" list=${archived} items=${items} /></details>`;
+}
+function Overview({ t, jump, tabHref }) {
+  return html`<${GitAlerts} g=${t.git} />
+    <${Brief} t=${t} jump=${jump} tabHref=${tabHref} />
+    <${AllFindings} t=${t} />`;
 }
 function Requests({ rq }) {
   if (!rq.steps.length) return html`<${Empty} title=${'No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '')} icon="api">Ask Claude to save the essential requests for this ticket to the worklog.</${Empty}>`;
   return html`${rq.setup ? html`<p class="muted small">Run these in Git Bash from the data home; the first block loads base URLs and secrets from bruno/.env.</p><${CodeBlock} code=${rq.setup} label="Setup" what="the setup block" />` : null}
-    ${rq.steps.map((s) => html`<div class="step" key=${s.n}><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
+    ${rq.steps.map((s) => html`<div class="step" key=${s.n} id=${'rq-' + s.n} tabindex="-1"><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
       ${s.url ? html`<span class="url">${s.url}</span>` : null}<span class="grow"></span>${s.curl ? html`<${CopyButton} text=${s.curl} label="Copy as curl" what=${'for step ' + s.n} />` : null}</div>
       <div class="small muted">Expected: ${s.expected || '2xx'}${s.owner === 'user' ? ' · yours' : ''}${s.executed === false ? ' · not yet executed' : ''}${s.critical_fields && s.critical_fields.length ? ' · critical: ' + s.critical_fields.join(', ') : ''}</div>
       ${s.curl ? html`<details class="more"><summary>Show the curl command</summary><pre tabindex="0"><code>${s.curl}</code></pre></details>` : null}</div>`)}
@@ -195,7 +216,7 @@ function Requests({ rq }) {
 }
 function Queries({ qs }) {
   if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
-  return qs.map((q) => html`<div class="step" key=${q.id}><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
+  return qs.map((q) => html`<div class="step" key=${q.id} id=${'q-' + q.id} tabindex="-1"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
     ${q.tables && q.tables.length ? html`<div class="small muted">Tables: ${q.tables.map((x, i) => html`<code key=${i}>${x}</code> `)}</div>` : null}
     ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}<pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`);
 }
@@ -266,6 +287,22 @@ export function TicketPage({ route }) {
   const tab = EXPORT ? expTab : TABS.indexOf(route.params.tab) >= 0 ? route.params.tab : 'overview';
   const setTab = EXPORT ? setExpTab : (id) => setParams({ tab: id === 'overview' ? '' : id });
   useEffect(() => { document.title = key + ' · Chitragupta'; }, [key]);
+  // An evidence chip or an "All details" link: switch tab, then show the element (opening the details around it).
+  const tabHref = (id) => (EXPORT ? '#' : href('tickets', key, Object.assign({}, route.params, { tab: id === 'overview' ? '' : id })));
+  const jump = (id, el) => {
+    setTab(id);
+    let n = 0;
+    const show = () => {
+      const e = el ? document.getElementById(el) : document.getElementById('tk-panel');
+      if (!e) { if (++n < 30) requestAnimationFrame(show); return; }
+      for (let d = e.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+      if (e.tagName === 'DETAILS') e.open = true;
+      e.scrollIntoView({ block: el ? 'center' : 'start' });
+      if (el) { e.classList.add('hit'); setTimeout(() => e.classList.remove('hit'), 2000); }
+      e.focus({ preventScroll: true });
+    };
+    requestAnimationFrame(show);
+  };
   useEffect(() => {
     const k = {};
     TABS.forEach((id, i) => { k[String(i + 1)] = { label: 'Ticket tab ' + (i + 1), run: () => setTab(id) }; });
@@ -299,11 +336,10 @@ export function TicketPage({ route }) {
         ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a href="#/tickets">Tickets</a></p>`}
         <h1 id="page-title" tabindex="-1">${t.key}${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
         ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
+        <${BriefMeta} t=${t} />
         <div class="chips">
-          <${StatusChips} t=${t} />
-          ${(t.repos || []).map((r) => html`<${Chip} key=${'r' + r} icon="branch" title="Repo">${r}</${Chip}>`)}
-          ${(t.branches || []).slice(0, 2).map((b) => html`<${Chip} key=${'b' + b} title=${'Branch ' + b}><span class="mono">${b}</span></${Chip}>`)}
-          ${(t.branches || []).length > 2 ? html`<${Chip} title=${t.branches.slice(2).join(', ')}>+${t.branches.length - 2} branches</${Chip}>` : null}
+          ${(t.repos || []).length > 1 ? html`<${Chip} icon="branch" title=${'Repos ' + t.repos.join(', ')}>+${plural(t.repos.length - 1, 'repo')}</${Chip}>` : null}
+          ${(t.branches || []).length > 1 ? html`<${Chip} title=${t.branches.slice(1).join(', ')}>+${plural(t.branches.length - 1, 'branch', 'branches')}</${Chip}>` : null}
           <${Chip} icon="today" title="Time recorded">${fmtMin(t.minutes)}</${Chip}>
           <${Chip} title="Active">${(t.first || '—') + ' to ' + (t.last || '—')}</${Chip}>
           ${(g.alerts || []).length ? html`<${Status} kind="warn">${plural(g.alerts.length, 'delivery alert')}</${Status}>` : null}
@@ -315,7 +351,7 @@ export function TicketPage({ route }) {
         </div></div>
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
-        ${tab === 'overview' ? html`<${Overview} t=${t} />` : null}
+        ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
         ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
         ${tab === 'dbflow' ? html`<${DbFlow} df=${t.dbflow} />` : null}
         ${tab === 'requests' ? html`<${Requests} rq=${t.requests} />` : null}

@@ -22,6 +22,11 @@ TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
                  "blocker", "question", "todo"]
 
+# what the ticket page shows of an item; the stage-2 fields (status, superseded_by, review, archived, ref, ...) are
+# optional and None when an older record lacks them
+ITEM_FIELDS = ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence", "status", "superseded_by",
+               "subject", "review", "archived", "ref", "sent", "phase", "state")
+
 _cache = {}
 _cache_lock = threading.Lock()
 
@@ -155,7 +160,7 @@ def _items(tk):
                    key=lambda i: (i.get("date") or "", i.get("time") or ""), reverse=True)
     out = []
     for i in items:
-        out.append({k: i.get(k) for k in ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence")})
+        out.append({k: i.get(k) for k in ITEM_FIELDS})
     order = {k: n for n, k in enumerate(FINDING_KINDS)}
     out.sort(key=lambda i: order.get(i.get("kind"), 99))
     return out
@@ -345,7 +350,8 @@ def ticket(key):
         "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
         "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
     })
-    from .. import delivery
+    from .. import brief, delivery
+    out["brief"] = brief.view(tk, key)
     out["delivery"] = delivery.stage(tk.get("git") or {})
     out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
     return out
