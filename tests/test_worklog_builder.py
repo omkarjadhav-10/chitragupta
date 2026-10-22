@@ -206,7 +206,7 @@ class InboxCounting(BuilderCase):
         common.write_json(common.wl("config.json"), cfg)
         common.write_json(common.wl("state.json"), {"inbox_hashes": [h, "0123456789abcdef"], "other": 1})
         res = migrate.run(wait_s=0)
-        self.assertEqual(res["applied"], ["inbox-counts"])
+        self.assertEqual([m for m in res["applied"] if m in migrate.MIGRATIONS], ["inbox-counts"])  # + the KB steps
         self.assertTrue(res["state_changed"])
         self.assertEqual(json.loads(rd(os.path.join(res["backup"], "state.json")))["inbox_hashes"],
                          [h, "0123456789abcdef"])
