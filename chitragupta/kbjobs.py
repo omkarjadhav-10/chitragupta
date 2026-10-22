@@ -159,7 +159,11 @@ class KBJobs:
     def cached(self, table):
         conn = mcpjobs.database_conn(self.cfg, "qa", table)
         rec = common.read_json(common.hp("data", "db-schema", mcpjobs._safe(conn), mcpjobs._safe(table) + ".json"), {}) or {}
-        return rec if rec.get("fetched_at", "") >= (common.now() - _dt.timedelta(days=7)).isoformat() else None
+        cut = (common.now() - _dt.timedelta(days=7)).isoformat()
+        w = (rec.get("sources") or {}).get("writers")  # a writers query that failed is asked again on the next run
+        if isinstance(w, dict) and w.get("fetched_at", "") < cut and not str(w.get("error") or "").startswith("not supported"):
+            return None
+        return rec if rec.get("fetched_at", "") >= cut else None
 
     def schema_cards(self, today, tables=None):
         if tables is None:
@@ -418,12 +422,16 @@ def dbflow_qa_section(t, cfg=None):
         for tg in card.get("triggers") or []:
             facts.append("- `%s`: trigger `%s` (%s) sets %s" % (r["table"], tg.get("name"), tg.get("event"),
                                                                ", ".join("`%s`" % c for c in tg.get("sets_columns") or []) or "—"))
-        for w in card.get("writers") or []:
-            if w.get("writes"):
-                facts.append("- `%s`: %s `%s` writes %s" % (r["table"], w.get("kind"), w.get("name"),
-                                                          ", ".join("`%s`" % c for c in w["writes"])))
-        if card.get("found") and not card.get("triggers") and not any(w.get("writes") for w in card.get("writers") or []):
-            readers = [w.get("name") for w in card.get("writers") or []]
+        # writers: routines that write the table (older cards also listed ones that only name it, with no writes)
+        writers = [w for w in card.get("writers") or [] if w.get("writes") or w.get("ops")]
+        for w in writers:
+            facts.append("- `%s`: %s `%s` writes %s%s" % (
+                r["table"], w.get("kind"), w.get("name"),
+                ", ".join("`%s`" % c for c in w.get("writes") or []) or "rows (%s)" % ", ".join(w.get("ops") or []),
+                " (not returned since %s)" % w["missing_since"][:10] if w.get("missing_since") else ""))
+        checked = ((r.get("sources") or {}).get("writers") or {}).get("fetched_at", True)  # older cards: no sources
+        if card.get("found") and not card.get("triggers") and not writers and checked:
+            readers = [w.get("name") for w in (card.get("references") or []) + (card.get("writers") or [])]
             facts.append("- `%s`: no database trigger, procedure or function writes it, so its column changes come from "
                          "application code%s" % (r["table"], (" (read by %s)" % ", ".join("`%s`" % x for x in readers[:5]))
                                                  if readers else ""))

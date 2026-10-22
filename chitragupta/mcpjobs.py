@@ -723,28 +723,61 @@ def _db_server(cfg):
     return srv
 
 
+# Catalog statements of the schema-card job. Every one is a single catalog SELECT of <= 20 rows with an ORDER BY, so
+# the same database gives the same rows; the write-verb patterns sit inside string literals, where the query guard's
+# keyword check doesn't look. {schema} / {table} / {names} are filled only with [A-Za-z0-9_] identifiers (_ident).
+_PG_VERBS = "(insert[[:space:]]+into|update|delete[[:space:]]+from|merge[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?"
 CATALOG_SQL = {
     "postgres": {
         "triggers": ("SELECT c.relname AS table_name, t.tgname AS trigger_name, pg_get_triggerdef(t.oid) AS trigger_def, "
                      "p.prosrc AS function_src FROM pg_trigger t JOIN pg_class c ON t.tgrelid = c.oid "
                      "JOIN pg_namespace n ON c.relnamespace = n.oid JOIN pg_proc p ON p.oid = t.tgfoid "
-                     "WHERE NOT t.tgisinternal AND n.nspname = '{schema}' AND c.relname IN ({names}) LIMIT 20"),
+                     "WHERE NOT t.tgisinternal AND n.nspname = '{schema}' AND c.relname IN ({names}) "
+                     "ORDER BY c.relname, t.tgname LIMIT 20"),
+        # a write verb on the schema-qualified name anywhere, or on the bare name in a routine of the same schema
         "writers": ("SELECT n.nspname AS schema_name, p.proname AS name, CASE p.prokind WHEN 'p' THEN 'procedure' "
                     "ELSE 'function' END AS kind, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n "
                     "ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
-                    "AND ({likes}) LIMIT 20"),
-        "like": "p.prosrc ILIKE '%{name}%'",
+                    "AND (p.prosrc ~* '" + _PG_VERBS + "\"?{schema}\"?[.]\"?{table}\"?([^a-z0-9_]|$)' "
+                    "OR (n.nspname = '{schema}' AND p.prosrc ~* '" + _PG_VERBS + "\"?{table}\"?([^a-z0-9_.]|$)')) "
+                    "ORDER BY n.nspname, p.proname LIMIT 20"),
     },
     "mssql": {
         "triggers": ("SELECT TOP 20 OBJECT_NAME(t.parent_id) AS table_name, t.name AS trigger_name, m.definition AS trigger_def, "
                      "m.definition AS function_src FROM sys.triggers t JOIN sys.sql_modules m ON m.object_id = t.object_id "
-                     "WHERE OBJECT_NAME(t.parent_id) IN ({names})"),
+                     "WHERE OBJECT_SCHEMA_NAME(t.parent_id) = '{schema}' AND OBJECT_NAME(t.parent_id) IN ({names}) "
+                     "ORDER BY OBJECT_NAME(t.parent_id), t.name"),
         "writers": ("SELECT TOP 20 OBJECT_SCHEMA_NAME(o.object_id) AS schema_name, o.name AS name, o.type_desc AS kind, "
-                    "m.definition AS src FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id "
-                    "WHERE o.type IN ('P', 'FN', 'TF', 'IF', 'V', 'TR') AND ({likes})"),
-        "like": "m.definition LIKE '%{name}%'",
+                    "m.definition AS src FROM sys.sql_expression_dependencies d "
+                    "JOIN sys.sql_modules m ON m.object_id = d.referencing_id JOIN sys.objects o ON o.object_id = m.object_id "
+                    "WHERE o.type IN ('P', 'FN', 'TF', 'IF', 'TR') AND (d.referenced_id = OBJECT_ID('{schema}.{table}') "
+                    "OR (d.referenced_schema_name = '{schema}' AND d.referenced_entity_name = '{table}')) "
+                    "AND (m.definition LIKE '%UPDATE%' OR m.definition LIKE '%INSERT%' OR m.definition LIKE '%DELETE%' "
+                    "OR m.definition LIKE '%MERGE%') ORDER BY OBJECT_SCHEMA_NAME(o.object_id), o.name"),
     },
 }
+
+
+def _ident(x):
+    return re.sub(r"[^A-Za-z0-9_]", "", str(x or ""))
+
+
+def triggers_sql(ctype, schema, names):
+    """The triggers of `names` (bare table names) in one schema, with their function source; None for other types."""
+    sqlset = CATALOG_SQL.get(ctype)
+    if not sqlset:
+        return None
+    return sqlset["triggers"].format(schema=_ident(schema), names=", ".join("'%s'" % _ident(n) for n in names))
+
+
+def writers_sql(ctype, schema, table):
+    """Routines that may write schema.table (one table per query); None for other types. The final say is
+    _write_ops on each returned source: a routine that only reads the table goes under `references`."""
+    sqlset = CATALOG_SQL.get(ctype)
+    if not sqlset:
+        return None
+    return sqlset["writers"].format(schema=_ident(schema), table=_ident(table))
+
 
 SCHEMA_DONE = {"type": "object", "properties": {"done": {"type": "boolean"}}, "required": ["done"], "additionalProperties": False}
 
@@ -773,16 +806,48 @@ def rows(result):
     return []
 
 
-def _writes_of(src, table):
+_TARGET = r"((?:[\w\"\[\]]+\.){0,2})[\"\[]?%s[\"\]]?(?![\w.])"  # [db.][schema.]name, quoted or bracketed
+
+
+def _hits(src, table, proc_schema, verb):
+    """Matches of `verb` + a target naming `table` (schema.table): qualified with its schema, or bare inside a routine
+    of the same schema (proc_schema None: a trigger function on the table, so a bare name counts)."""
+    parts = table.lower().split(".")
+    name, schema = parts[-1], (parts[-2] if len(parts) > 1 else "")
+    out = []
+    for m in re.finditer(r"(?is)%s\s+(?:only\s+)?%s" % (verb, _TARGET % re.escape(name)), src or ""):
+        qual = [q.strip("\"[]").lower() for q in m.group(1).split(".") if q]
+        if qual:
+            if schema and qual[-1] != schema:
+                continue
+        elif schema and proc_schema is not None and str(proc_schema).lower() != schema:
+            continue
+        out.append(m)
+    return out
+
+
+_VERBS = (("insert", r"\binsert\s+into"), ("update", r"\bupdate"), ("delete", r"\bdelete(?:\s+from)?"),
+          ("merge", r"\bmerge(?:\s+into)?"))
+
+
+def _write_ops(src, table, proc_schema=None):
+    """Which writes (insert, update, delete, merge) a routine's source makes on `table`; [] = it only reads it."""
+    return [op for op, verb in _VERBS if _hits(src, table, proc_schema, verb)]
+
+
+def _writes_of(src, table, proc_schema=None):
     """Columns a proc/function/trigger body writes on `table`: UPDATE ... SET a = .., INSERT INTO t (a, b), NEW.a :=."""
     if not src:
         return []
-    name = re.escape(table.split(".")[-1])
     out = []
-    for m in re.finditer(r"(?is)\bupdate\s+(?:[\w\"\[\]]+\.)?[\"\[]?%s[\"\]]?\s+(?:as\s+\w+\s+)?set\s+(.*?)(?:\bwhere\b|\bfrom\b|;|\breturning\b|$)" % name, src):
-        out += [c for c in re.findall(r"(?:^|,)\s*(?:\w+\.)?[\"\[]?(\w+)[\"\]]?\s*=(?!=)", m.group(1))]
-    for m in re.finditer(r"(?is)\binsert\s+into\s+(?:[\w\"\[\]]+\.)?[\"\[]?%s[\"\]]?\s*\(([^)]*)\)" % name, src):
-        out += [c.strip(" \"[]\n\t") for c in m.group(1).split(",")]
+    for m in _hits(src, table, proc_schema, r"\bupdate"):
+        sm = re.match(r"(?is)\s+(?:as\s+\w+\s+)?set\s+(.*?)(?:\bwhere\b|\bfrom\b|;|\breturning\b|$)", src[m.end():])
+        if sm:
+            out += [c for c in re.findall(r"(?:^|,)\s*(?:\w+\.)?[\"\[]?(\w+)[\"\]]?\s*=(?!=)", sm.group(1))]
+    for m in _hits(src, table, proc_schema, r"\binsert\s+into"):
+        im = re.match(r"\s*\(([^)]*)\)", src[m.end():])
+        if im:
+            out += [c.strip(" \"[]\n\t") for c in im.group(1).split(",")]
     out += re.findall(r"(?i)\bNEW\.(\w+)\s*:=", src)
     seen = []
     for c in out:
@@ -791,10 +856,46 @@ def _writes_of(src, table):
     return seen
 
 
+def _query_rows(call):
+    """Rows of one query call, or None when the answer is unknown (an error, no result, text that isn't rows)."""
+    if not call or call.get("is_error") or call.get("result") is None:
+        return None
+    r = unwrap(call["result"])
+    if isinstance(r, list):
+        return [x for x in r if isinstance(x, dict)]
+    if isinstance(r, str):
+        i = r.find("[")
+        if i >= 0:
+            try:
+                v = json.loads(r[i:])
+            except ValueError:
+                return None
+            return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else None
+        if re.match(r"(?i)\s*(?:0 rows?\b|0 row\(s\)|no rows)", r):
+            return []
+    return None
+
+
+def _merge_named(old, new, now):
+    """Upsert by name: returned entries get last_seen (first_seen kept); known ones not returned stay, marked
+    missing_since (never dropped). Sorted by name, so the same rows give the same list."""
+    by = {e.get("name"): dict(e) for e in old or [] if isinstance(e, dict) and e.get("name")}
+    for e in new:
+        prev = by.get(e["name"]) or {}
+        by[e["name"]] = dict(e, first_seen=prev.get("first_seen") or now, last_seen=now)
+    seen = {e["name"] for e in new}
+    for n, e in by.items():
+        if n not in seen and not e.get("missing_since"):
+            e["missing_since"] = now
+    return [by[n] for n in sorted(by)]
+
+
 def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
-    """Batch (<= 10 tables, one connection) schema cards in ONE model turn: describe_table for each table plus two
-    catalog queries written here (triggers with their function source; procs/functions/views whose source names the
-    tables). The card is built in Python from the raw rows -> data/db-schema/<connection>/<schema>.<table>.json."""
+    """Batch (<= 10 tables, one connection) schema cards in ONE model turn: describe_table for each table, one
+    triggers query per schema and one writers query per table (all written here, matched back by their exact SQL).
+    The card is built in Python from the raw rows -> data/db-schema/<connection>/<schema>.<table>.json and merged into
+    the existing one: a source whose call failed, is missing or was changed keeps its old data and fetched_at
+    (rec["sources"]); a known writer missing from a good run is kept with missing_since."""
     srv = _db_server(cfg)
     q_tool, d_tool = db_tool(cfg, "query"), db_tool(cfg, "describe_table")
     tables = list(tables)[:10]
@@ -803,24 +904,25 @@ def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
         raise JobError("no database MCP %s connection configured" % env, skip=True)
     tables = [t for t in tables if database_conn(cfg, env, t) == conn]
     ctype = conn_type(cfg, conn)
-    sqlset = CATALOG_SQL.get(ctype)
+    default_schema = "dbo" if ctype == "mssql" else "public"
     by_schema = {}
     for t in tables:
         parts = t.split(".")
         by_schema.setdefault(parts[-2] if len(parts) > 1 else "", []).append(parts[-1])
-    calls = []
+    calls, built = [], {}  # built: exact SQL -> ("triggers", schema) | ("writers", table)
     for sch, names in by_schema.items():
         for n in names:
             calls.append("%s connectionId=%s%s table=%s" % (d_tool, conn, " schema=%s" % sch if sch else "", n))
-    if sqlset:
-        all_names = [n for ns in by_schema.values() for n in ns]
-        quoted = ", ".join("'%s'" % n.replace("'", "") for n in all_names)
+
+    def query(sql, what):
+        built[sql] = what
+        calls.append("%s connectionId=%s limit=20 sql=%s" % (q_tool, conn, json.dumps(sql)))
+    if ctype in CATALOG_SQL:
         for sch, names in by_schema.items():
-            calls.append("%s connectionId=%s limit=20 sql=%s" % (q_tool, conn, json.dumps(
-                sqlset["triggers"].format(schema=sch.replace("'", ""), names=", ".join("'%s'" % n for n in names)))))
-        calls.append("%s connectionId=%s limit=20 sql=%s" % (q_tool, conn, json.dumps(
-            sqlset["writers"].format(likes=" OR ".join(sqlset["like"].format(name=n.replace("'", "")) for n in all_names)))))
-        del quoted
+            query(triggers_sql(ctype, sch or default_schema, names), ("triggers", sch))
+        for t in tables:
+            parts = t.split(".")
+            query(writers_sql(ctype, parts[-2] if len(parts) > 1 else default_schema, parts[-1]), ("writers", t))
     task = ("Make ALL of these tool calls in a single turn (parallel), with exactly these arguments, then return "
             "{\"done\": true}. Do not make any other call, do not retry, do not read saved outputs.\n" +
             "\n".join("%d. %s" % (i + 1, c) for i, c in enumerate(calls)))
@@ -829,40 +931,108 @@ def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
     desc = {}
     for inp, val in tool_results(res, d_tool):
         desc[str(inp.get("table") or "").lower()] = unwrap(val)
-    trig, writers = [], []
+    got = {}  # ("triggers", schema) | ("writers", table) -> rows, or None when unknown
     for c in res["calls"]:
-        if not c["name"].endswith("__" + q_tool) or c.get("is_error"):
+        if not c["name"].endswith("__" + q_tool):
             continue
-        sql = str((c.get("input") or {}).get("sql") or "").lower()
-        if "trigger_name" in sql:
-            trig += rows(c["result"])
-        elif " src " in sql or "as src" in sql:
-            writers += rows(c["result"])
+        what = built.get(str((c.get("input") or {}).get("sql") or "").strip())  # a changed statement is unknown
+        if what and got.get(what) is None:
+            got[what] = _query_rows(c)
+    now = common.now_iso()
+    unsupported = "" if ctype in CATALOG_SQL else "not supported for %s" % ctype
     saved = []
     for t in tables:
-        name = t.split(".")[-1]
-        tg = []
-        for r in trig:
-            if str(r.get("table_name") or "").lower() != name.lower():
-                continue
-            m = re.search(r"(?i)\b(BEFORE|AFTER|INSTEAD OF)\s+(.+?)\s+ON\b", str(r.get("trigger_def") or ""))
-            tg.append({"name": r.get("trigger_name"), "event": (m.group(1) + " " + m.group(2)) if m else "",
-                       "sets_columns": _writes_of(r.get("function_src"), t) or
-                       sorted(set(re.findall(r"(?i)\bNEW\.(\w+)\s*:=", str(r.get("function_src") or ""))))})
-        wr = []
-        for r in writers:
-            src = str(r.get("src") or "")
-            if not re.search(r"(?i)\b%s\b" % re.escape(name), src):
-                continue
-            wr.append({"name": "%s.%s" % (r.get("schema_name"), r.get("name")), "kind": str(r.get("kind") or "").lower(),
-                       "writes": _writes_of(src, t), "reads": []})
-        rec = {"table": t, "connection": conn, "env": env, "type": ctype, "fetched_at": common.now_iso(),
-               "describe": desc.get(name.lower()), "card": {"table": t, "found": name.lower() in desc, "triggers": tg,
-                                                             "writers": wr}}
+        parts = t.split(".")
+        name, sch = parts[-1], (parts[-2] if len(parts) > 1 else "")
+        target = t if sch else "%s.%s" % (default_schema, name)
         p = common.hp("data", "db-schema", _safe(conn), _safe(t) + ".json")
+        old = common.read_json(p, {}) or {}
+        ocard = old.get("card") or {}
+        sources = {k: dict(v) for k, v in (old.get("sources") or {}).items() if isinstance(v, dict)}
+
+        def kept(source, why):
+            sources.setdefault(source, {"fetched_at": old.get("fetched_at") or ""})["error"] = why
+        rec = {"table": t, "connection": conn, "env": env, "type": ctype, "fetched_at": now}
+        if name.lower() in desc:
+            rec["describe"], found = desc[name.lower()], True
+            sources["describe"] = {"fetched_at": now, "error": ""}
+        else:
+            rec["describe"], found = old.get("describe"), bool(ocard.get("found"))
+            kept("describe", "no describe result")
+        trows = got.get(("triggers", sch))
+        if trows is not None:
+            tg = []
+            for r in trows:
+                if str(r.get("table_name") or "").lower() != name.lower():
+                    continue
+                m = re.search(r"(?i)\b(BEFORE|AFTER|INSTEAD OF)\s+(.+?)\s+ON\b", str(r.get("trigger_def") or ""))
+                tg.append({"name": r.get("trigger_name"), "event": (m.group(1) + " " + m.group(2)) if m else "",
+                           "sets_columns": _writes_of(r.get("function_src"), t) or
+                           sorted(set(re.findall(r"(?i)\bNEW\.(\w+)\s*:=", str(r.get("function_src") or ""))))})
+            sources["triggers"] = {"fetched_at": now, "rows": len(tg), "error": ""}
+        else:
+            tg = ocard.get("triggers") or []
+            kept("triggers", unsupported or "no triggers result")
+        wrows = got.get(("writers", t))
+        if wrows is not None:
+            wr, refs = [], []
+            for r in wrows:
+                src = str(r.get("src") or "")
+                e = {"name": "%s.%s" % (r.get("schema_name"), r.get("name")), "kind": str(r.get("kind") or "").lower()}
+                ops = _write_ops(src, target, r.get("schema_name"))
+                if ops:
+                    wr.append(dict(e, ops=ops, writes=_writes_of(src, target, r.get("schema_name")), reads=[]))
+                else:
+                    refs.append(e)  # names the table but doesn't write it
+            writers = _merge_named(ocard.get("writers"), wr, now)
+            references = _merge_named(ocard.get("references"), refs, now)
+            sources["writers"] = {"fetched_at": now, "rows": len(wrows), "truncated": len(wrows) >= 20, "error": ""}
+        else:
+            writers, references = ocard.get("writers") or [], ocard.get("references") or []
+            kept("writers", unsupported or "no writers result")
+        rec["sources"] = sources
+        rec["card"] = {"table": t, "found": found, "triggers": tg, "writers": writers, "references": references}
         common.write_json(p, json.loads(redact(json.dumps(rec, ensure_ascii=False), mode="secrets")))
         saved.append(p)
     return saved, res
+
+
+def migrate_schema_writers(dry_run, notes, backup):
+    """kb5-db-schema-writers: schema cards listed every routine whose source named the table as a writer. Entries
+    with no write move to `references`, and each card gets `sources` from its fetched_at. Backs up data/db-schema."""
+    root = common.hp("data", "db-schema")
+    todo = []
+    for dp, _, fns in os.walk(root) if os.path.isdir(root) else []:
+        for fn in sorted(fns):
+            if not fn.endswith(".json") or fn.startswith("_"):
+                continue
+            p = os.path.join(dp, fn)
+            rec = common.read_json(p, None)
+            if not isinstance(rec, dict) or not isinstance(rec.get("card"), dict):
+                continue
+            card = rec["card"]
+            moved = [w for w in card.get("writers") or [] if isinstance(w, dict) and not w.get("writes") and not w.get("ops")]
+            if not moved and isinstance(rec.get("sources"), dict) and "references" in card:
+                continue
+            todo.append((p, rec, moved))
+    if not todo:
+        return
+    backup([root])
+    for p, rec, moved in todo:
+        card = rec["card"]
+        at = rec.get("fetched_at") or ""
+        if moved:
+            card["writers"] = [w for w in card.get("writers") or [] if w not in moved]
+            card["references"] = sorted((card.get("references") or []) +
+                                        [{"name": w.get("name"), "kind": w.get("kind") or ""} for w in moved],
+                                        key=lambda e: str(e.get("name")))
+            notes.append("%s: %d routine(s) that only name the table moved to references" % (rec.get("table"), len(moved)))
+        card.setdefault("references", [])
+        if not isinstance(rec.get("sources"), dict):
+            rec["sources"] = {k: {"fetched_at": at} for k in ("describe", "triggers", "writers")}
+        if not dry_run:
+            common.write_json(p, rec)
+    notes.append("%d schema card(s) updated" % len(todo))
 
 
 TRACE_SCHEMA = {"type": "object", "properties": {

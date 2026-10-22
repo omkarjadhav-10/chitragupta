@@ -445,9 +445,9 @@ class QueryAndMcpTests(SafetyCase):
         from chitragupta import mcpjobs
         from chitragupta.safety import query
         stmts = []
-        for ctype, s in mcpjobs.CATALOG_SQL.items():
-            stmts.append(s["triggers"].format(schema="shop", names="'orders', 'docs'"))
-            stmts.append(s["writers"].format(likes=" OR ".join(s["like"].format(name=n) for n in ("orders", "docs"))))
+        for ctype in mcpjobs.CATALOG_SQL:
+            stmts.append(mcpjobs.triggers_sql(ctype, "shop", ["orders", "docs"]))
+            stmts += [mcpjobs.writers_sql(ctype, "shop", n) for n in ("orders", "docs")]
             stmts.append(mcpjobs.link_sql(ctype, ("shop", "docs", "order_id"), ("shop", "orders", "id")))
         stmts += ["SELECT TOP 20 id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC",
                   "SELECT id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC LIMIT 20"]
