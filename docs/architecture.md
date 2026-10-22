@@ -177,6 +177,8 @@ Extraction digests start each activity line with its raw line number (`[10:02 L5
 
 A shell call that runs a test runner (pytest, `python -m unittest`, `mvn test`, `gradle test`, `npm test`, `go test`, `dotnet test`, `bru run`, …) becomes a `tests` record on the turn's ticket: `{id, at, day, session, command (redacted, ≤ 200 chars), status passed|failed|interrupted|unknown, exit?, counts?, ref}`. The hook keeps only the status, exit code and counts from the tool's output (`chitragupta/testruns.py`); no model is involved, and the newest 50 per ticket are kept. A failing call that Claude Code reports as a tool error never reaches the PostToolUse hook, so a missing run is not proof that none failed.
 
+The Jira card (`data/jira/<KEY>.json` → `card`) keeps the issue's description (≤ 3000 chars) and its last 10 comments (`{id, at, text}`, ≤ 500 chars each, no author), both redacted, taken from the `jira_get_issue` result without a model. They stay local, like the rest of `data/`, and the brief uses them as Recorded sources (`jira:<KEY>`).
+
 ## Outside the data home
 
 | Path | Written by |

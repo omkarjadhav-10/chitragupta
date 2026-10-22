@@ -178,5 +178,45 @@ class TestRuns(Isolated, unittest.TestCase):
         self.assertEqual(len(st.ticket("ABC-1001")["tests"]), 1)
 
 
+def jira_raw(n_comments=12):
+    issue = {"key": "ABC-1001", "summary": "Cancel keeps stock reserved", "issue_type": {"name": "Bug"},
+             "description": "Steps: cancel an order on shop.acme.test; the stock stays reserved. Reporter: qa@acme.test",
+             "comments": [{"id": str(i), "body": ("Comment %d " % i) + "x" * 700, "created": "2026-09-0%dT10:00:00.000+0000" % (1 + i % 9),
+                           "author": {"display_name": "Someone", "email": "someone@acme.test"}} for i in range(n_comments)]}
+    return {"result": json.dumps(issue)}
+
+
+class JiraSources(Isolated, unittest.TestCase):
+    def setUp(self):
+        self.isolate()
+        write_config(self.home, {"ticket_prefixes": ["ABC"], "day_starts_at": "04:00", "paths": {"python": PY}})
+
+    def test_card_sources_keep_description_and_last_ten_comments(self):
+        from chitragupta import mcpjobs
+        src = mcpjobs.card_sources(jira_raw())
+        self.assertIn("the stock stays reserved", src["description"])
+        self.assertNotIn("qa@acme.test", src["description"])  # redacted
+        self.assertEqual(len(src["comments"]), 10)
+        self.assertTrue(src["comments"][0]["text"].startswith("Comment 2 "))
+        self.assertTrue(all(len(c["text"]) <= 500 for c in src["comments"]))
+        self.assertNotIn("author", src["comments"][0])  # no names
+        self.assertEqual(mcpjobs.card_sources(None), {"description": "", "comments": []})
+
+    def test_jira_card_stores_them(self):
+        from chitragupta import common, mcpjobs
+        real = mcpjobs.run
+        self.addCleanup(setattr, mcpjobs, "run", real)
+        raw = jira_raw(3)
+        mcpjobs.run = lambda *a, **k: {"out": {"found": True, "title": "Cancel keeps stock reserved", "type": "Bug",
+                                                "status": "QA", "summary": "s"},
+                                        "calls": [{"name": "mcp__mcp-atlassian__jira_get_issue", "input": {},
+                                                   "result": json.dumps(raw)}]}
+        rec = mcpjobs.jira_card("ABC-1001", common.load_config(), {})
+        self.assertEqual(len(rec["card"]["comments"]), 3)
+        self.assertIn("stock stays reserved", rec["card"]["description"])
+        saved = common.read_json(common.hp("data", "jira", "ABC-1001.json"))
+        self.assertEqual(saved["card"]["comments"], rec["card"]["comments"])
+
+
 if __name__ == "__main__":
     unittest.main()
