@@ -20,6 +20,7 @@ import time
 
 from . import common
 from . import extract
+from . import modelbudget
 from .redact import redact
 from .safety import claude as builder, commands, paths
 from .safety.mcp import CONNECTIONLESS_DEFAULT
@@ -288,6 +289,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     jl = m.setdefault("jobs", {})
     jl[job] = {"at": common.now_iso(), "in": res["input_tokens"], "out": res["output_tokens"], "cost": round(res["cost"], 4),
                "calls": len(res["calls"]), "servers": srv_state, "rc": rc}
+    modelbudget.record(health, day, "mcp", res["input_tokens"], res["output_tokens"], res["cost"])
     common.log("mcp", "%s rc=%s servers=%s calls=%s in=%s out=%s $%.4f" % (
         job, rc, srv_state, [c["name"] for c in res["calls"]], res["input_tokens"], res["output_tokens"], res["cost"]))
     bad = [n for n, st in srv_state.items() if st != "connected"]

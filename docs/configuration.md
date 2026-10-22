@@ -69,7 +69,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 
 ## `models`
 
-Model aliases passed to `claude -p --model`.
+Models passed to `claude -p --model`: an alias (`haiku`, `sonnet`, `opus`) or an explicit model id such as `claude-haiku-4-5`. An alias follows whatever model it currently points at; an id pins the version, so extraction keeps behaving the same when the alias moves. Pinning `models.extract` is recommended.
 
 | Key | Default | Used for |
 |---|---|---|
@@ -78,8 +78,18 @@ Model aliases passed to `claude -p --model`.
 | `models.curate` | `"sonnet"` | Picking the minimal replayable request set for a ticket |
 | `models.dbflow` | `"sonnet"` | The DB-flow view (scenarios, conflicts, unknowns) |
 | `models.worklog_condense` | not set, so `"sonnet"` | Condensing the evening-worklog descriptions in one batched call |
+| `models.brief` | not set, so `models.consolidate` | Ticket briefs and supersession |
 
 Slack sends and MCP jobs always use `haiku`.
+
+## `budget` and `brief`
+
+Every internal model call (extraction, day summary, curation, DB flow, worklog condensing, MCP jobs, and so on) is recorded with its input and output tokens and its cost in `health.json` under `model_usage.<day>`: totals plus `by_purpose`, kept 30 days next to `cost_by_day`. Health, `/cg:doctor` ("model spend") and the dashboard show today's spend against the cap.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `budget.model_daily_usd` | number | `3.0` | When today's model spend reaches this, supersession and ticket briefs wait until tomorrow (each skip is logged in `agent.log` and counted under `model_usage.<day>.skipped`). Extraction, the day summary and the other purposes are never stopped by it. |
+| `brief.daily_cap` | int | `8` | At most this many ticket-brief calls a day, whatever the spend. |
 
 ## `paths`
 

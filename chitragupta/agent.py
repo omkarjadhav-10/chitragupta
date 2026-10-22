@@ -21,6 +21,7 @@ from . import gittrack  # noqa: E402
 from . import extract  # noqa: E402
 from . import features as featmod  # noqa: E402
 from . import gitsync  # noqa: E402
+from . import modelbudget  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import store as storemod  # noqa: E402
@@ -917,6 +918,12 @@ class Agent:
         if h.get("held_back"):
             warnings.append("Worklog recorder status: not committed because they contain a literal password, token or person "
                             "value: %s. Replace the value with {{process.env.NAME}} (value in bruno/.env)." % ", ".join(h["held_back"][:5]))
+        modelbudget.drain(h, self.cfg)
+        mb = modelbudget.summary(h, self.cfg)
+        if mb["over"]:
+            warnings.append("Worklog recorder status: today's model spend $%.2f reached the $%.2f cap "
+                            "(budget.model_daily_usd); supersession and briefs wait until tomorrow, extraction "
+                            "continues." % (mb["usd"], mb["cap"]))
         h["warnings"] = warnings
         today = common.workday(common.now(), self.cfg)
         dd = self.store.day(today) if os.path.exists(storemod.day_path(today)) else None
@@ -1031,6 +1038,7 @@ class Agent:
 
 
 def save_state(agent):
+    modelbudget.drain(agent.health, agent.cfg)  # model calls made since the last health update
     common.write_json(common.wl("state.json"), agent.state)
     common.write_json(common.wl("health.json"), agent.health)
 

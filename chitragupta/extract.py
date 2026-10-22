@@ -268,8 +268,23 @@ class ExtractError(Exception):
         self.limit = limit
 
 
+# A purpose with no model of its own uses this one's (models.brief unset: the day-summary model).
+MODEL_FALLBACK = {"brief": "consolidate", "supersede": "consolidate"}
+
+
+def model_for(kind, cfg):
+    """The --model for a call: models.<kind>, then models.<kind's first word> ("extract_delta" -> extract), then the
+    fallback purpose's, then haiku for extraction and sonnet otherwise. A value may be an alias (haiku, sonnet, opus)
+    or an explicit model id, which pins the version."""
+    models = (cfg or {}).get("models") or {}
+    base = kind.split("_")[0]
+    fb = MODEL_FALLBACK.get(kind) or MODEL_FALLBACK.get(base)
+    return models.get(kind) or models.get(base) or (models.get(fb) if fb else None) or         ("haiku" if kind.startswith("extract") else "sonnet")
+
+
 def call_claude(kind, stdin_text, cfg, timeout=300):
-    """kind: 'extract' | 'extract_delta' | 'consolidate' | 'curate'. Returns (structured_output, cost_usd)."""
+    """kind: 'extract' | 'extract_delta' | 'consolidate' | 'curate' | …. Returns (structured_output, cost_usd).
+    Every call that ran is noted in the model-spend ledger (modelbudget), tokens and cost, whether it succeeded or not."""
     exe = resolve_claude(cfg)
     if not exe:
         raise ExtractError("claude executable not found")
@@ -278,8 +293,7 @@ def call_claude(kind, stdin_text, cfg, timeout=300):
     with open(schema_path, encoding="utf-8") as f:
         schema = json.load(f)
     schema_arg = json.dumps({k: v for k, v in schema.items() if k != "$schema"}, separators=(",", ":"))
-    models = cfg.get("models") or {}
-    model = models.get(kind) or models.get(kind.split("_")[0]) or ("haiku" if kind.startswith("extract") else "sonnet")
+    model = model_for(kind, cfg)
     cache_dir = common.env("LLM_CACHE")  # optional (backfill preview -> real run): same input, same answer
     cache_file = None
     if cache_dir:
@@ -309,6 +323,8 @@ def call_claude(kind, stdin_text, cfg, timeout=300):
     if rc != 0 or not isinstance(data, dict):
         raise ExtractError("claude rc=%s: %s" % (rc, (se or so).strip()[:400]), limit=limit)
     cost = float(data.get("total_cost_usd") or 0)
+    from . import modelbudget
+    modelbudget.note(kind, *modelbudget.usage_tokens(data), usd=cost, cfg=cfg)
     if data.get("is_error") or data.get("subtype") not in (None, "success"):
         raise ExtractError("claude error %s: %s" % (data.get("subtype"), str(data.get("result"))[:300]), limit=limit)
     out = data.get("structured_output")

@@ -908,6 +908,12 @@ def _mcp(h, cfg, today_day):
             "last_skip_reason": m.get("last_skip_reason") or "", "live": mcp_live()}
 
 
+def _models(h, cfg, today_day):
+    """Today's model spend against budget.model_daily_usd, by purpose (extract, consolidate, mcp, …)."""
+    from .. import modelbudget
+    return modelbudget.summary(h, cfg, day=today_day)
+
+
 def mcp_live():
     """The last `claude mcp list` check as setup / doctor / maintenance cached it (never run from here):
     {"checked_at", "probed", "servers": [{"role", "server", "status", "detail"}]}, or None before the first check."""
@@ -1004,6 +1010,7 @@ def status(cfg=None, now=None, server=None):
                  "error": h.get("last_push_error"), "remote_set": bool(cfg.get("github_remote"))},
         "slack": _slack(h, cfg),
         "mcp": _mcp(h, cfg, today_day),
+        "models": _models(h, cfg, today_day),
         "today": h.get("today") if (h.get("today") or {}).get("day") == today_day else {"day": today_day},
         "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now)] if w],
         "errors_total": h.get("errors_total") or 0,
@@ -1066,6 +1073,8 @@ _SETUP_ROWS = {
     "Slack": ("slack", "Slack (evening worklog DM)", "warn", "slash", "/cg:setup"),
     "Jira": ("jira", "Jira MCP", "warn", "slash", "/cg:setup"),
     "database MCP": ("database", "Database MCP", "warn", "slash", "/cg:setup"),
+    "model spend": ("model-spend", "Model spend today", "warn", "none",
+                    "Supersession and briefs resume tomorrow; raise budget.model_daily_usd in Settings to allow more"),
     "recent errors": ("errors", "Recent errors", "warn", "slash", "/cg:doctor"),
 }
 _MCP_ROLE = {"Slack": "slack", "Jira": "jira", "database MCP": "database"}

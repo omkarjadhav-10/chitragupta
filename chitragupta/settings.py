@@ -17,6 +17,7 @@ from . import configstore
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MODELS = ["haiku", "sonnet", "opus"]
+MODEL_ID = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{1,60}$")  # an explicit model id pins the version
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PREFIX = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9*][A-Za-z0-9._/*-]{0,99}$")  # a branch name or an fnmatch pattern
@@ -94,12 +95,21 @@ STATIC = [
        "push", default_value=True),
     _i("push_interval_minutes", "Push at most every (minutes)", "Minimum gap between pushes of the daily files.", "int",
        "push", min=5, max=1440),
-    _i("models.extract", "Model: session extraction", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.consolidate", "Model: day summary", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.curate", "Model: request curation", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.dbflow", "Model: DB flow", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.worklog_condense", "Model: worklog condensing", "", "choice", "models", choices=[[m, m] for m in MODELS],
+    _i("models.extract", "Model: session extraction", "An alias (haiku, sonnet, opus) or an explicit model id such as "
+       "claude-haiku-4-5, which pins the version so extraction doesn't change when the alias moves.", "model", "models",
+       choices=MODELS),
+    _i("models.consolidate", "Model: day summary", "", "model", "models", choices=MODELS),
+    _i("models.curate", "Model: request curation", "", "model", "models", choices=MODELS),
+    _i("models.dbflow", "Model: DB flow", "", "model", "models", choices=MODELS),
+    _i("models.worklog_condense", "Model: worklog condensing", "", "model", "models", choices=MODELS,
        default_value="sonnet"),
+    _i("models.brief", "Model: ticket briefs", "Not set: the day-summary model.", "model", "models", choices=MODELS,
+       optional=True),
+    _i("budget.model_daily_usd", "Daily model spend cap (USD)", "When today's model spend reaches this, supersession "
+       "and ticket briefs wait until tomorrow. Extraction and the day summary always run.", "number", "models",
+       min=0, max=100, default_value=3.0),
+    _i("brief.daily_cap", "Ticket briefs per day", "At most this many brief rebuilds a day.", "int", "models",
+       min=0, max=50, default_value=8),
     _i("mcp.daily_call_budget", "Daily MCP job budget", "Background MCP jobs per day. Runs you ask for count separately.",
        "int", "models", min=0, max=100),
     _i("raw_retention_days", "Keep raw events (days)", "Raw capture files older than this are pruned once processed.",
@@ -207,6 +217,12 @@ def check(it, value, current):
         return None
     if t == "choice":
         return None if value in [c[0] for c in it["choices"]] else "Pick one of the listed options."
+    if t == "model":
+        if value == "" and it.get("optional"):
+            return None  # not set: the fallback model
+        if isinstance(value, str) and (value in it["choices"] or MODEL_ID.match(value)):
+            return None
+        return "Use %s, or a model id such as claude-haiku-4-5." % ", ".join(it["choices"])
     if t == "days":
         if not isinstance(value, list) or not value or any(d not in DAYS for d in value) or len(set(value)) != len(value):
             return "Pick at least one day."
