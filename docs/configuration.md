@@ -172,7 +172,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 |---|---|---|---|
 | `mcp.daily_call_budget` | int | `10` | Maximum background MCP jobs per day. Only a job that made at least one MCP tool call counts; jobs that made none (a server down) are counted apart under a cap of the same size. Runs you ask for are counted separately. |
 | `mcp.jira.enabled` | bool | `false` | Run the Jira jobs: ticket cards, and the evening facts used by the worklog. |
-| `mcp.jira.cards` | bool | `true` | With Jira on, read the day's tickets (title, status, summary) for the ticket pages. |
+| `mcp.jira.cards` | bool | `true` | With Jira on, read the cards (title, type, status, summary) of the tickets worked in the last 7 days whose card is missing or older than their last active day: missing first, then the oldest, at most 2 per tick and never from the evening worklog's reserve. A key Jira recently said doesn't exist is skipped for a week. |
 | `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. The read allowlist entry and the server's own read-only mode (`READ_ONLY_MODE`, `ENABLED_TOOLS`) follow this name. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |

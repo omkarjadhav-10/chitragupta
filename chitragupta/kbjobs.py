@@ -106,16 +106,38 @@ class KBJobs:
                     st["linkmap_day"] = today
 
     # ------------------------------------------------------------------ Jira cards
+    def jira_wanted(self, today, days=7):
+        """Tickets that need a card: active in the last `days` work days (placeholders aside), with no card or one
+        fetched on an earlier work day than their last active day; not a key Jira recently said doesn't exist.
+        Missing cards first, then the oldest fetched, then the longest idle."""
+        from . import store as S
+        start = _dt.date.fromisoformat(today)
+        last = {}
+        for i in range(days):
+            d = (start - _dt.timedelta(days=i)).isoformat()
+            dd = self.a.store.days.get(d) or common.read_json(S.day_path(d), {}) or {}
+            for t in dd.get("tickets") or {}:
+                if not common.is_placeholder(t) and d > last.get(t, ""):
+                    last[t] = d
+        since = (start - _dt.timedelta(days=days)).isoformat()
+        out = []
+        for t, d in last.items():
+            rec = common.read_json(common.hp("data", "jira", t + ".json"), {}) or {}
+            fetched = rec.get("fetched_at") or "" if rec.get("card") else ""
+            if fetched and common.workday(fetched, self.cfg) >= d:
+                continue  # work days on both sides (a card fetched before day_starts_at belongs to the day before)
+            tk = self.a.store.tickets.get(t) or common.read_json(S.ticket_path(t), {}) or {}
+            if tk.get("jira_missing") and common.workday(tk["jira_missing"], self.cfg) >= since:
+                continue
+            out.append((fetched, d, t))
+        return [t for _, _, t in sorted(out)]
+
     def jira_cards(self, today, limit=2, force=None):
-        dd = self.a.store.day(today)
-        want = force or sorted(t for t in dd.get("tickets") or {} if not common.is_placeholder(t))
+        want = force or self.jira_wanted(today)
         n = 0
         for t in want:
             if n >= limit:
                 break
-            rec = common.read_json(common.hp("data", "jira", t + ".json"), {}) or {}
-            if not force and rec.get("fetched_at", "")[:10] >= today:
-                continue
             try:
                 rec = mcpjobs.jira_card(t, self.cfg, self.a.health)
                 n += 1
