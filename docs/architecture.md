@@ -150,6 +150,27 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
     PAUSED                                   present while capture is paused
 ```
 
+### One record per thing
+
+A ticket's APIs, tables, queries and files, `catalog.json` and the day slots are keyed by pure normalisers (`chitragupta/kbnorm.py`), so a variant never becomes a second record:
+
+| Record | Key |
+|---|---|
+| API | method + path template: ids, `:id`, `{id}` and `{{var}}` fold to `*`, `-` and `_` are one, the host is not part (every host seen is kept in `hosts`) |
+| Table | lower-case, schema-qualified; a bare name joins the one qualified name the ticket (or else the catalog) knows for it |
+| Query | the SQL with spacing and case collapsed outside literals, leading session `SET …;` statements and the trailing `;` removed |
+| File | the repo-relative posix path; a bare file name joins the one known full path with that name |
+
+Merged records keep every source's lists and days; the keys they replaced stay on the record as `aliases`, so an old `queries.md#q-<id>` link still lands on its query. The hub lists files once, in the Code map, with a Changed column. The 0.5.0 migration `kb5-dedupe-keys` re-keys existing data this way after backing up `data/tickets`, `data/catalog.json` and `data/days`; the next tick then re-renders every view once (`.worklog/cache/rerender-all`).
+
+### Verified file paths
+
+A file counts as changed only when a session's Edit/Write tool call wrote it or a commit has it; a path the model only named is kept with `verified: null`. The `pathcheck` tick step checks each pending path with the read-only `git rev-parse --verify -q <sha>:<path>` (through the work-repo guard; no new git command) against the ticket's branch heads in the record's repo, or that repo's HEAD when no branch is tracked, and records `verified: true` or `false`. Answers are cached per (repo, sha, path) in `.worklog/cache/pathcheck.json`, and at most 40 git calls run per tick. The hub's Code map lists verified files; the rest sit under a collapsed "Unverified paths (n)". The 0.5.0 migration `kb5-paths-verified` (backs up the ticket files first) marks existing records pending, because older data can't tell a model's claim from an edit; the check then confirms them.
+
+### Title and status
+
+A ticket's `title` comes only from its Jira card or from you (`title_source` `jira` or `user`). A guess from the model or the branch name is kept as `title_hint` and only ever shown small, labelled "hint"; until a card arrives the key stands alone. The status is two fields: `jira.status` from the card and `status_inferred` from day close; neither overwrites the other, and the hub shows both ("Jira: QA COMPLETED · Inferred: in_progress"). `status` is still written, computed (the Jira status when a card exists, else the inferred one), for older readers. The 0.5.0 migration `kb5-title-status` moves existing guessed titles to `title_hint` and splits the status, after backing up the ticket files it changes.
+
 ## Outside the data home
 
 | Path | Written by |

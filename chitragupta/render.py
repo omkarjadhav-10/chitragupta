@@ -6,7 +6,7 @@ import re
 
 from . import common
 from .redact import redact
-from .store import Store
+from .store import Store, display_title, jira_status, lookup
 
 NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
@@ -268,7 +268,7 @@ def render_day(store, day, cfg, health):
             tk = store.ticket(t)
             nf = len([i for i in slot.get("item_ids", []) if tk["items"].get(i, {}).get("kind") not in OPEN_KINDS])
             L.append("| [%s](../../../tickets/%s/README.md) | %s | %s | %s | %d | %d | %d |" % (
-                t, t, cell(tk.get("title")), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
+                t, t, title_cell(tk), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
                 nf, len(slot.get("query_ids", [])), len(slot.get("api_keys", []))))
         L.append("")
         for t, slot in tickets:
@@ -365,13 +365,30 @@ def render_day(store, day, cfg, health):
     return "\n".join(L) + "\n"
 
 
+def heading(t, tk, level="#"):
+    """`# KEY — Jira title`, or just `# KEY` while the ticket has no card (a hint is never shown as the title)."""
+    title = display_title(tk)
+    return "%s %s — %s" % (level, t, title) if title else "%s %s" % (level, t)
+
+
+def title_cell(tk):
+    title = display_title(tk)
+    return cell(title) if title else ("_hint: %s_" % cell(tk["title_hint"]) if tk.get("title_hint") else "")
+
+
+def status_text(tk):
+    """'Jira: QA COMPLETED · Inferred: in_progress' (the parts that are known)."""
+    parts = [("Jira", jira_status(tk)), ("Inferred", tk.get("status_inferred") or "")]
+    return " · ".join("%s: %s" % (k, v) for k, v in parts if v) or "—"
+
+
 def fmt_time(m):
     return ("≈ " + common.fmt_minutes(m)) if m else "—"
 
 
 def ticket_section(store, dd, t, slot):
     tk = store.ticket(t)
-    L = ["### %s — %s" % (t, tk.get("title") or "(untitled)")]
+    L = [heading(t, tk, "###")]
     cons = (dd.get("consolidated") or {}).get(t) or {}
     did = cons.get("what_i_did") or []
     if did:
@@ -385,15 +402,15 @@ def ticket_section(store, dd, t, slot):
     if finds:
         L.append("- **Findings**")
         L += ["  - " + item_line(i) for i in finds]
-    tables = [tk["tables"][k]["name"] for k in slot.get("table_keys", []) if k in tk["tables"]]
-    qs = [tk["queries"][q] for q in slot.get("query_ids", []) if q in tk["queries"]]
+    tables = [r["name"] for r in _found(tk["tables"], slot.get("table_keys"))]
+    qs = _found(tk["queries"], slot.get("query_ids"))
     if tables or qs:
         L.append("- **DB**" + (" — tables: " + ", ".join(code(x) for x in tables) if tables else ""))
         for q in qs:
             L.append("  - query: [%s](../../../tickets/%s/queries.md#q-%s) _(%s · %s)_" % (
                 cell(q.get("purpose") or common.truncate(q.get("text"), 60)), t, q["id"],
                 DIALECT.get(q.get("dialect"), ("SQL",))[0], q.get("kind")))
-    apis = [tk["apis"][k] for k in slot.get("api_keys", []) if k in tk["apis"]]
+    apis = _found(tk["apis"], slot.get("api_keys"))
     igs = [tk["integrations"][k] for k in slot.get("integration_keys", []) if k in tk["integrations"]]
     if apis or igs:
         L.append("- **APIs / integrations**")
@@ -425,6 +442,16 @@ def ticket_section(store, dd, t, slot):
             L += fallback_lines(fb)
     L.append("")
     return L
+
+
+def _found(d, keys):
+    """The records of a day slot's keys, each once (an old key resolves through the record's aliases)."""
+    out = []
+    for k in keys or []:
+        r = lookup(d, k)
+        if r is not None and not any(r is x for x in out):
+            out.append(r)
+    return out
 
 
 def other_section(dd, g, slot):
@@ -474,7 +501,7 @@ def draft_standup(store, dd):
     for t, slot in dd.get("tickets", {}).items():
         tk = store.ticket(t)
         last = sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))
-        y.append("%s: %s" % (t, last[-1]["text"] if last else (tk.get("title") or "worked on it")))
+        y.append("%s: %s" % (t, last[-1]["text"] if last else (display_title(tk) or "worked on it")))
         for i in slot.get("item_ids", []):
             it = tk["items"].get(i) or {}
             if it.get("kind") == "todo":
@@ -514,24 +541,29 @@ def render_ticket(store, t):
     tk = store.ticket(t)
     items = list(tk["items"].values())
     by = lambda *kinds: sort_items([i for i in items if i.get("kind") in kinds])
-    L = ["# %s — %s" % (t, tk.get("title") or "(untitled)")]
+    L = [heading(t, tk)]
     ql = quick_links(t, tk)
     if ql:
         L += [ql, ""]
-    L += ["| Status (inferred) | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
-         "| %s | %s | %s | %s | %s |" % (tk.get("status") or "—", cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
+    if not display_title(tk) and tk.get("title_hint"):
+        L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
+    L += ["| Status | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
+         "| %s | %s | %s | %s | %s |" % (status_text(tk), cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
                                        tk.get("last") or "—", fmt_time(total_minutes(tk))), ""]
     sec = lambda title, lines: L.extend(["## " + title] + (lines or ["_Nothing recorded yet._"]) + [""])
+    st = delivery_stage(tk)
+    if st:
+        L += ["**%s:** %s" % (stage_label(st), st["text"]), ""]
     L += hub_sections(t, tk)
 
-    sec("TL;DR", [tk["tldr"] + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
+    sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
     sec("Problem / context", [tk["problem"]] if tk.get("problem") else None)
     sec("Root cause & key findings", ["- " + item_line(i, True) for i in by("root_cause", "finding", "note")])
     sec("How it works", ["- " + item_line(i, True) for i in by("how_it_works")])
     fix = ["- " + item_line(i, True) for i in by("fix")]
-    changed = [f for f in tk["files"].values() if f.get("changed")]
+    changed = [f for f in tk["files"].values() if f.get("changed") and f.get("verified") is True]
     if changed:
-        fix += ["", "Files changed:"] + ["- %s%s" % (code(f["path"]), " — " + f["role"] if f.get("role") else "") for f in sorted(changed, key=lambda f: f["path"])]
+        fix += ["", "%s changed — see the Code map below." % ("1 file" if len(changed) == 1 else "%d files" % len(changed))]
     if tk.get("commits"):
         fix += ["", "Commits:"] + ["- %s %s %s %s _(%s)_" % (c.get("date", "")[:10], c.get("repo_name"), code(c.get("short")), c.get("subject"), c.get("ref"))
                                    for c in sorted(tk["commits"].values(), key=lambda c: c.get("date", ""), reverse=True)]
@@ -569,13 +601,52 @@ def render_ticket(store, t):
     sec("How to reproduce / test", rep)
     sec("Decisions", ["- " + item_line(i, True) for i in by("decision")])
     sec("Open questions · TODO · blockers", ["- " + item_line(i, True) for i in by("question", "todo", "blocker")])
-    sec("Code map", ["- %s — %s" % (code(f["path"]), f.get("role") or ("changed" if f.get("changed") else "")) for f in sorted(tk["files"].values(), key=lambda f: f["path"])])
+    sec("Code map", code_map(tk))
     sec("References consulted", ["- " + item_line(i, True) for i in by("reference")])
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     sec("Timeline", tl)
     L += ["## My notes", NOTES_BLOCK, ""]
     return "\n".join(L)
+
+
+def code_map(tk):
+    """One table of the ticket's verified files (edited, committed or found in git), changed ones first, each listed
+    once; paths only the model named, and that git hasn't confirmed, go under a collapsed list."""
+    files = sorted(tk.get("files", {}).values(), key=lambda f: (not f.get("changed"), f.get("path") or ""))
+    if not files:
+        return None
+    ok = [f for f in files if f.get("verified") is True]
+    rest = [f for f in files if f.get("verified") is not True]
+    L = []
+    if ok:
+        L += ["| File | Role | Changed |", "|---|---|---|"]
+        L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in ok]
+    if rest:
+        L += ["", "<details><summary>Unverified paths (%d)</summary>" % len(rest), "",
+              "_Named in the notes but not (yet) found in the repo: not edited in a session, not in a commit._", ""]
+        L += ["- %s%s%s" % (code(f["path"]), " — " + cell(f.get("role")) if f.get("role") else "",
+                            " _(pending check)_" if f.get("verified") is None else "") for f in rest]
+        L += ["", "</details>"]
+    return L
+
+
+def delivery_stage(tk):
+    from . import delivery
+    return delivery.stage(tk.get("git") or {})
+
+
+def stage_label(st):
+    return "Delivery (computed from git and PRs%s)" % (", checked " + st["checked_at"][:10] if st.get("checked_at") else "")
+
+
+def tldr_text(tk, st, md=True):
+    """The model's TL;DR with every sentence that contradicts the computed delivery stage marked outdated."""
+    from . import delivery
+    out = []
+    for s, note in delivery.check_tldr(tk.get("tldr"), st):
+        out.append(s if not note else ("_%s:_ ~~%s~~" % (note, s) if md else "(%s) %s" % (note, s)))
+    return " ".join(out)
 
 
 def quick_links(t, tk):
@@ -683,8 +754,8 @@ def render_queries(store, t):
         L.append("_No queries recorded yet._")
     for q in qs:
         lang = DIALECT.get(q.get("dialect"), ("SQL", "sql"))
-        L += ['<a id="q-%s"></a>' % q["id"],
-              "## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query")]
+        L += ['<a id="q-%s"></a>' % x for x in [q["id"]] + list(q.get("aliases") or [])]
+        L.append("## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query"))
         if q.get("tables"):
             L.append("Tables: " + ", ".join(code(x) for x in q["tables"]))
         if q.get("revealed"):
@@ -701,7 +772,7 @@ def render_index(store):
         rows.append((tk.get("last") or "", t, tk))
     for _, t, tk in sorted(rows, reverse=True):
         L.append("| [%s](%s/README.md) | %s | %s | %s | %s | %s | %s |" % (
-            t, t, cell(tk.get("title")), tk.get("status") or "—", tk.get("first") or "—", tk.get("last") or "—",
+            t, t, title_cell(tk), status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
             fmt_time(total_minutes(tk)), cell(common.truncate(tk.get("tldr"), 220))))
     if not rows:
         L.append("| — | _No tickets yet_ | | | | | |")
@@ -750,12 +821,16 @@ def render_context(store, t):
     tk = store.ticket(t)
     path = os.path.join(common.home(), "tickets", t, "README.md")
     al = alert_line(t, tk)
-    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + tk["title"] if tk.get("title") else "", path),
-         "Status (inferred): %s. First worked %s, last worked %s, about %s in total." % (
-             tk.get("status") or "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
+    title = display_title(tk)
+    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + title if title else "", path),
+         "Status: %s. First worked %s, last worked %s, about %s in total." % (
+             status_text(tk) if status_text(tk) != "—" else "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
          if tk.get("first") else "No Claude Code activity recorded for it yet."]
+    st = delivery_stage(tk)
+    if st:
+        L.append("%s: %s." % (stage_label(st), st["text"]))
     if tk.get("tldr"):
-        L.append("TL;DR: " + tk["tldr"])
+        L.append("TL;DR: " + tldr_text(tk, st, md=False))
     final = (tk.get("replay") or {}).get("final") or []
     if final:
         L.append("Saved requests (bash tickets/%s/replay.sh qa; Bruno folder bruno/%s): %s." % (

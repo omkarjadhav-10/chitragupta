@@ -199,6 +199,10 @@ strategy: <repo> <strategy-name>
 strategy: <TICKET> <strategy-name>
 ```
 
+### The delivery stage
+
+From the same data, one computed stage per ticket (`delivery.stage`): *not started*, *committed* (with unpushed commits), *pushed* (no PR yet), *PR open → target*, *merged to target (PR #, date)* or *in release*, followed by any target the work has not reached yet ("not yet in release/1.4"). It is a fact, never model text: it comes before the model's TL;DR on the ticket page, in the hub `README.md` and in the session-start context, and day close gets it as `delivery_stage` with the rule never to contradict it. A TL;DR sentence that still says the work is pending, not merged or not on a target after a PR merged is kept but shown struck through with "outdated: PR #7 merged 2026-09-02" (a plain keyword check).
+
 ## Where it shows up
 
 - **Ticket page (dashboard):** an alert banner at the top, and a *Branches & PRs* section with a graph of the bases and the ticket's branches, the delivery matrix, a branches table and a PRs table. The ticket's `README.md` has the same section as Markdown.

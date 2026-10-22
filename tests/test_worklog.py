@@ -184,7 +184,7 @@ class MergeRenderTests(HomeCase):
         self.assertEqual(len(tk["items"]), 2)
         self.assertEqual(len(tk["queries"]), 1)
         self.assertEqual(len(st.day("2026-10-14")["activity"]), 1)
-        self.assertEqual(tk["title"], "Duplicate SMS on retry")
+        self.assertEqual((tk["title"], tk["title_hint"]), ("", "Duplicate SMS on retry"))  # a hint is never the title
         self.assertEqual(len(st.catalog()["tables"]), 1)
 
     def test_updates_replaces(self):

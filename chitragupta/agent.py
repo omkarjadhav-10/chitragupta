@@ -25,6 +25,7 @@ from . import gitsync  # noqa: E402
 from . import modelbudget  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
+from . import kbnorm  # noqa: E402
 from . import store as storemod  # noqa: E402
 from . import timesheet  # noqa: E402
 from .redact import redact  # noqa: E402
@@ -633,6 +634,7 @@ class Agent:
             last = evs[-1]
             ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                    "branch": last.get("branch"), "candidates": cands}
+            ctx["edited"] = kbnorm.edited_files(evs)  # K6a: a file is "changed" only when a tool call wrote it
             already = storemod.already_recorded(self.store, cands)
             meta = {"session": sid, "day": day, "repo": ctx["repo"], "branch": ctx["branch"],
                     "lines": self.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
@@ -779,7 +781,8 @@ class Agent:
                 tk["commits"][c["sha"]] = rec
                 for fl in c["files"]:
                     old = tk["files"].get(fl["path"]) or {}
-                    tk["files"][fl["path"]] = {"path": fl["path"], "role": old.get("role", ""), "changed": True, "last": day}
+                    tk["files"][fl["path"]] = dict(old, path=fl["path"], role=old.get("role", ""), changed=True, last=day,
+                                                   verified=True, verified_by="commit", repo=old.get("repo") or c["repo_name"])
                     if fl["path"] not in slot["files_changed"]:
                         slot["files_changed"].append(fl["path"])
                 self.store.touch_ticket(c["ticket"])
@@ -812,7 +815,7 @@ class Agent:
             if q["ticket"]:
                 slot = self.ensure_tslot(day, q["ticket"])
                 tk = self.store.ticket(q["ticket"])
-                qid = common.stable_id(q["ticket"], "query", " ".join(q["text"].split()))
+                qid = storemod.query_id(q["ticket"], q["text"])
                 if qid not in tk["queries"]:
                     tk["queries"][qid] = {"id": qid, "date": day, "time": common.hhmm(q["ts"]), "dialect": q["dialect"],
                                           "text": q["text"], "purpose": "SQL script " + q["name"], "tables": [], "kind": "read",
@@ -960,7 +963,7 @@ class Agent:
             tk = self.store.ticket(t)
             items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]]
             tickets[t] = {
-                "title": tk.get("title"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
+                "title": tk.get("title") or tk.get("title_hint"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
                 "activity": [w["time"] + " " + w["text"] for w in sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))],
                 "items": [{"kind": i["kind"], "title": i["title"], "detail": i.get("detail"), "confidence": i.get("confidence")} for i in items],
                 "queries": [{"purpose": tk["queries"][q].get("purpose"), "tables": tk["queries"][q].get("tables"),
@@ -970,6 +973,7 @@ class Agent:
                 "branches": [{"branch": b["branch"], "parent": b.get("parent"), "status": b.get("status")}
                              for x in ((tk.get("git") or {}).get("repos") or {}).values() for b in x.get("branches", [])],
                 "delivery": (tk.get("git") or {}).get("summary"),
+                "delivery_stage": (delivery.stage(tk.get("git") or {}) or {}).get("text"),
                 "previous_tldr": tk.get("tldr"),
             }
         other = {g: {"activity": [w["text"] for w in s.get("what_i_did", [])],
@@ -1018,7 +1022,7 @@ class Agent:
                     if pt.get("tldr"):
                         tk["tldr"], tk["tldr_date"] = pt["tldr"], day
                     if pt.get("status_inferred"):
-                        tk["status"] = pt["status_inferred"]
+                        tk["status_inferred"] = pt["status_inferred"]  # never the Jira status (jira.status)
                     if pt.get("problem") and not tk.get("problem"):
                         tk["problem"] = pt["problem"]
                 tl = tk["timeline"].setdefault(day, {"minutes": dd["tickets"][t].get("minutes", 0), "line": ""})
@@ -1143,6 +1147,11 @@ class Agent:
                 self.features.curate_and_generate(self.force)
             except Exception:
                 common.log("agent", "replay failed: " + traceback.format_exc())
+            try:
+                from . import pathcheck
+                pathcheck.run(self.store, self.cfg)  # model-mentioned file paths checked against git (read-only)
+            except Exception:
+                common.log("agent", "pathcheck failed: " + traceback.format_exc())
             self.close_days()
             try:
                 self.jwl.tick()
@@ -1157,7 +1166,9 @@ class Agent:
             self.cfg_base = copy.deepcopy(self.cfg)
         self.store.save()
         self.update_health()
-        changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets)
+        from . import kb5
+        changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,
+                                    everything=kb5.take_rerender())  # once after a data migration
         day = common.workday(common.now(), self.cfg)
         msg = gitsync.commit_message(day, self.store.delta, " ".join(self.extras + [self.features.commit_extras()]).strip())
         committed = gitsync.commit(self.cfg, msg, h)

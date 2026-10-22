@@ -283,6 +283,9 @@ def _run(dry_run):
 KB_STEPS = [
     ("raw-relative-keys", "agent:migrate_raw_keys"),
     ("kb5-db-schema-writers", "mcpjobs:migrate_schema_writers"),
+    ("kb5-dedupe-keys", "kb5:dedupe_keys"),
+    ("kb5-title-status", "kb5:title_status"),
+    ("kb5-paths-verified", "kb5:paths_verified"),
 ]
 
 

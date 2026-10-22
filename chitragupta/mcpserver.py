@@ -274,9 +274,14 @@ def _ticket_record(key):
     return api.read_json_cached(_home("data", "tickets", key + ".json"))
 
 
+def _title_or_hint(t):
+    """The Jira (or your) title; a model or branch guess only labelled as a hint."""
+    return t["title"] or ("hint: " + t["title_hint"] if t.get("title_hint") else "(no title)")
+
+
 def _summary_lines(t):
     c = t["counts"]
-    L = ["# %s — %s" % (t["key"], t["title"] or "(no title)"),
+    L = ["# %s — %s" % (t["key"], _title_or_hint(t)),
          " · ".join(x for x in ("status " + t["status"] if t["status"] else "", "first %s" % t["first"] if t["first"] else "",
                                 "last %s" % t["last"] if t["last"] else "", "time " + _hm(t["minutes"]),
                                 "repos " + ", ".join(t["repos"]) if t["repos"] else "") if x)]
@@ -396,7 +401,7 @@ def tool_list_tickets(args, cfg):
     L = ["# Tickets — %d" % len(ts)]
     for t in ts:
         L.append("- %s · %s · %s · last %s · %s%s%s" % (
-            t["key"], _one(t["title"] or "(no title)", 90), t["status"] or "-", t["last"] or "-", _hm(t["minutes"]),
+            t["key"], _one(_title_or_hint(t), 90), t["status"] or "-", t["last"] or "-", _hm(t["minutes"]),
             " · " + ", ".join(t["repos"]) if t["repos"] else "", " · ⚠ %d alert(s)" % len(t["alerts"]) if t["alerts"] else ""))
     if not ts:
         L.append("No tickets match.")

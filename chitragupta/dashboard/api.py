@@ -16,6 +16,7 @@ import threading
 
 from .. import common
 from .. import configstore
+from .. import store
 
 TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
@@ -111,7 +112,9 @@ def _counts(tk):
 
 def ticket_summary(key, tk):
     return {
-        "key": key, "title": tk.get("title") or "", "status": tk.get("status") or ((tk.get("jira") or {}).get("status") or ""),
+        "key": key, "title": store.display_title(tk), "title_hint": tk.get("title_hint") or "",
+        "status": store.status_of(tk) or tk.get("status") or "", "jira_status": store.jira_status(tk),
+        "status_inferred": tk.get("status_inferred") or "",
         "first": tk.get("first") or "", "last": tk.get("last") or "", "minutes": _ticket_minutes(tk),
         "tldr": tk.get("tldr") or "", "repos": [os.path.basename(str(r).rstrip("/\\")) for r in tk.get("repos") or []],
         "counts": _counts(tk), "branches": _linked_branches(tk)[:5], "alerts": _alerts(tk),
@@ -142,7 +145,7 @@ def tickets(q=None):
             out.append(ticket_summary(key, tk))
     if q:
         ql = q.strip().lower()
-        out = [t for t in out if ql in ("%s %s %s" % (t["key"], t["title"], t["tldr"])).lower()]
+        out = [t for t in out if ql in ("%s %s %s %s" % (t["key"], t["title"], t["title_hint"], t["tldr"])).lower()]
     out.sort(key=lambda t: (t["last"], t["key"]), reverse=True)
     return {"tickets": out, "count": len(out), "q": q or ""}
 
@@ -342,6 +345,9 @@ def ticket(key):
         "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
         "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
     })
+    from .. import delivery
+    out["delivery"] = delivery.stage(tk.get("git") or {})
+    out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
     return out
 
 
@@ -371,7 +377,7 @@ def day_data(day):
 
 def _title(key):
     tk = read_json_cached(common.hp("data", "tickets", key + ".json"))
-    return (tk or {}).get("title") or ""
+    return store.display_title(tk or {})
 
 
 def saved_worklog(day):
