@@ -142,5 +142,40 @@ class TestReadme(Base):
         self.assertIn("(#i-i1)", brief)
 
 
+# --------------------------------------------------------------------------- single-file export
+
+class TestExport(Base):
+    def embedded(self, html):
+        m = re.search(r'<script id="cg-export" type="application/json">(.*?)</script>', html, re.S)
+        return json.loads(m.group(1))
+
+    def test_full_export_carries_the_brief_and_renders_it_first(self):
+        from chitragupta import export
+        with patched_view():
+            _name, html = export.export_ticket(TICKET, "full")
+        data = self.embedded(html)
+        self.assertEqual(data["brief"]["sections"][0]["id"], "root_cause")
+        self.assertEqual(data["brief"]["header"]["pr"]["url"], fixture_view()["header"]["pr"]["url"])
+        mods = json.loads(re.search(r'<script id="cg-modules" type="application/json">(.*?)</script>', html, re.S).group(1))
+        brief_js = mods.get("@cg/app/pages/brief.js") or ""
+        self.assertIn("export function Brief(", brief_js, "the brief module ships whole, not stubbed")
+        overview = mods["@cg/app/pages/tickets.js"].split("function Overview(", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(overview.index("<${Brief}"), overview.index("<${AllFindings}"))
+        self.assertIn(".allfind { break-before: page; }", html, "print starts the details on page two")
+
+    def test_shareable_export_redacts_the_brief(self):
+        from chitragupta import export
+        v = fixture_view()
+        v["sections"][1]["claims"][0]["text"] = "The log at C:\\Users\\dev\\shop\\mail.log shows it; see https://wiki.acme.test/x"
+        with patched_view(v):
+            _name, html = export.export_ticket(TICKET, "shareable")
+        b = self.embedded(html)["brief"]
+        self.assertIsNone(b["header"]["pr"]["url"])
+        text = b["sections"][1]["claims"][0]["text"]
+        self.assertNotIn("C:\\Users", text)
+        self.assertNotIn("wiki.acme.test", text)
+        self.assertIn("<path>", text)
+
+
 if __name__ == "__main__":
     unittest.main()

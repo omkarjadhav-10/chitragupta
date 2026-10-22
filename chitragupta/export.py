@@ -138,6 +138,11 @@ def drop_local(t, mode, stats=None):
         _hit(stats, "qa-example", n)
         df["markdown"] = md
     if public:
+        pr = ((t.get("brief") or {}).get("header") or {}).get("pr")
+        if isinstance(pr, dict):  # the brief's header names the latest PR; its link goes like the others
+            if pr.get("url"):
+                _hit(stats, "pr-link")
+            pr["url"] = None
         for e in ((t.get("git") or {}).get("repos") or {}).values():
             for p in e.get("prs") or []:
                 if p.get("url"):
