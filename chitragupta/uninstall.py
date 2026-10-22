@@ -2,11 +2,13 @@
 
     python -m chitragupta uninstall [--json]
 
-Removes: the `Chitragupta` scheduled task (or its Startup-folder launcher), the stable runtime
+Removes: the `Chitragupta` scheduled task (or its Startup-folder launcher), the dashboard's Chitragupta.url shortcuts
+(Start menu, Desktop), the stable runtime
 (<user dir>/runtime), the data home's git pre-commit hook if it calls that runtime, the recall skill (only if its
 frontmatter name is ours), the CLAUDE.md block between
 <!-- chitragupta:start --> and <!-- chitragupta:end --> (backup first), and the home pointer.
-Keeps: everything in the data home (daily/, tickets/, data/, the git repo, config). The plugin itself is removed
+Keeps: everything in the data home (daily/, tickets/, data/, the git repo, config), share targets and share clones,
+and the backup zips in storage.local_backup_dir. The plugin itself is removed
 with `/plugin uninstall cg`.
 """
 import json

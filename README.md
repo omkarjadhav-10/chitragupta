@@ -97,7 +97,7 @@ py -3 "$env:USERPROFILE\.chitragupta\runtime\run.py" uninstall
 claude plugin uninstall cg@chitragupta
 ```
 
-`uninstall` removes the `Chitragupta` scheduled task, the stable runtime, the data home's git pre-commit hook (it calls that runtime), the recall skill and the CLAUDE.md block (backed up first), plus the home pointer. **It keeps all your data**: daily notes, tickets, the knowledge base, config and the data home's git repo.
+`uninstall` removes the `Chitragupta` scheduled task, the dashboard shortcut, the stable runtime, the data home's git pre-commit hook (it calls that runtime), the recall skill and the CLAUDE.md block (backed up first), plus the home pointer. **It keeps all your data**: daily notes, tickets, the knowledge base, config and the data home's git repo, plus share targets and clones and the backup zips.
 
 ## Docs
 

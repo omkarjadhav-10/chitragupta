@@ -157,5 +157,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
 | Task Scheduler `\Chitragupta`, or the Startup-folder `Chitragupta.vbs` fallback (Windows); `~/Library/LaunchAgents/dev.chitragupta.tick.plist` (macOS); `~/.config/systemd/user/chitragupta.service` + `.timer`, or one crontab line marked `# chitragupta` (Linux) | setup |
 | `<path>/shares/` of a folder share target; `<home>/share/<name>` clone of a team Git repo (commits and pushes of `shares/` only) | `/cg:share`, the dashboard's Share |
 | `<home>\.git\hooks\pre-commit` | the tick: allowlist and redaction check |
+| Start menu `Programs\Chitragupta.url` (and `Desktop\Chitragupta.url` when you ask for it) | setup: the dashboard shortcut |
+| `<storage.local_backup_dir>\worklog-kb-<day>.zip` (the last 7 kept) | the tick: the nightly backup, only when `storage.local_backup_dir` is set |
 
-`uninstall` removes everything in this table, including the data home's pre-commit hook when it calls the runtime. It also removes the runtime and the pointer.
+`uninstall` removes the recall skill, the CLAUDE.md block (backup first), the scheduled job, the dashboard shortcuts and the data home's pre-commit hook when it calls the runtime, plus the runtime and the pointer. It keeps the share targets' `shares/` folders and the share clones (shared work, like the data home itself) and the backup zips in `storage.local_backup_dir`.
