@@ -152,7 +152,10 @@ def attribute(events, prefixes):
     for ev in sorted(events, key=lambda e: e.get("ts") or ""):
         sid = ev.get("session_id")
         bt = common.ticket_from_branch(ev.get("branch"), prefixes)
-        if ev.get("event") == "user-prompt":
+        if ev.get("event") == "user-prompt" and ev.get("_time"):  # time-only: the prompt's ticket, no text
+            if ev.get("ticket"):
+                sticky[sid] = ev["ticket"]
+        elif ev.get("event") == "user-prompt":
             found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), prefixes)
             if found:
                 sticky[sid] = found[0]
@@ -318,13 +321,15 @@ class Agent:
                 continue
             evs, new_off = read_lines(path, f["read"])
             f["read"] = new_off
+            evs = self._captured(evs)
             if not evs:
                 continue
             touched_days.add(day)
             if day not in s["days"]:
                 s["days"].append(day)
             try:
-                self.features.on_events(day, sid, s, attribute([dict(e) for e in evs], self.prefixes))
+                full = [dict(e) for e in evs if not e.get("_time")]
+                self.features.on_events(day, sid, s, attribute(full, self.prefixes))
             except Exception:
                 common.log("agent", "features failed: " + traceback.format_exc())
             for ev in evs:
@@ -381,6 +386,34 @@ class Agent:
                 self.cfg_dirty = True
                 common.log("agent", "watching new repo %s" % repo)
 
+    def _captured(self, evs, keep_time=True):
+        """Raw events under today's capture rules (common.capture_mode, memoized per folder for this run): events
+        whose folder is now ignored or out of scope are dropped; events from a now time-only folder keep only the
+        timestamp and the ticket their prompt named (keep_time=False drops them too, for extraction and fallbacks).
+        Rules only ever narrow what was written, so a removed marker simply lets the events back in."""
+        memo = self.__dict__.setdefault("_capture_memo", {})
+        out = []
+        for ev in evs:
+            where = ev.get("cwd") or ev.get("repo_root")
+            if ev.get("_time") or not where:
+                if keep_time or not ev.get("_time"):
+                    out.append(ev)
+                continue
+            key = common.norm_path(where)
+            if key not in memo:
+                memo[key] = common.capture_mode(where, self.cfg)
+            mode = memo[key]
+            if mode == "full":
+                out.append(ev)
+            elif mode == "time" and keep_time:
+                t = None
+                if ev.get("event") == "user-prompt":
+                    found = common.find_tickets((ev.get("payload") or {}).get("prompt", ""), self.prefixes)
+                    t = found[0] if found else None
+                out.append({"ts": ev.get("ts"), "event": ev.get("event"), "session_id": ev.get("session_id"),
+                            "source": ev.get("source"), "ticket": t, "_time": True})
+        return out
+
     def _learnable(self, path):
         memo = self.__dict__.setdefault("_learnable_memo", {})
         key = common.norm_path(path)
@@ -407,7 +440,7 @@ class Agent:
             if fn.endswith(".jsonl"):
                 e, _ = read_lines(os.path.join(dp, fn), 0)
                 evs += e
-        return attribute(evs, self.prefixes)
+        return attribute(self._captured(evs), self.prefixes)
 
     def recompute_minutes(self, day):
         evs = self.day_events(day)
@@ -490,7 +523,7 @@ class Agent:
             if f["read"] > f["extracted"]:
                 evs, _ = read_lines(path, f["extracted"], f["read"])
                 day = os.path.basename(os.path.dirname(path))
-                by_day.setdefault(day, []).extend(evs)
+                by_day.setdefault(day, []).extend(self._captured(evs, keep_time=False))
         if not by_day:
             s["pending_chars"] = 0
             return True
@@ -576,7 +609,7 @@ class Agent:
                     continue
                 day = os.path.basename(os.path.dirname(path))
                 evs, _ = read_lines(path, f["extracted"], f["read"])
-                evs = attribute(evs, self.prefixes)
+                evs = attribute(self._captured(evs, keep_time=False), self.prefixes)
                 if not evs:
                     continue
                 cands = []

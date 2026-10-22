@@ -270,7 +270,7 @@ class ArtifactScopeTests(ScopeCase):
 
 # --------------------------------------------------------------------------- O1 the home folder itself: time only
 
-class HomeFolderTests(ScopeCase):
+class HomeEnvCase(ScopeCase):
     def setUp(self):
         super().setUp()
         self.me = os.path.join(self.work, "me")  # stands in for the user's home folder
@@ -286,6 +286,8 @@ class HomeFolderTests(ScopeCase):
                     os.environ[k] = v
         self.addCleanup(back)
 
+
+class HomeFolderTests(HomeEnvCase):
     def test_capture_mode_home_is_time(self):
         from chitragupta import common
         cfg = common.load_config()
@@ -338,6 +340,80 @@ class HomeFolderTests(ScopeCase):
         self.assertTrue(bl)
         self.assertEqual({b["ticket"] for b in bl}, {None})
         self.assertTrue(all(b["start"] < six + dt.timedelta(minutes=30) for b in bl), bl)
+
+
+# --------------------------------------------------------------------------- O5 capture rules re-checked at read time
+
+class ReadTimeCaptureTests(HomeEnvCase):
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        from chitragupta import extract
+        self.model_calls = []
+
+        def fake(kind, stdin_text, cfg, timeout=300):
+            self.model_calls.append(stdin_text)
+            return {"items": [{"kind": "finding", "title": "LEAKED finding", "ticket": None}]}, 0.0
+        p = mock.patch.object(extract, "call_claude", fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write_raw(self, sid, cwd, repo_root=None, branch=None):
+        """Full raw events, as the hook wrote them before the folder's capture rules changed."""
+        import datetime as dt
+        from chitragupta import common
+        cfg = common.load_config()
+        t0 = common.now() - dt.timedelta(minutes=40)
+        day = common.workday(t0, cfg)
+        evs = [("user-prompt", {"prompt": "PRIVATE_PROMPT look at DEMO-4"}),
+               ("post-tool", {"tool": "Bash", "input": {"command": "echo PRIVATE_CMD " + "x" * 2000}}),
+               ("stop", {"message": "PRIVATE_REPLY " + "y" * 2000})]
+        p = os.path.join(self.home, ".worklog", "raw", day, sid + ".jsonl")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            for i, (ev, payload) in enumerate(evs):
+                f.write(json.dumps({"ts": (t0 + dt.timedelta(minutes=3 * i)).isoformat(timespec="seconds"), "event": ev,
+                                    "session_id": sid, "source": "hook", "cwd": cwd, "repo_root": repo_root,
+                                    "branch": branch, "ticket": None, "payload": payload}) + "\n")
+        return day
+
+    def run_agent(self):
+        from chitragupta import agent
+        a = agent.Agent()
+        a.ingest()
+        a.run_extractions(any_size=True)
+        a.refresh_fallbacks()
+        return a
+
+    def test_raw_from_a_now_ignored_folder_is_never_extracted(self):
+        repo = _repo(self.work, "shop-api", branch="feature/DEMO-9-x")
+        day = self.write_raw("ign1", repo, repo, "feature/DEMO-9-x")
+        _touch(os.path.join(repo, ".worklog-ignore"))  # added after the events were written
+        a = self.run_agent()
+        self.assertEqual(self.model_calls, [])
+        self.assertEqual(a.state["sessions"]["ign1"].get("pending_chars", 0), 0)
+        dd = a.store.day(day)
+        self.assertEqual((dd["tickets"], dd["other"], dd["fallback"]), ({}, {}, {}))
+        self.assertEqual(a.day_events(day), [])
+
+    def test_old_home_folder_raw_becomes_time_only(self):
+        day = self.write_raw("home2", self.me)  # full rows from before the home folder was time-only
+        a = self.run_agent()
+        self.assertEqual(self.model_calls, [])
+        evs = a.day_events(day)
+        self.assertEqual(len(evs), 3)
+        self.assertNotIn("PRIVATE", json.dumps(evs))
+        self.assertEqual(evs[0].get("ticket"), "DEMO-4")  # the ticket mentioned survives, for time
+        dd = a.store.day(day)
+        self.assertEqual(dd["other"], {})
+        self.assertEqual(dd["fallback"], {})
+        self.assertGreater(dd["tickets"]["DEMO-4"]["minutes"], 0)
+
+    def test_extraction_still_runs_for_captured_folders(self):
+        repo = _repo(self.work, "shop-api", branch="feature/DEMO-9-x")
+        self.write_raw("ok1", repo, repo, "feature/DEMO-9-x")
+        self.run_agent()
+        self.assertEqual(len(self.model_calls), 1)
 
 
 if __name__ == "__main__":

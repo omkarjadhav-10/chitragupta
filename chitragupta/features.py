@@ -442,7 +442,7 @@ class Features:
             for day, path in parts:
                 e, _ = agentmod.read_lines(path, 0)
                 evs += e
-            evs = agentmod.attribute(evs, self.prefixes)
+            evs = agentmod.attribute(self.a._captured(evs, keep_time=False), self.prefixes)
             evs.sort(key=lambda e: e.get("ts") or "")
             if not evs:
                 done[sid] = "done"
