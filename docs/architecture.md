@@ -71,7 +71,7 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 4. **Merges** the results into `data/` with stable hash ids, so re-running never duplicates anything.
 5. **Renders** the changed Markdown. Your `My notes` sections survive every re-render.
 6. **Runs per-ticket features.** It curates the replayable request set (Bruno files, `requests.md`, `replay.sh`; steps that change a shared record are flagged and gated behind `--yes`, see [privacy.md](privacy.md#redaction)) and builds the DB-flow view and artifacts.
-7. **Closes days** after `day_starts_at`. Closing consolidates the summary, the standup and the TODOs.
+7. **Closes days** after `day_starts_at`. Closing consolidates the summary, the standup and the TODOs, closes TODOs the branch and PR data shows done, and makes one supersession call per ticket that got new items that day (see [Current items](#current-items)).
 8. **Composes the evening Jira worklog** at `jira_worklog.send_at`, and sends it on Slack if connected.
 9. **Runs MCP jobs**, within the daily budget, if configured.
 10. **Commits and pushes** the allowlisted files.
@@ -170,6 +170,15 @@ A file counts as changed only when a session's Edit/Write tool call wrote it or 
 ### Queries that were sent
 
 `queries.md` lists only SQL that was actually sent. Raw events are read with their line number, so each event has a reference `raw/<day>/<session>.jsonl:<line>`. When an extraction is merged, every query the model reports is matched (`chitragupta/sqlsent.py`) against the statements the same session sent: the `sql` / `query` argument of a database MCP call, or a SQL command line in a Bash or PowerShell call. Both sides are compared as the normalised SQL above; the model's `:name` and `?` placeholders match any value, and an MCP argument the hook cut at its size limit matches by its start. A match records `sent: true` and `ref` (the raw line); no match records `sent: false`: the query stays in the data and on the dashboard under a collapsed "Not run (n)", but not in `queries.md`, the hub's count or the day file. SQL scripts you saved keep `sent: null` with their file as `evidence`. The extraction prompt asks for SQL copied verbatim from a tool call, with placeholders only for values that identify a person. The 0.5.0 migration `kb5-queries-sent` (backs up the ticket files first) matches existing queries against the raw files still on disk; a query whose raw is gone keeps `sent: null` and stays listed.
+
+### Current items
+
+A ticket keeps every item it ever recorded; what changes is which ones are current.
+
+- **The extractor sees each candidate ticket.** `ALREADY_RECORDED` (at most 20,000 characters) is split evenly between the session's candidate tickets, each filled with its newest items first (superseded and archived ones left out), and it is recomputed before every chunk, so a later chunk sees what the earlier ones recorded.
+- **TODOs close from git.** A TODO item, or a day's open TODO, about a git action (rebase, push, open or raise a PR, merge, cherry-pick to a target) gets `status: "done"` and `closed_by` (`pr:<n>` or `branch:<name>`) once the ticket's branch and PR data shows it happened: a PR from the ticket's branch (to the named target, after the TODO was written) covers opening it, pushing and rebasing; a merged PR covers a merge; a branch on the remote with nothing left to push covers a push. It runs whenever the ticket's branch picture changes and when a day closes. A day's `open_todos` and `carried_todos` are objects `{text, ticket, closed_by}`; closed ones stay in the day and are not carried. The 0.5.0 migration `kb5-todo-objects` (backs up `data/days` and `state.json`) turns the older strings into objects; nothing is dropped.
+- **Supersession at day close.** For each ticket that got new items that day, one `claude -p` call (purpose `supersede`, `models.supersede`, else `models.consolidate`; prompt `prompts/supersede.md`) gets the ticket's root causes, findings, decisions, fixes, how-it-works items, TODOs and your notes (id, kind, title, 300 characters of detail, day, status; newest first, capped at 80 items / 30,000 characters) and returns `{id, subject, status, superseded_by}` per item. Only ids that exist are applied, only `subject`, `status` (`current`, `superseded`, `hypothesis`, `confirmed`, `done`) and `superseded_by` change, never the text; your own notes (inbox lines) are never superseded by a model item. The call is recorded in the model-spend ledger and waits for tomorrow once `budget.model_daily_usd` is reached (logged in `agent.log`).
+- **Views.** The hub and the dashboard show only current items in each section; done TODOs sit under a collapsed "Done (n)" with what closed them, and replaced items under a collapsed "Superseded (n)", each linked to the item that replaced it. The SessionStart context lists current items only.
 
 ### Title and status
 

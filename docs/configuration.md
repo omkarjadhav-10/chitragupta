@@ -79,7 +79,8 @@ Models passed to `claude -p --model`: an alias (`haiku`, `sonnet`, `opus`) or an
 | `models.curate` | `"sonnet"` | Picking the minimal replayable request set for a ticket |
 | `models.dbflow` | `"sonnet"` | The DB-flow view (scenarios, conflicts, unknowns) |
 | `models.worklog_condense` | not set, so `"sonnet"` | Condensing the evening-worklog descriptions in one batched call |
-| `models.brief` | not set, so `models.consolidate` | Ticket briefs and supersession |
+| `models.brief` | not set, so `models.consolidate` | Ticket briefs |
+| `models.supersede` | not set, so `models.consolidate` | The per-ticket supersession call at day close (which items a newer one replaced) |
 
 Slack sends and MCP jobs always use `haiku`.
 

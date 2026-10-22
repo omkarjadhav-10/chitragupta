@@ -27,6 +27,7 @@ from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import kbnorm  # noqa: E402
 from . import sqlsent  # noqa: E402
+from . import supersede  # noqa: E402
 from . import store as storemod  # noqa: E402
 from . import timesheet  # noqa: E402
 from .redact import redact  # noqa: E402
@@ -649,7 +650,9 @@ class Agent:
                     "lines": self.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
             try:
                 cost = 0.0
-                for chunk in extract.build_digests(all_evs, meta, cands, already):
+                for n, chunk in enumerate(extract.build_digests(all_evs, meta, cands, already)):
+                    if n:  # K3: a later chunk sees what the earlier ones recorded
+                        chunk = extract.with_already(chunk, storemod.already_recorded(self.store, cands))
                     res, c = extract.call_claude("extract", chunk, self.cfg)
                     cost += c
                     cctx = dict(ctx, default=chunk.default, turns=chunk.turns)  # untagged items: their turn's ticket
@@ -930,6 +933,7 @@ class Agent:
                 tk["branches"] = storemod._union(tk.get("branches"), [b])
                 tk["repos"] = storemod._union(tk.get("repos"), [name])
             if delivery.update_ticket(self.store, t, rx, cfg, force=t in self.git_force):
+                supersede.close_todos(tk)  # K3: git-action TODOs the new branch/PR data shows done
                 self.store.touch_ticket(t)
                 today = common.workday(common.now(), cfg)
                 if t in (self.store.day(today).get("tickets") or {}):
@@ -993,7 +997,8 @@ class Agent:
                                         "sql_scripts": [s["name"] for s in dd["outside"]["sql"]][:20],
                                         "inbox": [n["text"] for n in dd["outside"]["inbox"]][:30]},
                 "commits_no_ticket": [c["subject"] for c in dd["commits"] if not c.get("ticket")],
-                "previous_open_todos": dd.get("carried_todos") or []}
+                "previous_open_todos": [supersede.todo_text(x) for x in dd.get("carried_todos") or []
+                                        if not (isinstance(x, dict) and x.get("closed_by"))]}
         return redact(json.dumps(data, ensure_ascii=False, indent=1))[:150000]
 
     def consolidate(self, day):
@@ -1004,6 +1009,11 @@ class Agent:
         if nxt and nxt > common.now() and not self.force:
             return
         res = None
+        # K3: day TODOs are {text, ticket, closed_by}; carried git-action TODOs the branch/PR data shows done close here
+        carried = [supersede.todo_obj(x, self.prefixes) for x in dd.get("carried_todos") or []]
+        if carried:
+            dd["carried_todos"] = carried
+            supersede.close_day_todos(self.store, carried)
         if has_content and fails < 6:
             try:
                 res, cost = extract.call_claude("consolidate", self.consolidation_input(day), self.cfg)
@@ -1020,7 +1030,9 @@ class Agent:
             dd["summary"] = res.get("day_summary") or dd.get("summary", "")
             dd["summary_final"] = True
             dd["standup"] = res.get("standup") or {}
-            dd["open_todos"] = res.get("open_todos") or []
+            prev = {x["text"]: x for x in carried}
+            dd["open_todos"] = [dict(prev[s]) if s in prev else supersede.todo_obj(s, self.prefixes, since=day)
+                                for s in res.get("open_todos") or [] if isinstance(s, str) and s.strip()]
             for pt in res.get("per_ticket") or []:
                 t = storemod.valid_ticket(pt.get("ticket"), None)
                 if not t or t not in dd["tickets"]:
@@ -1041,11 +1053,23 @@ class Agent:
                 self.store.touch_ticket(t)
         else:
             dd["standup"] = render.draft_standup(self.store, dd) if has_content else {}
-            dd["open_todos"] = dd.get("carried_todos") or []
+            dd["open_todos"] = [dict(x) for x in carried]
+        supersede.close_day_todos(self.store, dd["open_todos"])
+        for t in dd["tickets"]:
+            if supersede.close_todos(self.store.ticket(t)):
+                self.store.touch_ticket(t)
+        try:  # one supersession call per ticket with new items today, within today's model budget
+            cost, _ = supersede.run_day(self.store, self.cfg, self.health, day)
+            if cost:
+                dd["stats"]["cost_usd"] = round((dd["stats"].get("cost_usd") or 0) + cost, 4)
+                self._add_cost(day, cost)
+        except Exception:
+            common.log("agent", "supersession failed: " + traceback.format_exc())
         dd["closed"], dd["closed_at"] = True, common.now_iso()
         dd.pop("consolidate_next", None)
-        if dd["open_todos"]:
-            self.state["carry_todos"] = {"from": day, "todos": dd["open_todos"]}
+        still = [x for x in dd["open_todos"] if not x.get("closed_by")]  # done ones stay in the day, not carried
+        if still:
+            self.state["carry_todos"] = {"from": day, "todos": still}
             today = common.workday(common.now(), self.cfg)
             if os.path.exists(storemod.day_path(today)):
                 self._apply_carry(today)

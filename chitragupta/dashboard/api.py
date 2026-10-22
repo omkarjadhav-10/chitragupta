@@ -17,6 +17,7 @@ import threading
 from .. import common
 from .. import configstore
 from .. import store
+from .. import supersede
 
 TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
@@ -102,7 +103,7 @@ def _ticket_minutes(tk):
 def _counts(tk):
     items = (tk.get("items") or {}).values()
     return {
-        "findings": sum(1 for i in items if i.get("kind") not in ("todo", "question")),
+        "findings": sum(1 for i in items if i.get("kind") not in ("todo", "question") and supersede.is_current(i)),
         "queries": sum(1 for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False),
         "requests": len(((tk.get("replay") or {}).get("final")) or []),
         "artifacts": len(tk.get("artifacts") or {}),
@@ -155,7 +156,8 @@ def _items(tk):
                    key=lambda i: (i.get("date") or "", i.get("time") or ""), reverse=True)
     out = []
     for i in items:
-        out.append({k: i.get(k) for k in ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence")})
+        out.append({k: i.get(k) for k in ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence",
+                                          "status", "superseded_by", "subject", "closed_by", "review", "archived")})
     order = {k: n for n, k in enumerate(FINDING_KINDS)}
     out.sort(key=lambda i: order.get(i.get("kind"), 99))
     return out

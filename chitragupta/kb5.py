@@ -321,3 +321,43 @@ def queries_sent(dry_run, notes, backup):
     for t, tk in changed.items():
         common.write_json(S.ticket_path(t), tk)
     request_rerender(dry_run)
+
+
+# --------------------------------------------------------------------------- kb5-todo-objects (K3)
+
+def todo_objects(dry_run, notes, backup):
+    """K3: a day's open_todos and carried_todos (and the state's carry_todos) become {text, ticket, closed_by} objects,
+    the ticket read from the key in the text; nothing is dropped. Closing them is left to the next day close."""
+    from . import supersede
+    cfg = common.read_json(common.wl("config.json"), {}) or {}
+    prefixes = cfg.get("ticket_prefixes") or None
+
+    def conv(lst):
+        return [supersede.todo_obj(x, prefixes) for x in lst or []]
+    days = {}
+    for p in _day_files():
+        dd = common.read_json(p, None)
+        if not isinstance(dd, dict) or not dd:
+            continue
+        n = sum(1 for k in ("open_todos", "carried_todos") for x in dd.get(k) or [] if not isinstance(x, dict))
+        if n:
+            dd["open_todos"], dd["carried_todos"] = conv(dd.get("open_todos")), conv(dd.get("carried_todos"))
+            days[p] = dd
+            notes.append("%s: %d TODO line(s) -> objects" % (os.path.basename(p)[:-5], n))
+    spath = common.wl("state.json")
+    st = common.read_json(spath, {}) or {}
+    carry = st.get("carry_todos") if isinstance(st, dict) else None
+    st_changed = isinstance(carry, dict) and any(not isinstance(x, dict) for x in carry.get("todos") or [])
+    if st_changed:
+        carry["todos"] = conv(carry.get("todos"))
+        notes.append("state.json: carried TODOs -> objects")
+    if not (days or st_changed):
+        return
+    backup([common.hp("data", "days"), spath])
+    if dry_run:
+        return
+    for p, dd in days.items():
+        common.write_json(p, dd)
+    if st_changed:
+        common.write_json(spath, st)
+    request_rerender(dry_run)

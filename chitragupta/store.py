@@ -555,18 +555,43 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
         slot["item_ids"].append(iid)
 
 
-def already_recorded(store, tickets, limit=80):
-    """Compact view of what's known for candidate tickets, passed to the extractor."""
+ALREADY_BUDGET = 20000  # chars of ALREADY_RECORDED in an extraction header (extract.build_digests)
+
+
+def _jlen(x):
+    import json
+    return len(json.dumps(x, ensure_ascii=False))
+
+
+def already_recorded(store, tickets, limit=80, budget=ALREADY_BUDGET):
+    """Compact view of what's known for candidate tickets, passed to the extractor. Each candidate gets an equal share
+    of `budget` chars, filled with its newest items first; superseded and archived items are left out."""
     out = {}
+    share = budget // max(1, len(tickets)) - 4  # the key and separators
     for t in tickets:
         tk = store.ticket(t)
-        items = sorted(tk["items"].values(), key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)[:limit]
-        out[t] = {
+        live = [i for i in tk["items"].values() if isinstance(i, dict) and not i.get("archived")
+                and i.get("status") != "superseded"]
+        items = sorted(live, key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)[:limit]
+        entry = {
             "title": tk.get("title") or tk.get("title_hint") or "",
-            "items": [{"id": i["id"], "kind": i["kind"], "title": i["title"], "confidence": i.get("confidence")}
-                      for i in items],
-            "queries": [q.get("purpose") or q["text"][:80] for q in list(tk["queries"].values())[-30:]],
+            "items": [],
+            "queries": [q.get("purpose") or (q.get("text") or "")[:80] for q in list(tk["queries"].values())[-30:]],
             "tables": sorted(tk["tables"].keys())[:60],
             "apis": sorted(tk["apis"].keys())[:60],
         }
+        size = _jlen(entry) + len(t)
+        for k in ("apis", "tables", "queries"):  # the lists give way to items when a share is small
+            while size > share // 2 and entry[k]:
+                size -= _jlen(entry[k].pop()) + 2
+        for i in items:
+            rec = {"id": i["id"], "kind": i["kind"], "title": i["title"], "confidence": i.get("confidence")}
+            if i.get("status") and i["status"] != "current":
+                rec["status"] = i["status"]
+            n = _jlen(rec) + 2
+            if size + n > share:
+                break
+            entry["items"].append(rec)
+            size += n
+        out[t] = entry
     return out
