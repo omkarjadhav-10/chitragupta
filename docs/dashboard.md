@@ -99,7 +99,7 @@ The page keeps one Server-Sent Events connection (`/api/events`) open while the 
 - **Fonts:** the system's own (Segoe UI Variable and Sitka on Windows), so nothing is downloaded.
 - **Keyboard:** a skip link, landmarks and one heading per page; every control can be reached and used from the keyboard with a visible focus ring; dialogs keep focus inside and give it back when closed; moving to a new page moves focus to its heading.
 - **Screen readers:** tabs, dialogs, the palette (combobox and listbox) and option groups follow the WAI-ARIA patterns; copy confirmations and updates are announced in a polite live region; charts and diagrams have a table or text version next to them.
-- **Never colour alone:** every status has an icon and a word.
+- **Never colour alone:** every status has an icon and a word. The tokens, components and the ticket brief's patterns (cite chip, claim/evidence grid, before/after grid) are in [design.md](design.md).
 - **Checked automatically:** every page in both themes against WCAG 2.2 AA with axe, at 1440, 1280 and 900 px, plus a keyboard walk (see [development.md](development.md#ui-checks)).
 
 ## API
