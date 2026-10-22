@@ -75,7 +75,7 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 8. **Composes the evening Jira worklog** at `jira_worklog.send_at`, and sends it on Slack if connected.
 9. **Runs MCP jobs**, within the daily budget, if configured.
 10. **Commits and pushes** the allowlisted files.
-11. **Housekeeping:** updates `health.json`, prunes raw files older than 30 days that are already processed, rotates logs, and writes the nightly backup zip if configured.
+11. **Housekeeping:** updates `health.json`, prunes raw files older than `raw_retention_days` (30) once they are fully read and extracted (on every install, with or without a GitHub remote: raw is never pushed; raw not yet processed is never pruned, and a rebuild from raw reaches back only that far), rotates logs, and writes the nightly backup zip if configured.
 
 ### 3. Model and MCP calls
 

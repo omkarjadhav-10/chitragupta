@@ -935,21 +935,21 @@ class Agent:
                           "cost_usd": dd["stats"].get("cost_usd"), "errors": dd["stats"].get("errors")}
 
     def prune(self):
+        """Raw capture older than raw_retention_days goes once it is fully read and extracted, on every install: raw
+        is never pushed, so there is no push to wait for. Raw not yet processed is never pruned."""
         days = int(self.cfg.get("raw_retention_days") or 30)
         cutoff = (common.now() - _dt.timedelta(days=days)).date().isoformat()
-        lp = common.parse_ts(self.health.get("last_push"))
         sessions = self.state.get("sessions", {})
         for day, sid, path in raw_files():
-            if day >= cutoff or not lp:
+            if day >= cutoff:
                 continue
             s = sessions.get(sid) or {}
             f = (s.get("files") or {}).get(path)
             try:
                 size = os.path.getsize(path)
-                mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            if f and f.get("extracted", 0) >= size and f.get("read", 0) >= size and lp.timestamp() > mtime:
+            if f and f.get("extracted", 0) >= size and f.get("read", 0) >= size:
                 paths.delete(path)
                 s["files"].pop(path, None)
         root = common.wl("raw")
