@@ -11,7 +11,8 @@ from . import kbnorm
 from .redact import redact_obj
 
 ITEM_KINDS = ["finding", "root_cause", "how_it_works", "fix", "decision", "config", "error",
-              "repro_test", "reference", "todo", "question", "blocker", "note"]
+              "repro_test", "reference", "todo", "question", "blocker", "note", "risk"]
+PHASES = ("before", "after", "both")  # how_it_works items: before the fix, after it, unchanged by it
 TICKET_RX = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 
 
@@ -275,6 +276,11 @@ def merge_extraction(store, res, ctx, prefixes):
                "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
         if t and src:
             rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
+        if kind == "how_it_works" and it.get("phase") in PHASES:
+            rec["phase"] = it["phase"]
+        ref = raw_ref(day, sid, it.get("line"))
+        if ref:
+            rec["ref"] = ref
         _merge_item(store, dd, t, gkey, rec, it.get("updates"), tslot)
 
     for q in res.get("queries") or []:
@@ -396,6 +402,13 @@ def merge_extraction(store, res, ctx, prefixes):
             slot["files_changed"].append(p)
 
     store.touch_day(day)
+
+
+def raw_ref(day, sid, line):
+    """"raw/<day>/<sid>.jsonl:<line>": the raw line an item came from (the digest's [HH:MM L<n>] marker), or None."""
+    if isinstance(line, bool) or not isinstance(line, int) or line < 1 or not day or not sid:
+        return None
+    return "raw/%s/%s.jsonl:%d" % (day, sid, line)
 
 
 def _merge_rec(old, new):
@@ -532,6 +545,9 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             store.bump(t or gkey, "updates")
         else:
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
+            for k in ("phase", "ref"):
+                if rec.get(k) and not old.get(k):
+                    old[k] = rec[k]
             if len(rec["detail"]) > len(old.get("detail") or ""):
                 old["detail"] = rec["detail"]
             if old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":

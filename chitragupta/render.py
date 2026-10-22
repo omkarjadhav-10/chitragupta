@@ -12,7 +12,7 @@ NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
 TAG = {"finding": "finding", "root_cause": "root cause", "how_it_works": "how it works", "fix": "fix",
        "decision": "decision", "config": "config", "error": "error", "repro_test": "repro", "reference": "reference",
-       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note"}
+       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note", "risk": "risk"}
 DIALECT = {"postgresql": ("PostgreSQL", "sql"), "sqlserver": ("SQL Server", "sql"), "mongodb": ("MongoDB", "javascript"),
            "mysql": ("MySQL", "sql"), "other": ("SQL", "sql")}
 OPEN_KINDS = ("todo", "question", "blocker")
@@ -600,6 +600,8 @@ def render_ticket(store, t):
             for _, b in sorted(tk.get("bruno", {}).items())]
     sec("How to reproduce / test", rep)
     sec("Decisions", ["- " + item_line(i, True) for i in by("decision")])
+    if by("risk"):
+        sec("Risks", ["- " + item_line(i, True) for i in by("risk")])
     sec("Open questions · TODO · blockers", ["- " + item_line(i, True) for i in by("question", "todo", "blocker")])
     sec("Code map", code_map(tk))
     sec("References consulted", ["- " + item_line(i, True) for i in by("reference")])

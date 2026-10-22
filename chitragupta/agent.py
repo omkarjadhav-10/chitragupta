@@ -96,9 +96,11 @@ class Lock:
 # --------------------------------------------------------------------------- raw reading
 
 def read_lines(path, start, end=None):
-    """Complete JSON lines of a raw file between byte offsets. Returns (events, new_offset)."""
+    """Complete JSON lines of a raw file between byte offsets, each tagged with its 1-based line number in the file
+    ("_ln", the item "ref" an extraction points at). Returns (events, new_offset)."""
     try:
         with open(path, "rb") as f:
+            base = f.read(start).count(b"\n") if start else 0
             f.seek(start)
             data = f.read() if end is None else f.read(max(0, end - start))
     except OSError:
@@ -107,10 +109,13 @@ def read_lines(path, start, end=None):
     if cut < 0:
         return [], start
     evs = []
-    for raw in data[: cut + 1].splitlines():
+    for n, raw in enumerate(data[: cut + 1].split(b"\n")[:-1], base + 1):
+        if not raw.strip():
+            continue
         try:
             ev = json.loads(raw.decode("utf-8", "replace"))
             if isinstance(ev, dict):
+                ev.setdefault("_ln", n)
                 evs.append(ev)
         except ValueError:
             continue

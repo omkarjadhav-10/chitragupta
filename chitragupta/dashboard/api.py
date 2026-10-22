@@ -19,7 +19,7 @@ from .. import configstore
 from .. import store
 
 TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
-FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
+FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "risk", "config", "repro_test", "reference",
                  "blocker", "question", "todo"]
 
 _cache = {}

@@ -171,6 +171,10 @@ A file counts as changed only when a session's Edit/Write tool call wrote it or 
 
 A ticket's `title` comes only from its Jira card or from you (`title_source` `jira` or `user`). A guess from the model or the branch name is kept as `title_hint` and only ever shown small, labelled "hint"; until a card arrives the key stands alone. The status is two fields: `jira.status` from the card and `status_inferred` from day close; neither overwrites the other, and the hub shows both ("Jira: QA COMPLETED · Inferred: in_progress"). `status` is still written, computed (the Jira status when a card exists, else the inferred one), for older readers. The 0.5.0 migration `kb5-title-status` moves existing guessed titles to `title_hint` and splits the status, after backing up the ticket files it changes.
 
+### What the brief draws on
+
+Extraction digests start each activity line with its raw line number (`[10:02 L57]`), and an item the model ties to a line keeps it as `ref: "raw/<day>/<session>.jsonl:<line>"`. How-it-works items carry `phase` (`before` the ticket's fix, `after` it, or `both`); the item kind `risk` holds a regression, side effect or open concern the session showed. All of these are optional fields: older items simply have none.
+
 ## Outside the data home
 
 | Path | Written by |
