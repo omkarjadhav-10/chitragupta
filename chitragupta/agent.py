@@ -961,6 +961,32 @@ class Agent:
             # run_sources() already ran this tick with a window reaching back past the previous scan,
             # so the day's commits are in before it is consolidated
             self.consolidate(day)
+            if dd.get("closed"):
+                self.refresh_briefs(sorted(dd.get("tickets") or {}))
+
+    def refresh_briefs(self, keys):
+        """Day close: rewrite the brief of each ticket (plus any left pending by the cap) whose inputs changed since its
+        brief (brief.source_hash), within brief.daily_cap and budget.model_daily_usd. Never per tick. What was made and
+        what was skipped, and why, goes to health "briefs"; a ticket skipped for the cap waits for the next day close."""
+        from . import brief
+        todo = list(dict.fromkeys(list(keys) + list(self.state.get("brief_pending") or [])))
+        made, skipped = [], {}
+        for t in todo:
+            if common.is_placeholder(t):
+                continue
+            try:
+                res = brief.generate(t, store=self.store, cfg=self.cfg, health=self.health)
+            except Exception:
+                common.log("agent", "brief %s failed: %s" % (t, traceback.format_exc()))
+                res = {"ok": False, "skipped": "error"}
+            if res.get("ok") and not res.get("skipped"):
+                made.append(t)
+            elif res.get("skipped") not in ("unchanged", None) and not res.get("epic"):
+                skipped[t] = res["skipped"]
+        self.state["brief_pending"] = [t for t in todo if skipped.get(t) == "budget"]
+        self.health["briefs"] = {"at": common.now_iso(), "made": made, "skipped": skipped}
+        if made:
+            self.extras.append("+%d brief%s" % (len(made), "" if len(made) == 1 else "s"))
 
     def consolidation_input(self, day):
         dd = self.store.day(day)

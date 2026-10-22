@@ -57,6 +57,7 @@ The dashboard reads with GET and HEAD. It writes only through a short allowlist 
 | `mcp-check` | `claude mcp list`, the same check `/cg:doctor` runs | no |
 | `worklog-refresh` | Refresh from Jira: one read-only Jira job for the day | one MCP job, within the daily budget |
 | `worklog-exact` | Preview exactly: one batched condensing call for the lines still marked *condensed at 20:00* | one model call, within the daily budget |
+| `brief-refresh` | Refresh brief: writes one ticket's brief now (the same as `/cg:ticket <KEY> --brief`); writes only that ticket's record and hub in the data home | one model call, none when its inputs are unchanged; within `brief.daily_cap` and `budget.model_daily_usd` |
 | `worklog-resend` | Send again: adds one `resend:` line to `inbox.md` | no |
 | `calendar-mark` | Mark a day as leave, half day, holiday or extra workday, or remove its mark: one line in `inbox.md` | no |
 | `search-rebuild` | Rebuilds the search index (a cache in the data home) | no |

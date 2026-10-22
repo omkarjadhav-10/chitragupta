@@ -1,6 +1,7 @@
 """The dashboard's allowlisted actions (POST /api/actions/<name>). Each one does a single own thing through the same
-code the CLI uses. Only two run anything paid, both read-only and both within the daily MCP budget (the 20:00
-reserve is kept): worklog-refresh (one Jira read) and worklog-exact (one batched condensing call)."""
+code the CLI uses. Three run anything paid: worklog-refresh (one Jira read) and worklog-exact (one batched condensing
+call), both within the daily MCP budget (the 20:00 reserve is kept), and brief-refresh (one model call for one
+ticket's brief, within brief.daily_cap and budget.model_daily_usd, none when its inputs are unchanged)."""
 import datetime as _dt
 import os
 import re
@@ -118,6 +119,24 @@ def worklog_exact(body):
     if not _preview_buttons():
         return 403, {"error": "The preview buttons are switched off in Settings."}
     return _preview_answer("worklog-exact", jiraworklog.preview_exact(day, wait_s=3))
+
+
+@action("brief-refresh", cap=256)
+def brief_refresh(body):
+    """Refresh brief: write one ticket's brief now, the same as `/cg:ticket <KEY> --brief`. Writes only that ticket's
+    record and hub in the data home; no call when its inputs are unchanged."""
+    from .. import brief, store
+    key = body.get("key")
+    if not isinstance(key, str) or not store.TICKET_RX.match(key):
+        return 400, {"error": "Give a ticket key such as ABC-1001."}
+    if not os.path.exists(store.ticket_path(key)):
+        return 404, {"error": "Nothing is recorded for %s." % key}
+    res = brief.refresh(key, wait_s=3)
+    record_action("brief-refresh", bool(res.get("ok")), "%s %s" % (key, res.get("skipped") or "written"))
+    out = {"ok": bool(res.get("ok")), "view": res.get("view")}
+    if res.get("skipped"):
+        out["skipped"] = res["skipped"]
+    return 200, out
 
 
 @action("worklog-resend", cap=256)

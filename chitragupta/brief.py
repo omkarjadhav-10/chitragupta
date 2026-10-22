@@ -556,6 +556,35 @@ def generate(key, store=None, cfg=None, health=None, force=False):
     return {"ok": True, "dropped": len(dropped)}
 
 
+def refresh(key, wait_s=None, force=False):
+    """Regenerate one ticket's brief now (`/cg:ticket <KEY> --brief`, the dashboard's brief-refresh), under the agent
+    lock like a tick, then re-render its hub. Same rules as day close: no call when the inputs are unchanged, within the
+    cap and the budget. -> generate()'s result plus "view"."""
+    from . import agent as agentmod
+    from . import render
+    lock = agentmod.Lock()
+    if not lock.acquire_wait(wait_s):
+        return {"ok": False, "skipped": "the agent is busy; try again in a minute"}
+    a = None
+    try:
+        a = agentmod.Agent()
+        res = generate(key, store=a.store, cfg=a.cfg, health=a.health, force=force)
+        if res.get("skipped") == "no such ticket":
+            return res
+        if res.get("ok") and not res.get("skipped"):
+            a.store.save()
+            render.render_all(a.store, a.cfg, a.health, tickets={key})
+        res["view"] = view(a.store.ticket(key), key, a.cfg)
+        return res
+    finally:
+        if a:
+            try:
+                agentmod.save_state(a)
+            except Exception:  # noqa: BLE001 - the brief is saved; health is best effort here
+                common.log("agent", "state save failed after brief %s" % key)
+        lock.release()
+
+
 # --------------------------------------------------------------------------- the view
 
 def _header(key, tk, b=None):
@@ -686,3 +715,62 @@ def view(tk, key=None, cfg=None):
 def children(key):
     """An Epic's children: [{key, title, status, line}]."""
     return []
+
+
+# --------------------------------------------------------------------------- plain text (CLI)
+
+def _cite(c):
+    return " [%s]" % ", ".join(c.get("cites") or []) if c.get("cites") else ""
+
+
+def text_lines(v):
+    """A view as plain text, for `/cg:ticket <KEY> --brief`."""
+    h = v.get("header") or {}
+    L = ["# %s%s" % (v.get("key"), (" - " + h["title"]) if h.get("title") else "")]
+    status = " · ".join(x for x in ("Jira: " + h["jira_status"] if h.get("jira_status") else "",
+                                    "Inferred: " + h["status_inferred"] if h.get("status_inferred") else "",
+                                    (h.get("stage") or {}).get("text") or "") if x)
+    if status:
+        L.append(status)
+    if v.get("epic"):
+        L += ["", "Epic: no brief. Its children:"]
+        L += ["- %s %s · %s · %s" % (c["key"], c.get("title") or "", c.get("status") or "-", c.get("line") or "")
+              for c in v.get("children") or []] or ["- none recorded"]
+        return L
+    if not v.get("has_brief"):
+        fb = v.get("fallback") or {}
+        L += ["", "No brief yet."]
+        if (fb.get("root_cause") or {}).get("title"):
+            L.append("Current root cause: %s [%s]" % (fb["root_cause"]["title"], fb["root_cause"]["id"]))
+        if fb.get("tldr"):
+            L.append("TL;DR: " + fb["tldr"])
+        return L
+    if v.get("stale"):
+        L.append("New findings since %s." % (v["stale"].get("since") or "the last brief")[:16])
+    L.append("Written %s by %s." % ((v.get("generated_at") or "")[:16], v.get("model") or "?"))
+    for s in v.get("sections") or []:
+        head = s["heading"] + (" (%s)" % s["confidence"] if s["id"] == "root_cause" and s.get("confidence") not in
+                               (None, "none") else "")
+        L += ["", "## " + head]
+        if s.get("override"):
+            L.append("(your note: %s)" % s["override"])
+        if s["id"] == "fixes_made":
+            L += [("- Reached: %s" % x["text"]) if x["kind"] == "stage" else
+                  "- %s %s%s" % (x["id"], x["text"], " (%s%s)" % ((x.get("state") + " ") if x.get("state") else "", x["date"])
+                                 if x.get("date") else "") for x in s["items"]]
+            if s.get("summary"):
+                L.append(s["summary"]["text"] + _cite(s["summary"]))
+        if s.get("text"):
+            L.append(s["text"] + (": leading hypothesis" if s.get("leading_hypothesis") else ""))
+        steps = s["id"] in ("before", "after")
+        for n, c in enumerate(s.get("claims") or [], 1):
+            lab = "[%s] " % c["label"].capitalize() if s["id"] == "cons" and c.get("label") else ""
+            L.append(("%d. " % n if steps else "- ") + lab + c["text"] + _cite(c))
+        if s.get("rejected"):
+            L.append("Rejected: " + s["rejected"]["text"] + _cite(s["rejected"]))
+        if s.get("verified"):
+            ver = s["verified"]
+            L.append("%s%s%s" % (ver.get("label"), ": " + ver["text"] if ver.get("text") else "", _cite(ver)))
+    if v.get("dropped"):
+        L += ["", "(%d unsupported claim%s left out)" % (v["dropped"], "" if v["dropped"] == 1 else "s")]
+    return L

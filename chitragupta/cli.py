@@ -2,7 +2,7 @@
 
   where [--json]                         data home, user folder, runtime, version, set up or not
   today [--date D] [--no-preview]        time per ticket so far + tonight's Jira-worklog preview
-  ticket <KEY> [--json]                  a ticket's files and a short summary
+  ticket <KEY> [--json] [--brief]        a ticket's files and a short summary; --brief writes its brief now
   trace <KEY>                            the ticket's DB flow and its QA worked example
   hours [--week|--month] [--date D] [--csv]   hours per ticket for a week (by day) or a month (by ISO week)
   search <query…> [--type T] [--ticket K] [--repo R] [--from D] [--to D] [--limit N] [--json] [--rebuild]
@@ -270,6 +270,17 @@ def cmd_ticket(a):
         from . import export
         path = export.export_to_file(key, a.mode)
         out("Exported %s (%s): %s" % (key, a.mode, path))
+        return 0
+    if getattr(a, "brief", False):
+        from . import brief
+        res = brief.refresh(key, wait_s=60)
+        sk = res.get("skipped")
+        if sk == "unchanged":
+            out("Brief unchanged: nothing new since it was written.")
+        elif sk and not res.get("epic"):
+            out("No new brief: %s." % ("today's brief cap or model budget is used up" if sk == "budget" else sk))
+        if res.get("view"):
+            out("\n".join(brief.text_lines(res["view"])))
         return 0
     s = ticket_summary(key, tk or {})
     if a.json:
@@ -747,6 +758,7 @@ def parser():
     s.add_argument("key", nargs="?", default="")
     s.add_argument("--json", action="store_true")
     s.add_argument("--export", action="store_true", help="save the whole ticket page as one HTML file")
+    s.add_argument("--brief", action="store_true", help="write the ticket's brief now (when its inputs changed)")
     s.add_argument("--mode", choices=("full", "team", "shareable"), default="full")
     s.set_defaults(fn=cmd_ticket)
     s = sub.add_parser("branches")
