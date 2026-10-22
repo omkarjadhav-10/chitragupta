@@ -26,6 +26,7 @@ from . import modelbudget  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import kbnorm  # noqa: E402
+from . import sqlsent  # noqa: E402
 from . import store as storemod  # noqa: E402
 from . import timesheet  # noqa: E402
 from .redact import redact  # noqa: E402
@@ -96,9 +97,11 @@ class Lock:
 # --------------------------------------------------------------------------- raw reading
 
 def read_lines(path, start, end=None):
-    """Complete JSON lines of a raw file between byte offsets. Returns (events, new_offset)."""
+    """Complete JSON lines of a raw file between byte offsets, each with its 1-based line number in the file (`_ln`,
+    for evidence refs "raw/<day>/<sid>.jsonl:<line>"). Returns (events, new_offset)."""
     try:
         with open(path, "rb") as f:
+            ln = f.read(start).count(b"\n") if start else 0
             f.seek(start)
             data = f.read() if end is None else f.read(max(0, end - start))
     except OSError:
@@ -107,10 +110,12 @@ def read_lines(path, start, end=None):
     if cut < 0:
         return [], start
     evs = []
-    for raw in data[: cut + 1].splitlines():
+    for raw in data[: cut + 1].split(b"\n")[:-1]:
+        ln += 1
         try:
             ev = json.loads(raw.decode("utf-8", "replace"))
             if isinstance(ev, dict):
+                ev["_ln"] = ln
                 evs.append(ev)
         except ValueError:
             continue
@@ -616,6 +621,9 @@ class Agent:
         for key, f in sorted(s["files"].items()):
             if f["read"] > f["extracted"]:
                 evs, _ = self._read_turns(raw_path(key), f["extracted"], f["read"], keep_time=False)
+                for e in evs:
+                    if e.get("_ln"):
+                        e["_ref"] = "raw/%s:%d" % (key, e["_ln"])
                 day = raw_day(key)
                 by_day.setdefault(day, []).extend(evs)
         if not by_day:
@@ -635,6 +643,7 @@ class Agent:
             ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                    "branch": last.get("branch"), "candidates": cands}
             ctx["edited"] = kbnorm.edited_files(evs)  # K6a: a file is "changed" only when a tool call wrote it
+            ctx["sent"] = sqlsent.sent_statements(evs)  # K6b: a query counts as run only when one of these sent it
             already = storemod.already_recorded(self.store, cands)
             meta = {"session": sid, "day": day, "repo": ctx["repo"], "branch": ctx["branch"],
                     "lines": self.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
@@ -819,7 +828,8 @@ class Agent:
                 if qid not in tk["queries"]:
                     tk["queries"][qid] = {"id": qid, "date": day, "time": common.hhmm(q["ts"]), "dialect": q["dialect"],
                                           "text": q["text"], "purpose": "SQL script " + q["name"], "tables": [], "kind": "read",
-                                          "revealed": ""}
+                                          "revealed": "", "sent": None,  # a script you saved: unknown whether it ran
+                                          "evidence": [q.get("path") or q["name"]]}
                     self.store.bump(q["ticket"], "queries")
                 if qid not in slot["query_ids"]:
                     slot["query_ids"].append(qid)

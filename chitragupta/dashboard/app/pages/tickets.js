@@ -193,11 +193,19 @@ function Requests({ rq }) {
       ${s.curl ? html`<details class="more"><summary>Show the curl command</summary><pre tabindex="0"><code>${s.curl}</code></pre></details>` : null}</div>`)}
     <p class="small muted">${rq.dropped ? rq.dropped + ' other captured calls left out. ' : ''}${rq.bruno_folder ? html`Bruno folder: <span class="mono">${rq.bruno_folder}</span> <${CopyButton} text=${rq.bruno_folder} label="Copy path" what="Bruno folder path" />` : null}</p>`;
 }
-function Queries({ qs }) {
-  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
-  return qs.map((q) => html`<div class="step" key=${q.id}><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
+function Query({ q }) {
+  return html`<div class="step"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
     ${q.tables && q.tables.length ? html`<div class="small muted">Tables: ${q.tables.map((x, i) => html`<code key=${i}>${x}</code> `)}</div>` : null}
-    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}<pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`);
+    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}
+    ${q.ref ? html`<div class="small muted">Sent: <span class="mono">${q.ref}</span></div>` : q.sent === null && q.evidence && q.evidence.length ? html`<div class="small muted">Saved in: <span class="mono">${q.evidence[0]}</span></div>` : null}
+    <pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`;
+}
+// Only SQL that was sent (or a script you saved) is listed; SQL the notes mention but never sent stays collapsed.
+function Queries({ qs }) {
+  const run = qs.filter((q) => q.sent !== false), notRun = qs.filter((q) => q.sent === false);
+  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
+  return html`${run.length ? run.map((q) => html`<${Query} key=${q.id} q=${q} />`) : html`<${Empty} title="No queries sent" icon="db">The notes mention SQL that was never sent; it is kept below.</${Empty}>`}
+    ${notRun.length ? html`<details class="more"><summary>Not run (${notRun.length})</summary><p class="muted small">Written or reworded in the notes, but not found among the SQL sent in the session.</p>${notRun.map((q) => html`<${Query} key=${q.id} q=${q} />`)}</details>` : null}`;
 }
 function Artifacts({ list }) {
   const cols = [
@@ -280,7 +288,7 @@ export function TicketPage({ route }) {
     { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 },
     { id: 'dbflow', label: 'DB flow', count: t.dbflow.markdown ? null : 0 },
     { id: 'requests', label: 'Requests', count: t.requests.steps.length },
-    { id: 'queries', label: 'Queries', count: t.queries.length },
+    { id: 'queries', label: 'Queries', count: t.queries.filter((q) => q.sent !== false).length },
     { id: 'artifacts', label: 'Artifacts', count: t.artifacts.length },
     { id: 'timeline', label: 'Timeline', count: t.timeline.length },
     { id: 'notes', label: 'Notes' },

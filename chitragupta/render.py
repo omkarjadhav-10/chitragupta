@@ -403,7 +403,7 @@ def ticket_section(store, dd, t, slot):
         L.append("- **Findings**")
         L += ["  - " + item_line(i) for i in finds]
     tables = [r["name"] for r in _found(tk["tables"], slot.get("table_keys"))]
-    qs = _found(tk["queries"], slot.get("query_ids"))
+    qs = [q for q in _found(tk["queries"], slot.get("query_ids")) if q.get("sent") is not False]  # never-sent SQL: data only
     if tables or qs:
         L.append("- **DB**" + (" — tables: " + ", ".join(code(x) for x in tables) if tables else ""))
         for q in qs:
@@ -581,8 +581,9 @@ def render_ticket(store, t):
         db += ["| %s | %s | %s | %s | %s |" % (code(v["name"]), cell(v.get("db")), cell(v.get("purpose")),
                                               cell(", ".join(v.get("key_columns", []))), cell("; ".join(v.get("relations", []))))
                for _, v in sorted(tk["tables"].items())]
-    if tk["queries"]:
-        db += ["", "%d quer%s — see [queries.md](queries.md)." % (len(tk["queries"]), "y" if len(tk["queries"]) == 1 else "ies")]
+    nq = len(shown_queries(tk))
+    if nq:
+        db += ["", "%d quer%s — see [queries.md](queries.md)." % (nq, "y" if nq == 1 else "ies")]
     sec("Database", db)
     api = []
     if tk["apis"]:
@@ -749,7 +750,8 @@ def hub_sections(t, tk):
 def render_queries(store, t):
     tk = store.ticket(t)
     L = ["# %s — Queries" % t, ""]
-    qs = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    allq = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    qs = [q for q in allq if q.get("sent") is not False]
     if not qs:
         L.append("_No queries recorded yet._")
     for q in qs:
@@ -760,8 +762,21 @@ def render_queries(store, t):
             L.append("Tables: " + ", ".join(code(x) for x in q["tables"]))
         if q.get("revealed"):
             L.append("Revealed: " + q["revealed"])
+        if q.get("ref"):
+            L.append("Sent: " + code(q["ref"]))
+        elif q.get("sent") is None and q.get("evidence"):
+            L.append("Saved in: " + ", ".join(code(e) for e in q["evidence"][:2]))
         L += ["```" + lang[1], fence_safe(q.get("text")).rstrip(), "```", ""]
+    hidden = len(allq) - len(qs)
+    if hidden:
+        L += ["_%d more quer%s the notes mention %s never found among the SQL sent; kept in the data, not listed "
+              "here (dashboard: Not run)._" % (hidden, "y" if hidden == 1 else "ies", "was" if hidden == 1 else "were"), ""]
     return "\n".join(L) + "\n"
+
+
+def shown_queries(tk):
+    """The ticket's queries that were sent (or saved by you, or recorded before sending was checked): sent != False."""
+    return [q for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False]
 
 
 def render_index(store):

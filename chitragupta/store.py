@@ -8,6 +8,7 @@ import re
 
 from . import common
 from . import kbnorm
+from . import sqlsent
 from .redact import redact_obj
 
 ITEM_KINDS = ["finding", "root_cause", "how_it_works", "fix", "decision", "config", "error",
@@ -288,6 +289,11 @@ def merge_extraction(store, res, ctx, prefixes):
                "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
         slot = tslot(t)
         qs = store.ticket(t)["queries"] if t else slot["queries"]
+        if "sent" in ctx:  # K6b: only SQL a database MCP call or a SQL command line sent counts as run
+            hit = sqlsent.find(text, ctx["sent"])
+            rec["sent"] = bool(hit)
+            if hit and hit.get("ref"):
+                rec["ref"] = hit["ref"]
         if qid not in qs:
             qs[qid] = rec
             store.bump(t or gkey, "queries")
@@ -425,6 +431,12 @@ def add_query_sighting(cur, rec):
     for k in ("revealed", "purpose"):
         if rec.get(k) and not cur.get(k):
             cur[k] = rec[k]
+    if rec.get("sent") and cur.get("sent") is not True:  # sent once is sent; never back to false
+        cur["sent"] = True
+        if rec.get("ref"):
+            cur["ref"] = rec["ref"]
+    elif rec.get("sent") is False and "sent" not in cur:
+        cur["sent"] = False
 
 
 def table_name(key, recs):

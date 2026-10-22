@@ -286,6 +286,7 @@ KB_STEPS = [
     ("kb5-dedupe-keys", "kb5:dedupe_keys"),
     ("kb5-title-status", "kb5:title_status"),
     ("kb5-paths-verified", "kb5:paths_verified"),
+    ("kb5-queries-sent", "kb5:queries_sent"),
 ]
 
 

@@ -103,7 +103,7 @@ def _counts(tk):
     items = (tk.get("items") or {}).values()
     return {
         "findings": sum(1 for i in items if i.get("kind") not in ("todo", "question")),
-        "queries": len(tk.get("queries") or {}),
+        "queries": sum(1 for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False),
         "requests": len(((tk.get("replay") or {}).get("final")) or []),
         "artifacts": len(tk.get("artifacts") or {}),
         "dbflow": len(tk.get("data_flow") or {}),
@@ -165,7 +165,8 @@ def _queries(tk):
     qs = sorted((tk.get("queries") or {}).items(), key=lambda kv: (kv[1].get("date") or "", kv[1].get("time") or ""),
                 reverse=True)
     return [{"id": k, "dialect": v.get("dialect"), "kind": v.get("kind"), "purpose": v.get("purpose"), "text": v.get("text") or "",
-             "tables": v.get("tables") or [], "revealed": v.get("revealed"), "date": v.get("date"), "time": v.get("time")}
+             "tables": v.get("tables") or [], "revealed": v.get("revealed"), "date": v.get("date"), "time": v.get("time"),
+             "sent": v.get("sent"), "ref": v.get("ref") or "", "evidence": v.get("evidence") or []}
             for k, v in qs]
 
 

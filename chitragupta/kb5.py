@@ -255,3 +255,69 @@ def paths_verified(dry_run, notes, backup):
     for t, tk in changed.items():
         common.write_json(S.ticket_path(t), tk)
     request_rerender(dry_run)
+
+
+# --------------------------------------------------------------------------- kb5-queries-sent (K6b)
+
+def _sent_on(day, memo):
+    """The SQL sent on a work day, from the raw files still on disk (None when that day's raw is gone)."""
+    if day not in memo:
+        from . import agent, sqlsent
+        root = common.wl("raw", day)
+        names = sorted(f for f in os.listdir(root) if f.endswith(".jsonl")) if os.path.isdir(root) else []
+        if not names:
+            memo[day] = None
+        else:
+            evs = []
+            for fn in names:
+                for e in agent.read_lines(os.path.join(root, fn), 0)[0]:
+                    e["_ref"] = "raw/%s/%s:%d" % (day, fn, e["_ln"])
+                    evs.append(e)
+            memo[day] = sqlsent.sent_statements(evs)
+    return memo[day]
+
+
+def queries_sent(dry_run, notes, backup):
+    """K6b: every ticket query gets `sent`. A saved SQL script stays unknown (None, its file as evidence); a model
+    query is matched against the SQL its days' raw files sent: true with the raw line as `ref`, else false (kept in
+    the data, not listed in queries.md); unknown (None) when that raw is no longer on disk."""
+    from . import sqlsent
+    memo, changed = {}, {}
+    for t in S.Store.all_ticket_ids():
+        tk = common.read_json(S.ticket_path(t), None)
+        if not isinstance(tk, dict) or not tk:
+            continue
+        n = {"true": 0, "false": 0, "unknown": 0}
+        for q in (tk.get("queries") or {}).values():
+            if not isinstance(q, dict) or "sent" in q:
+                continue
+            if (q.get("purpose") or "").startswith("SQL script "):
+                q["sent"] = None
+                n["unknown"] += 1
+                continue
+            stmts = [s for d in sorted(set((q.get("days") or []) + [q.get("date")]) - {None, ""})
+                     for s in (_sent_on(d, memo) or [])]
+            have_raw = any(_sent_on(d, memo) is not None for d in set((q.get("days") or []) + [q.get("date")]) if d)
+            hit = sqlsent.find(q.get("text") or "", stmts, q.get("variants")) if stmts else None
+            if hit:
+                q["sent"] = True
+                if hit.get("ref"):
+                    q["ref"] = hit["ref"]
+                n["true"] += 1
+            elif have_raw:
+                q["sent"] = False
+                n["false"] += 1
+            else:
+                q["sent"] = None
+                n["unknown"] += 1
+        if any(n.values()):
+            changed[t] = tk
+            notes.append("%s: queries sent %d, never sent %d, unknown %d" % (t, n["true"], n["false"], n["unknown"]))
+    if not changed:
+        return
+    backup([S.ticket_path(t) for t in changed])
+    if dry_run:
+        return
+    for t, tk in changed.items():
+        common.write_json(S.ticket_path(t), tk)
+    request_rerender(dry_run)
