@@ -239,9 +239,12 @@ def _run(dry_run):
         return out
     done = list(cfg.get("chitragupta_migrations") or [])
     pending = [m for m in MIGRATIONS if m not in done]
-    if not pending:
+    steps = [s for s in KB_STEPS if s[0] not in done]
+    if not pending and not steps:
         out["already"] = True
         return out
+    if not pending:
+        return _run_steps(steps, cfg, cpath, done, out, dry_run)
     health = common.read_json(hpath, {}) or {}
     notes = []
     cfg_changed = health_changed = False
@@ -270,13 +273,52 @@ def _run(dry_run):
     if state_changed:
         common.write_json(spath, state)
     out["config_changed"], out["health_changed"], out["state_changed"] = cfg_changed, health_changed, state_changed
+    return _run_steps(steps, cfg, cpath, done + pending, out, dry_run) if steps else out
+
+
+# Data migrations of the knowledge fixes (0.5.0), run in this order after the ones above. Each entry is
+# (id, "module:function"); the function is called as fn(dry_run, notes, backup) and must call backup(paths) with every
+# file or folder it will change before it writes anything (backup is a no-op in a dry run). It returns nothing; it
+# raises to stop the run, and then neither it nor any later step is marked done. Forward-only: nothing is ever undone.
+KB_STEPS = []
+
+
+def _run_steps(steps, cfg, cpath, done, out, dry_run):
+    import importlib
+    out.setdefault("applied", [])
+    out.setdefault("backups", [])
+    for mid, target in steps:
+        mod, _, fn = target.partition(":")
+        notes = []
+
+        def backup(paths, _mid=mid):
+            if not dry_run:
+                out["backups"].append(_backup_tree(paths, _mid))
+        try:
+            # "store:fn" is chitragupta.store; a dotted name ("tests.x:fn") is taken as written
+            module = importlib.import_module(mod if "." in mod else "." + mod, None if "." in mod else __package__)
+            getattr(module, fn)(dry_run, notes, backup)
+        except Exception as e:  # noqa: BLE001 - recorded, and the step stays pending for the next run
+            out["error"] = "%s: %s" % (mid, e)
+            out["changes"] += ["%s: %s" % (mid, n) for n in notes]
+            return out
+        out["changes"] += ["%s: %s" % (mid, n) for n in notes] or ["%s: nothing to change" % mid]
+        out["applied"].append(mid)
+        done = done + [mid]
+        if not dry_run:
+            cfg["chitragupta_migrations"] = done
+            common.write_json(cpath, cfg)
     return out
+
+
+def all_ids():
+    return MIGRATIONS + tuple(s[0] for s in KB_STEPS)
 
 
 def run_in_tick():
     """Pending migrations from inside the tick (which holds the agent lock). None when there is nothing to do."""
     cfg = common.read_json(common.wl("config.json"), None)
-    if not isinstance(cfg, dict) or all(m in (cfg.get("chitragupta_migrations") or []) for m in MIGRATIONS):
+    if not isinstance(cfg, dict) or all(m in (cfg.get("chitragupta_migrations") or []) for m in all_ids()):
         return None
     res = _run(False)
     common.log("agent", "migrations: %s" % json.dumps({k: res.get(k) for k in ("applied", "backup", "error")}))
