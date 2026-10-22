@@ -9,6 +9,7 @@ import copy
 import datetime as _dt
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -129,6 +130,53 @@ def raw_files():
             if fn.endswith(".jsonl"):
                 out.append((d, fn[:-6], os.path.join(dp, fn)))
     return out
+
+
+def raw_key(day, sid):
+    """The state key of a raw file (state.sessions.<sid>.files): "<day>/<sid>.jsonl", relative to .worklog/raw, so a
+    copied or moved data home keeps its read and extracted offsets."""
+    return "%s/%s.jsonl" % (day, sid)
+
+
+def raw_path(key):
+    return common.wl("raw", *key.split("/"))
+
+
+def raw_day(key):
+    return key.split("/")[0]
+
+
+_ABS_RAW_KEY = re.compile(r"(?:^|[\\/])\.worklog[\\/]raw[\\/](\d{4}-\d{2}-\d{2})[\\/]([^\\/]+\.jsonl)$", re.I)
+
+
+def migrate_raw_keys(dry_run, notes, backup):
+    """Migration "raw-relative-keys": state.sessions.*.files keys written as absolute raw paths (any root, either
+    separator) become "<day>/<sid>.jsonl"; two keys for the same file merge by their larger offsets."""
+    spath = common.wl("state.json")
+    st = common.read_json(spath, {})
+    n = 0
+    for s in (st.get("sessions") or {}).values() if isinstance(st, dict) else []:
+        files = s.get("files") if isinstance(s, dict) else None
+        if not isinstance(files, dict):
+            continue
+        new = {}
+        for k, f in files.items():
+            m = _ABS_RAW_KEY.search(k)
+            nk = "%s/%s" % (m.group(1), m.group(2)) if m else k
+            n += nk != k
+            if nk in new and isinstance(f, dict):
+                merged = dict(new[nk], **{x: max(int(new[nk].get(x) or 0), int(f.get(x) or 0)) for x in ("read", "extracted")})
+                new[nk] = merged
+            else:
+                new[nk] = f
+        s["files"] = new
+    if not n:
+        notes.append("state keys already relative")
+        return
+    backup([spath])
+    notes.append("%d raw file key(s) made relative to .worklog/raw" % n)
+    if not dry_run:
+        common.write_json(spath, st)
 
 
 def time_only_sids():
@@ -338,7 +386,7 @@ class Agent:
         recent = self.state.setdefault("recent_tickets", [])
         for day, sid, path in raw_files():
             s = sessions.setdefault(sid, {"files": {}, "pending_chars": 0, "first": None, "days": []})
-            f = s["files"].setdefault(path, {"read": 0, "extracted": 0})
+            f = s["files"].setdefault(raw_key(day, sid), {"read": 0, "extracted": 0})
             try:
                 size = os.path.getsize(path)
             except OSError:
@@ -563,10 +611,10 @@ class Agent:
 
     def extract_session(self, sid, s):
         by_day = {}
-        for path, f in sorted(s["files"].items()):
+        for key, f in sorted(s["files"].items()):
             if f["read"] > f["extracted"]:
-                evs, _ = self._read_turns(path, f["extracted"], f["read"], keep_time=False)
-                day = os.path.basename(os.path.dirname(path))
+                evs, _ = self._read_turns(raw_path(key), f["extracted"], f["read"], keep_time=False)
+                day = raw_day(key)
                 by_day.setdefault(day, []).extend(evs)
         if not by_day:
             s["pending_chars"] = 0
@@ -611,7 +659,7 @@ class Agent:
                 self._extraction_failed(sid, s, day, evs, ctx, "unexpected: %r" % e, False)
                 common.log("agent", traceback.format_exc())
                 return False
-        for path, f in s["files"].items():
+        for f in s["files"].values():
             f["extracted"] = f["read"]
         s["pending_chars"] = 0
         s["last_extract"] = common.now_iso()
@@ -662,11 +710,11 @@ class Agent:
         for sid, s in self.state.get("sessions", {}).items():
             if s.get("pending_chars", 0) <= 0 or s.get("fail"):
                 continue
-            for path, f in s["files"].items():
+            for key, f in s["files"].items():
                 if f["read"] <= f["extracted"]:
                     continue
-                day = os.path.basename(os.path.dirname(path))
-                evs, _ = self._read_turns(path, f["extracted"], f["read"], keep_time=False)
+                day = raw_day(key)
+                evs, _ = self._read_turns(raw_path(key), f["extracted"], f["read"], keep_time=False)
                 if not evs:
                     continue
                 cands = []
@@ -1026,7 +1074,7 @@ class Agent:
             if day >= cutoff or not lp:
                 continue
             s = sessions.get(sid) or {}
-            f = (s.get("files") or {}).get(path)
+            f = (s.get("files") or {}).get(raw_key(day, sid))
             try:
                 size = os.path.getsize(path)
                 mtime = os.path.getmtime(path)
@@ -1034,7 +1082,7 @@ class Agent:
                 continue
             if f and f.get("extracted", 0) >= size and f.get("read", 0) >= size and lp.timestamp() > mtime:
                 paths.delete(path)
-                s["files"].pop(path, None)
+                s["files"].pop(raw_key(day, sid), None)
         root = common.wl("raw")
         for d in os.listdir(root) if os.path.isdir(root) else []:
             tdir = os.path.join(root, d, "time")  # time-only events of worklog-folder sessions

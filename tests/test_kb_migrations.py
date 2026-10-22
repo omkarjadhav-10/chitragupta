@@ -99,5 +99,58 @@ class StepTests(Isolated, unittest.TestCase):
         self.assertNotIn("kb-test-ok", done)
 
 
+class RawRelativeKeysTests(Isolated, unittest.TestCase):
+    """O4: state.sessions.*.files keyed "<day>/<sid>.jsonl", so a copied or moved home never re-extracts its raw."""
+    D = "2026-10-14"
+
+    def setUp(self):
+        self.isolate()
+        import json
+        from unittest import mock
+        from chitragupta import common, extract, migrate
+        common.write_json(common.wl("config.json"), {"ticket_prefixes": ["ABC"],
+                                                     "chitragupta_migrations": list(migrate.MIGRATIONS)})
+        self.calls = []
+        p = mock.patch.object(extract, "call_claude", lambda *a, **k: self.calls.append(a[0]) or ({}, 0.0))
+        p.start()
+        self.addCleanup(p.stop)
+        self.raw = common.wl("raw", self.D, "s1.jsonl")
+        os.makedirs(os.path.dirname(self.raw))
+        with open(self.raw, "w", encoding="utf-8") as f:
+            for i, (ev, pl) in enumerate((("user-prompt", {"prompt": "look at ABC-1001 " + "x" * 2000}),
+                                          ("stop", {"message": "y" * 2000}))):
+                f.write(json.dumps({"ts": "%sT10:0%d:00+05:30" % (self.D, i), "event": ev, "session_id": "s1",
+                                    "branch": "fix/ABC-1001-x", "payload": pl}) + "\n")
+        self.size = os.path.getsize(self.raw)
+
+    def test_copied_home_finds_nothing_new(self):
+        from chitragupta import agent, common, migrate
+        done = {"read": self.size, "extracted": self.size}
+        common.write_json(common.wl("state.json"), {"sessions": {"s1": {
+            "files": {"C:\\Users\\someone\\OldHome\\.worklog\\raw\\%s\\s1.jsonl" % self.D: done,
+                      "/mnt/backup/home/.worklog/raw/%s/s1.jsonl" % self.D: {"read": 10, "extracted": 5}},
+            "pending_chars": 0, "days": [self.D], "source": "hook"}}})
+        res = migrate.run(wait_s=0)
+        self.assertIn("raw-relative-keys", res.get("applied") or [], res)
+        with open(os.path.join(res["backups"][-1], ".worklog", "state.json"), encoding="utf-8") as f:
+            self.assertIn("OldHome", f.read())  # the old state was backed up first
+        files = common.read_json(common.wl("state.json"))["sessions"]["s1"]["files"]
+        self.assertEqual(files, {"%s/s1.jsonl" % self.D: done})  # duplicates merged by the larger offsets
+        a = agent.Agent()
+        a.ingest()
+        a.run_extractions(any_size=True)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(a.state["sessions"]["s1"]["pending_chars"], 0)
+        self.assertEqual(list(a.state["sessions"]["s1"]["files"]), ["%s/s1.jsonl" % self.D])
+
+    def test_new_state_uses_relative_keys(self):
+        from chitragupta import agent
+        a = agent.Agent()
+        a.ingest()
+        a.run_extractions(any_size=True)
+        self.assertEqual(self.calls, ["extract"])
+        self.assertEqual(list(a.state["sessions"]["s1"]["files"]), ["%s/s1.jsonl" % self.D])
+
+
 if __name__ == "__main__":
     unittest.main()

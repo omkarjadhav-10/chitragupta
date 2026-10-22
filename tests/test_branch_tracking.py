@@ -550,7 +550,7 @@ class Migration(TrackingCase):
         self.assertTrue(any(e["kind"] == "create" and e.get("branch") == "feature/ABC-1001-x" for e in evs))
         newcfg = common.read_json(common.wl("config.json"))
         self.assertEqual(newcfg["branching"]["guard_mode"], "warn")
-        self.assertEqual(newcfg["chitragupta_migrations"], ["database-mcp-rename", "branch-tracking", "inbox-counts"])
+        self.assertEqual(newcfg["chitragupta_migrations"], list(migrate.all_ids()))
         self.assertEqual(common.read_json(common.hp("data", "meta.json"))["schema_version"], 4)
         self.assertEqual(common.read_json(common.hp("data", "branches.json")), legacy)  # the old file is left as it was
         self.assertTrue(migrate.run(wait_s=0)["already"])

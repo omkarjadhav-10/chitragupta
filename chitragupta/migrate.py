@@ -280,7 +280,7 @@ def _run(dry_run):
 # (id, "module:function"); the function is called as fn(dry_run, notes, backup) and must call backup(paths) with every
 # file or folder it will change before it writes anything (backup is a no-op in a dry run). It returns nothing; it
 # raises to stop the run, and then neither it nor any later step is marked done. Forward-only: nothing is ever undone.
-KB_STEPS = []
+KB_STEPS = [("raw-relative-keys", "agent:migrate_raw_keys")]
 
 
 def _run_steps(steps, cfg, cpath, done, out, dry_run):

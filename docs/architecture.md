@@ -118,6 +118,8 @@ Run any engine module through the launcher with `py -3 "%USERPROFILE%\.chitragup
 
 The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stable, and changes come only with a forward migration that backs up first.
 
+`state.json` keeps each raw file's read and extracted offsets under `sessions.<id>.files`, keyed `<day>/<session>.jsonl` relative to `.worklog\raw`, so a copied or moved data home picks up where it was and never re-extracts. The `raw-relative-keys` migration (0.5.0) rewrites the absolute keys of older versions after backing up `state.json`.
+
 ```
 <home>\
   README.md  .gitignore  .gitattributes      pushed (with daily/)
