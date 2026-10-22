@@ -267,5 +267,78 @@ class ArtifactScopeTests(ScopeCase):
         srcs = [r.get("source") for r in (a.store.ticket("DEMO-1").get("artifacts") or {}).values()]
         self.assertEqual([common.norm_path(s) for s in srcs], [common.norm_path(good)])
 
+
+# --------------------------------------------------------------------------- O1 the home folder itself: time only
+
+class HomeFolderTests(ScopeCase):
+    def setUp(self):
+        super().setUp()
+        self.me = os.path.join(self.work, "me")  # stands in for the user's home folder
+        os.makedirs(self.me)
+        saved = {k: os.environ.get(k) for k in ("USERPROFILE", "HOME")}
+        os.environ["USERPROFILE"] = os.environ["HOME"] = self.me
+
+        def back():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(back)
+
+    def test_capture_mode_home_is_time(self):
+        from chitragupta import common
+        cfg = common.load_config()
+        self.assertEqual(common.capture_mode(self.me, cfg), "time")
+        self.assertEqual(common.capture_mode(self.me + os.sep, cfg), "time")
+        if os.name == "nt":
+            self.assertEqual(common.capture_mode(self.me.upper(), cfg), "time")
+        self.assertEqual(common.capture_mode(_repo(self.me, "shop-api"), cfg), "full")  # repos under home stay full
+        notes = os.path.join(self.me, "notes")
+        os.makedirs(notes)
+        self.assertEqual(common.capture_mode(notes, cfg), "full")  # only the exact home folder
+        _touch(os.path.join(self.me, ".worklog-ignore"))
+        self.assertIsNone(common.capture_mode(self.me, cfg))  # the ignore marker still wins
+
+    def test_hook_in_home_writes_time_row_only(self):
+        env = self.child_env(USERPROFILE=self.me, HOME=self.me)
+        run_hook("user-prompt", {"session_id": "h1", "cwd": self.me, "user_prompt": "PRIVATE_TEXT about DEMO-3"}, env)
+        run_hook("post-tool", {"session_id": "h1", "cwd": self.me, "tool_name": "Bash",
+                               "tool_input": {"command": "echo PRIVATE_CMD"}, "tool_response": {}}, env)
+        files = [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(self.home, ".worklog", "raw")) for f in fs]
+        self.assertEqual([os.path.basename(os.path.dirname(f)) for f in files], ["time"])
+        rows = [json.loads(l) for l in rd(files[0]).splitlines()]
+        self.assertEqual([(r["event"], r["ticket"], r.get("where")) for r in rows],
+                         [("user-prompt", "DEMO-3", "home"), ("post-tool", None, "home")])
+        self.assertNotIn("PRIVATE", rd(files[0]))
+
+    def test_untagged_home_time_counts_as_unassigned(self):
+        import datetime as dt
+        from chitragupta import agent, common
+        a = agent.Agent()
+        day = common.workday(common.now(), a.cfg)
+        six = common.day_bounds(day, a.cfg)[0] + dt.timedelta(hours=6)
+        tdir = os.path.join(self.home, ".worklog", "raw", day, "time")
+        os.makedirs(tdir)
+
+        def rows(sid, where, minute0):
+            out = []
+            for i, ev in enumerate(("user-prompt", "post-tool", "stop")):
+                r = {"ts": (six + dt.timedelta(minutes=minute0 + 2 * i)).isoformat(), "event": ev, "session_id": sid,
+                     "source": "time-only", "ticket": None}
+                if where:
+                    r["where"] = where
+                out.append(json.dumps(r))
+            return "\n".join(out) + "\n"
+        with open(os.path.join(tdir, "home1.jsonl"), "w", encoding="utf-8") as f:
+            f.write(rows("home1", "home", 0))
+        with open(os.path.join(tdir, "data1.jsonl"), "w", encoding="utf-8") as f:
+            f.write(rows("data1", None, 60))  # a data-home session without a ticket: still not work
+        bl = a.jwl.blocks(day)
+        self.assertTrue(bl)
+        self.assertEqual({b["ticket"] for b in bl}, {None})
+        self.assertTrue(all(b["start"] < six + dt.timedelta(minutes=30) for b in bl), bl)
+
+
 if __name__ == "__main__":
     unittest.main()

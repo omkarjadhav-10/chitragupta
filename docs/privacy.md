@@ -21,12 +21,13 @@ The hooks never call a model and never touch the network. Only two hooks are wai
 ### What is not captured
 
 - **Sessions inside the data home**, such as asking Claude about your own worklog. Only a timestamp and the ticket you mention are recorded, so that the time counts, never the content.
+- **Sessions in your home folder itself** (not a repo or folder below it). They are time-only too: a timestamp and the ticket you mention. Their time counts toward the day; without a ticket it is the day's unassigned time.
 - **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, the background transcript scan skips it too, and no file in it is filed as a ticket artifact, even when a session elsewhere edits it.
 - **Anything while capture is paused**, from `/cg:pause` until `/cg:pause resume`.
 - **Folders outside `capture_scope.include_paths`, or inside `capture_scope.exclude_paths`.**
 - **The engine's own `claude -p` and git processes.** They carry `CHITRAGUPTA_INTERNAL=1`, and the hooks ignore them.
 
-A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder; a session in your home folder itself is skipped.
+A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home or in your home folder itself. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder.
 
 ## What stays local
 

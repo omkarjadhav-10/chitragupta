@@ -90,8 +90,9 @@ def _key_input(tool, ti, common, redact, repo_root=None):
     return {}
 
 
-def _time_only(event, inp, cfg, common):
-    """Sessions inside the worklog folder: time only (timestamp + ticket mentioned), never content."""
+def _time_only(event, inp, cfg, common, cwd=None):
+    """Sessions inside the worklog folder or in the home folder itself: time only (timestamp + ticket mentioned),
+    never content. Home-folder rows carry where="home": their untagged time still counts toward the day."""
     if event not in ("user-prompt", "post-tool", "stop"):
         return
     ticket = None
@@ -100,6 +101,8 @@ def _time_only(event, inp, cfg, common):
         ticket = found[0] if found else None
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
     ev = {"ts": common.now_iso(), "event": event, "session_id": sid, "source": "time-only", "ticket": ticket}
+    if common.is_home_folder(cwd):
+        ev["where"] = "home"
     common.append_line(common.wl("raw", common.workday(common.now(), cfg), "time", sid + ".jsonl"), json.dumps(ev))
 
 
@@ -230,7 +233,7 @@ def _capture(event, common):
     cfg = common.load_config()
     mode = common.capture_mode(cwd, cfg)  # the same rules the transcript safety net applies
     if mode == "time":
-        _time_only(event, inp, cfg, common)
+        _time_only(event, inp, cfg, common, cwd)
         return
     if mode != "full":
         return

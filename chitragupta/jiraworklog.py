@@ -227,7 +227,7 @@ class JiraWorklog:
                 pts.append({"ts": ts, "ticket": t, "dur": dur})
         for ev in self.a.day_events(day):
             add(common.parse_ts(ev.get("ts")), ev.get("_t"))
-        # sessions inside the worklog folder: time-only events, ticket via the session's last mentioned ticket
+        # time-only sessions (the worklog folder, the home folder itself): ticket via the session's last mentioned one
         tdir = common.wl("raw", day, "time")
         sticky = {}
         for fn in sorted(os.listdir(tdir)) if os.path.isdir(tdir) else []:
@@ -241,8 +241,11 @@ class JiraWorklog:
                 if r.get("ticket") and not common.is_placeholder(r["ticket"]):
                     sticky[r.get("session_id")] = r["ticket"]
                 t = sticky.get(r.get("session_id"))
-                if t:  # worklog-system sessions without a ticket are not ticket work
+                if t:
                     add(common.parse_ts(r.get("ts")), t)
+                elif r.get("where") == "home":  # home-folder time without a ticket: unassigned time of the day
+                    add(common.parse_ts(r.get("ts")), None)
+                # worklog-system sessions without a ticket are not work
         dd = self.store.day(day)
         for c in dd.get("commits") or []:
             if c.get("ticket"):

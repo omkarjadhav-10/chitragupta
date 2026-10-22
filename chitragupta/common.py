@@ -509,16 +509,30 @@ def repo_ignored(repo_root):
     return bool(repo_root) and path_ignored(repo_root)
 
 
+def is_home_folder(path):
+    """True for the user's home folder itself (not a folder below it); case-insensitive on Windows."""
+    if not path:
+        return False
+    try:
+        a = os.path.normcase(os.path.abspath(path)).rstrip("\\/")
+    except (TypeError, ValueError):
+        return False
+    return a == os.path.normcase(os.path.abspath(os.path.expanduser("~"))).rstrip("\\/")
+
+
 def capture_mode(cwd, cfg):
     """What capture does for a session in `cwd`, one rule set for the hooks and the transcript safety net:
-    "time" inside the data home (timestamp + ticket mentioned, never content), None when not captured (outside the
-    capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings folder), else "full"."""
+    "time" inside the data home and in the home folder itself (timestamp + ticket mentioned, never content), None
+    when not captured (outside the capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings
+    folder), else "full". Folders below the home folder (repos, notes) stay "full"."""
     if not cwd:
         return None
     if path_within(cwd, home()):
         return "time"
     if not scope_allows(cwd, cfg) or path_within(cwd, user_dir()) or path_ignored(cwd):
         return None
+    if is_home_folder(cwd):
+        return "time"
     return "full"
 
 

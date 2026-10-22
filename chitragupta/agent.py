@@ -256,6 +256,8 @@ class Agent:
                         if e["event"] == "user-prompt" else []
                     row = {"ts": ts.isoformat(timespec="seconds"), "event": e["event"], "session_id": sid,
                            "source": "time-only", "ticket": found[0] if found else None}
+                    if common.is_home_folder(ecwd):
+                        row["where"] = "home"
                     common.append_line(common.wl("raw", day, "time", sid + ".jsonl"), json.dumps(row))
                     timed += 1
                     continue
@@ -297,7 +299,7 @@ class Agent:
         repo_root = common.find_repo_root(cwd)
         inc = (self.cfg.get("capture_scope") or {}).get("include_paths") or []
         if not repo_root and not any(common.path_within(cwd, p) for p in inc):
-            return None, None  # e.g. the home folder itself: not a work location
+            return None, None  # a plain folder, not a repo: who started the session is unknown
         return "full", repo_root
 
     # ------------------------------------------------------------------ ingest
