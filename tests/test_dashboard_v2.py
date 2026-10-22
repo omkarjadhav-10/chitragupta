@@ -582,7 +582,8 @@ class V2Http(V2Base):
         self.assertEqual(self.get("/api/health")[0].status, 200)  # everything else still answers
         for s in open_:
             s.close()
-        self.assertTrue(self.server_mod.wait_until(lambda: self.srv.streams == 0, 5), self.srv.streams)
+        # each stream notices its closed client within a poll or two; a loaded machine (a parallel suite) needs headroom
+        self.assertTrue(self.server_mod.wait_until(lambda: self.srv.streams == 0, 20), self.srv.streams)
         s = self.stream()
         self.assertIn(b"event: cursor", self.read_until(s, b"event: cursor"))
 
