@@ -90,16 +90,19 @@ def _key_input(tool, ti, common, redact, repo_root=None):
     return {}
 
 
-def _time_only(event, inp, cfg, common):
-    """Sessions inside the worklog folder: time only (timestamp + ticket mentioned), never content."""
+def _time_only(event, inp, cfg, common, cwd=None):
+    """Sessions inside the worklog folder or in the home folder itself: time only (timestamp + ticket mentioned),
+    never content. Home-folder rows carry where="home": their untagged time still counts toward the day."""
     if event not in ("user-prompt", "post-tool", "stop"):
         return
     ticket = None
     if event == "user-prompt":
-        found = common.find_tickets(str(inp.get("user_prompt") or inp.get("prompt") or ""), cfg.get("ticket_prefixes") or [])
-        ticket = found[0] if found else None
+        ticket = common.prompt_ticket(str(inp.get("user_prompt") or inp.get("prompt") or ""), cfg.get("ticket_prefixes") or [],
+                                      cfg)[0]
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
     ev = {"ts": common.now_iso(), "event": event, "session_id": sid, "source": "time-only", "ticket": ticket}
+    if common.is_home_folder(cwd):
+        ev["where"] = "home"
     common.append_line(common.wl("raw", common.workday(common.now(), cfg), "time", sid + ".jsonl"), json.dumps(ev))
 
 
@@ -230,7 +233,7 @@ def _capture(event, common):
     cfg = common.load_config()
     mode = common.capture_mode(cwd, cfg)  # the same rules the transcript safety net applies
     if mode == "time":
-        _time_only(event, inp, cfg, common)
+        _time_only(event, inp, cfg, common, cwd)
         return
     if mode != "full":
         return
@@ -240,7 +243,7 @@ def _capture(event, common):
     sid = str(inp.get("session_id") or "unknown").replace("/", "_").replace("\\", "_")
     branch = common.read_branch(repo_root)
     prefixes = cfg.get("ticket_prefixes") or []
-    ticket = common.ticket_from_branch(branch, prefixes)
+    pt = ps = None  # the prompt's ticket; the hook keeps no turn memory (the engine recomputes each turn)
 
     payload = {}
     if event == "session-start":
@@ -249,9 +252,7 @@ def _capture(event, common):
     elif event == "user-prompt":
         prompt = inp.get("user_prompt") or inp.get("prompt") or ""
         payload = {"prompt": redact(common.truncate(str(prompt), LIMITS["prompt"]))}
-        if not ticket:
-            found = common.find_tickets(str(prompt), prefixes)
-            ticket = found[0] if found else None
+        pt, ps = common.prompt_ticket(str(prompt), prefixes, cfg)
     elif event == "post-tool":
         tool = str(inp.get("tool_name") or "")
         env = _qa_env(tool, inp.get("tool_input"), cfg, common)
@@ -285,11 +286,12 @@ def _capture(event, common):
     elif event == "session-end":
         payload = {"reason": inp.get("reason")}
 
+    ticket, src = common.ticket_for_turn(cfg, pt, ps, branch, repo_root)
     ts = common.now_iso()
     ev = {
         "ts": ts, "event": event, "session_id": sid, "source": "hook",
         "transcript_path": inp.get("transcript_path"), "cwd": cwd, "repo_root": repo_root,
-        "branch": branch, "ticket": ticket, "agent_type": inp.get("agent_type"),
+        "branch": branch, "ticket": ticket, "ticket_src": src, "agent_type": inp.get("agent_type"),
         "payload": payload,
     }
     day = common.workday(common.now(), cfg)

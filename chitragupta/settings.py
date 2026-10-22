@@ -20,6 +20,7 @@ MODELS = ["haiku", "sonnet", "opus"]
 MODEL_ID = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{1,60}$")  # an explicit model id pins the version
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PREFIX = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 -]{0,39}$")
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9*][A-Za-z0-9._/*-]{0,99}$")  # a branch name or an fnmatch pattern
 
 
@@ -34,7 +35,7 @@ def _defaults():
 
 
 # --------------------------------------------------------------------------- schema
-# type: bool | int | number | time | choice | days | prefixes | paths | envs_narrow | bases | relations | text
+# type: bool | int | number | time | choice | days | prefixes | names | paths | envs_narrow | bases | relations | text
 def _i(key, label, help_, type_, group, **kw):
     return dict(key=key, label=label, help=help_, type=type_, group=group, editable=kw.pop("editable", True), **kw)
 
@@ -65,8 +66,15 @@ STATIC = [
        min="11:00", max="16:00"),
     _i("jira_worklog.hours_per_day", "Hours per day", "A full day's target; half days are half of it.", "number", "worklog",
        min=1, max=12),
+    _i("jira_worklog.turn_tail_minutes", "Time after a turn (minutes)", "Counted after the last event of each turn, for "
+       "reading the answer.", "int", "worklog", min=0, max=30, default_value=5),
+    _i("jira_worklog.idle_minutes", "Idle after (minutes)", "A longer gap inside a turn is not counted.", "int",
+       "worklog", min=5, max=60, default_value=15),
     _i("mcp.jira.enabled", "Use the Jira MCP", "Ticket cards and the evening facts the worklog subtracts.", "bool", "jira",
        affects="Background Jira reads (within the daily budget)"),
+    _i("jira.parent_issue_types", "Parent issue types", "Jira issue types that only group work (one per line). They "
+       "never get time or findings; the child ticket named with them, or the branch's ticket, does.", "names", "jira",
+       affects="Which ticket a prompt's time and findings go to"),
     _i("mcp.jira.cards", "Ticket cards", "Read each day's tickets from Jira (title, status, summary) for the ticket "
        "pages.", "bool", "jira", default_value=True),
     _i("mcp.jira.evening", "Evening facts", "Before the 8 PM message, read what's already logged in Jira that day so it "
@@ -230,6 +238,10 @@ def check(it, value, current):
     if t == "prefixes":
         if not isinstance(value, list) or any(not isinstance(p, str) or not PREFIX.match(p) for p in value):
             return "Use uppercase project keys of 2 to 10 letters or digits, starting with a letter."
+        return None
+    if t == "names":
+        if not isinstance(value, list) or len(value) > 20 or any(not isinstance(n, str) or not NAME.match(n) for n in value):
+            return "Use one name per line: letters, digits, spaces or -, at most 40 characters."
         return None
     if t == "paths":
         if not isinstance(value, list) or any(not isinstance(p, str) or not p.strip() for p in value):
