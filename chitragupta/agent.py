@@ -907,6 +907,8 @@ class Agent:
         warnings = []
         if h.get("privacy") == "public":
             warnings.append("Worklog recorder status: the GitHub repo is public, so pushes are blocked (commits continue locally).")
+        if gitsync.privacy_warning(h):
+            warnings.append("Worklog recorder status: " + gitsync.privacy_warning(h) + ".")
         pf = common.parse_ts(h.get("push_failing_since"))
         if pf and (common.now() - pf).total_seconds() > 6 * 3600:
             warnings.append("Worklog recorder status: pushes to GitHub have failed since %s." % pf.strftime("%Y-%m-%d %H:%M"))

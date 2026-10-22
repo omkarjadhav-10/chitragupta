@@ -110,17 +110,32 @@ def privacy_status(cfg):
 
 
 def check_privacy(cfg, health, force=False):
+    """The latest result is always stored ("unknown" too, so it blocks the push); the last definite one is kept in
+    privacy_last_known / privacy_last_known_at for the warning. Re-checked every 24 h, and every tick while not
+    private."""
     last = common.parse_ts(health.get("privacy_checked"))
     due = force or not last or (common.now() - last).total_seconds() > 24 * 3600 or health.get("privacy") != "private"
     if not due:
         return health.get("privacy")
     st = privacy_status(cfg)
-    if st != "unknown" or not health.get("privacy"):
-        health["privacy"] = st
+    health["privacy"] = st
     health["privacy_checked"] = common.now_iso()
+    if st != "unknown":
+        health["privacy_last_known"], health["privacy_last_known_at"] = st, health["privacy_checked"]
     if st == "public":
         common.log("agent", "PRIVACY: repo is public - pushes blocked")
-    return health.get("privacy")
+    elif st == "unknown":
+        common.log("agent", "PRIVACY: repo privacy unknown - pushes paused")
+    return st
+
+
+def privacy_warning(health):
+    """'repo privacy unknown — pushes paused (last known: private, <date>)' while the check can't tell, else ''."""
+    if (health or {}).get("privacy") != "unknown":
+        return ""
+    at = common.parse_ts(health.get("privacy_last_known_at"))
+    known = "last known: %s, %s" % (health.get("privacy_last_known"), at.strftime("%Y-%m-%d %H:%M"))         if health.get("privacy_last_known") and at else "no earlier result"
+    return "repo privacy unknown — pushes paused (%s); commits continue locally" % known
 
 
 # --------------------------------------------------------------------------- commit / push

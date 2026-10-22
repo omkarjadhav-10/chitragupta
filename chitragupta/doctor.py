@@ -116,6 +116,9 @@ def push_row(cfg, health):
         return _row("last push", True, "no GitHub remote configured (local only)")
     if health.get("privacy") == "public":
         return _row("last push", False, "the GitHub repo is public, so pushes are blocked")
+    if health.get("privacy") == "unknown":
+        from . import gitsync
+        return _row("last push", False, gitsync.privacy_warning(health))
     pf = health.get("push_failing_since")
     if pf:
         return _row("last push", False, "pushes failing since %s" % pf)

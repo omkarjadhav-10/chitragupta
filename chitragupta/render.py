@@ -495,6 +495,10 @@ def health_footer(dd, health):
     line = "Recorder health: " + " · ".join(bits)
     if health.get("privacy") == "public":
         line += "  \n**⚠ Pushing is blocked: the GitHub repo is PUBLIC. Make it private; commits continue locally.**"
+    from . import gitsync
+    pw = gitsync.privacy_warning(health)
+    if pw and not any(pw in w for w in health.get("warnings") or []):
+        line += "  \n⚠ " + pw
     for w in health.get("warnings") or []:
         line += "  \n⚠ " + w
     return line

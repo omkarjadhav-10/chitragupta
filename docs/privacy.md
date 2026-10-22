@@ -49,7 +49,7 @@ Nothing is pushed unless `github_remote` is set. If it is set:
 - **Only to a private repository.** Before pushing, and again every 24 hours, Chitragupta sends one unauthenticated request to the GitHub API (`api.github.com/repos/<owner>/<repo>`):
   - **404** (not visible to the public) counts as private, and the push goes ahead.
   - **200** (public) blocks every push.
-  - Any other result is treated as unknown, which also blocks pushes.
+  - Any other result (a network error, a rate limit, a GitHub outage, a non-GitHub remote) is treated as unknown, which also blocks pushes, even when an earlier check said private. Health, `/cg:doctor` and the daily file's footer then say "repo privacy unknown — pushes paused (last known: private, <date>)"; commits continue locally, and the check repeats on every tick until it gets an answer. `health.json` keeps the latest result in `privacy` and the last definite one in `privacy_last_known` / `privacy_last_known_at`.
 
   A local folder or `file://` remote counts as private.
 - **Only to the configured remote.** If `origin` doesn't match `github_remote`, the push is refused. Pushes fetch and integrate the remote first, and never force.
