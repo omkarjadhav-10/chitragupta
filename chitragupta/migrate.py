@@ -180,6 +180,37 @@ def _backup(paths):
     return dest
 
 
+def _backup_tree(paths, label):
+    """Copy files and whole folders under the data home to .worklog/backups/chitragupta-<label>-<timestamp>/, keeping
+    each one's path relative to the home (so data/tickets/A.json and data/days/A.json never collide). Missing paths
+    are skipped; a path outside the home keeps only its name. Returns the backup folder."""
+    dest = common.wl("backups", "chitragupta-%s-%s" % (label, time.strftime("%Y%m%d-%H%M%S")))
+    n, base = 2, dest
+    while os.path.exists(dest):
+        dest, n = "%s-%d" % (base, n), n + 1
+    sp.makedirs(dest)
+    home = os.path.abspath(common.home())
+    root = os.path.normcase(home)
+
+    def rel(p):
+        a = os.path.abspath(p)
+        return os.path.relpath(a, home) if os.path.normcase(a).startswith(root + os.sep) else os.path.basename(a)
+
+    def one(src):
+        target = os.path.join(dest, rel(src))
+        sp.makedirs(os.path.dirname(target))
+        sp.copy(src, target)
+
+    for p in paths:
+        if os.path.isfile(p):
+            one(p)
+        elif os.path.isdir(p):
+            for d, _, files in os.walk(p):
+                for f in files:
+                    one(os.path.join(d, f))
+    return dest
+
+
 def run(dry_run=False, wait_s=None):
     if dry_run:
         return _run(True)
