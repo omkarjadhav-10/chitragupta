@@ -68,12 +68,14 @@ These references are never masked: `{{var}}`, `${VAR}`, `$VAR`, `$(…)`. You ca
 
 **Saved requests.** Credentials in saved requests become `{{process.env.NAME}}` references. The values go in `bruno\.env`, which is never read into the worklog and never committed. Personal values in request bodies become ticket-scoped variables with synthetic defaults.
 
+**Replay safety.** Chitragupta writes the replay files; it never runs them. A step that changes data (a `POST`, `PUT`, `PATCH` or `DELETE` that isn't a login or token call) is marked "⚠ changes a shared record" in `requests.md`, with a warning block naming the records. `replay.sh` stops before the first such step on any environment but `local` unless you pass `--yes` (or set `REPLAY_YES=1`), and exits 3 without having changed anything. A restore step (`NN Restore <name>.bru`, engine-owned) is added only when a `GET` of the same record with a captured QA response body came before the change in the same session; it sends back just the fields the change sends, templated like any generated request (personal fields come from `bruno\.env`). Otherwise `requests.md` says "no restore: before-state unknown". A step your `folder.bru` repeats ("1. Login again") gets an engine-owned `NN <name> (again).bru`, so `bru run` and `replay.sh` run the same steps. `payloads\` hold exactly the body of each `.bru`. Hard-coded strings in a changing step's body at name-, code-, email- or institution-like keys are listed in `requests.md` as a warning (keys only, never values); your own `.bru` files are never edited.
+
 ## QA data rules
 
 - An environment is QA only when it's listed in `qa_data.allowed_envs` (default `["qa"]`). A host's environment comes from your Bruno environment files and `qa_data.hosts`. **An unknown host counts as production.**
 - Values from allowed environments are kept literally, in local files only. Credentials are still turned into references.
 - Production values are masked at capture.
-- A QA response body is kept only up to 50 KB, as the expected result for replay.
+- A QA response body is kept only up to 50 KB, as the expected result for replay and, for a `GET` before a change, the before-state a restore step sends back.
 - Database samples are capped at `qa_data.max_rows_per_query` rows (default 20).
 - Database MCP jobs read only connections listed for an allowed environment, and never a connection whose name contains `prod`.
 - QA values never go into anything pushed or sent: the `public` pass masks known QA values and hosts.

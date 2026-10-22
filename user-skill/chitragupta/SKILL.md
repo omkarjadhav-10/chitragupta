@@ -66,6 +66,8 @@ available.
 6. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
 7. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
    `bruno/<TICKET>`). Don't run replay.sh yourself: it sends real requests that can change data, so the user runs it.
+   Steps marked "changes a shared record" in requests.md need `--yes` on any env but local (say which records change
+   and whether a restore step exists before suggesting it).
    If it stops on a missing variable, the name to fill is in `bruno/.env.example`; the user fills `bruno/.env`
    themselves — never write secrets anywhere.
 

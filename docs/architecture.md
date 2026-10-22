@@ -70,7 +70,7 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 3. **Extracts.** Once a session has enough new text and is idle, ended or 20 minutes old, it makes one `claude -p` call per chunk. Each call gets a redacted digest and returns structured JSON: findings, queries, APIs, tables, request calls, DB-flow steps and worklog lines. If the call fails, it backs off and writes a deterministic fallback summary.
 4. **Merges** the results into `data/` with stable hash ids, so re-running never duplicates anything.
 5. **Renders** the changed Markdown. Your `My notes` sections survive every re-render.
-6. **Runs per-ticket features.** It curates the replayable request set (Bruno files, `requests.md`, `replay.sh`) and builds the DB-flow view and artifacts.
+6. **Runs per-ticket features.** It curates the replayable request set (Bruno files, `requests.md`, `replay.sh`; steps that change a shared record are flagged and gated behind `--yes`, see [privacy.md](privacy.md#redaction)) and builds the DB-flow view and artifacts.
 7. **Closes days** after `day_starts_at`. Closing consolidates the summary, the standup and the TODOs.
 8. **Composes the evening Jira worklog** at `jira_worklog.send_at`, and sends it on Slack if connected.
 9. **Runs MCP jobs**, within the daily budget, if configured.
