@@ -20,6 +20,7 @@ DEFAULT_BRIEF_CAP = 8
 KEEP_DAYS = 30
 
 _PENDING = []  # [(day, purpose, in, out, usd)] noted by call_claude, not yet in a health dict
+_LAST = {}  # purpose -> (in, out, usd) of its most recent call, for the record of what that call made (a brief)
 
 
 def usage_tokens(data):
@@ -35,6 +36,12 @@ def note(purpose, tokens_in, tokens_out, usd, cfg):
     """One finished model call, held until the agent's health is at hand (drain)."""
     _PENDING.append((common.workday(common.now(), cfg), purpose, int(tokens_in or 0), int(tokens_out or 0),
                      float(usd or 0)))
+    _LAST[purpose] = (int(tokens_in or 0), int(tokens_out or 0), float(usd or 0))
+
+
+def last_call(purpose):
+    """(tokens in, tokens out, usd) of the most recent call for `purpose` in this process, or (0, 0, 0.0)."""
+    return _LAST.get(purpose, (0, 0, 0.0))
 
 
 def drain(health, cfg=None):
