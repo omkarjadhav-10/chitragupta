@@ -217,7 +217,7 @@ def title_status(dry_run, notes, backup):
         if _changed(tk, new):
             changed[t] = new
             notes.append("%s: title %r -> %r (hint %r), status %r -> jira %r, inferred %r" % (
-                t, tk.get("title", ""), new["title"], new.get("title_hint", ""), st, S.jira_status(new),
+                t, tk.get("title", ""), new.get("title", ""), new.get("title_hint", ""), st, S.jira_status(new),
                 new.get("status_inferred", "")))
     if not changed:
         return
