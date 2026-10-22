@@ -991,6 +991,41 @@ class OtherPluginToolTests(SafetyCase):
         self.assertEqual((s["recent"], s["by_layer"], len(s["last"])), (1, {"tool": 1}, 1))
         self.assertFalse({r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]["ok"])
 
+    def test_counts_and_breakdown_share_one_window_and_legacy_lines_are_other_plugin(self):
+        """O3: the 24 h count is shown with the 24 h breakdown; old uncategorised 'server plugin_... is not on the
+        allowlist' lines from the session guard (no UTC offset: written before categories) are other-plugin."""
+        import datetime as dt
+        from chitragupta.dashboard import api
+        from chitragupta.safety import log, status
+        now = dt.datetime.now().astimezone()
+        lines = [
+            {"at": (now - dt.timedelta(days=3)).isoformat(timespec="seconds"), "layer": "path", "caller": "x",
+             "purpose": "", "what": "delete C:/x", "reason": "outside the write roots"},
+            {"at": (now - dt.timedelta(hours=1)).isoformat(timespec="seconds"), "layer": "tool",
+             "caller": "safety.session", "purpose": "", "what": "Bash", "reason": "Bash is not allowed during /cg:"},
+            {"at": (now - dt.timedelta(hours=1)).replace(tzinfo=None).isoformat(timespec="seconds"), "layer": "tool",
+             "caller": "safety.session", "purpose": "", "what": self.OTHER,
+             "reason": "server plugin_other_tool is not on the allowlist"},
+        ]
+        os.makedirs(os.path.dirname(log.path()), exist_ok=True)
+        with open(log.path(), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in lines))
+        st = status.status(self.cfg())
+        self.assertEqual((st["blocks_24h"], st["blocks_7d"]), (1, 2))
+        self.assertEqual(st["by_layer_24h"], {"tool": 1})
+        self.assertEqual(st["by_layer_7d"], {"path": 1, "tool": 1})
+        self.assertEqual((st["skipped_24h"], st["skipped_7d"]), (1, 1))
+        row = {r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]
+        self.assertIn("1 blocked action(s) in the last 24 h (tool 1)", row["detail"])
+        self.assertIn("1 other-plugin", row["detail"])
+        sf = api._safety(self.cfg())
+        self.assertEqual((sf["by_layer_24h"], sf["by_layer_7d"], sf["skipped_24h"]), ({"tool": 1}, {"path": 1, "tool": 1}, 1))
+        # an offset line (written by 0.4.1 or later) is trusted as written: still a violation
+        lines[2]["at"] = now.isoformat(timespec="seconds")
+        with open(log.path(), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in lines))
+        self.assertEqual(status.status(self.cfg())["by_layer_24h"], {"tool": 2})
+
 
 class SecurityLogFormatTests(SafetyCase):
     def test_timestamp_carries_the_local_utc_offset(self):
