@@ -38,12 +38,12 @@ class DayClose(TriggerBase, unittest.TestCase):
         a = agent.Agent()
         a.close_days()
         a.store.save()
-        self.assertEqual(self.kinds(), ["consolidate", "brief"])
+        self.assertEqual(self.kinds(), ["consolidate", "supersede", "brief"])  # supersession first: the brief reads current items
         self.assertIn("brief", self.saved())
         self.assertEqual(a.health["briefs"]["made"], [T])
         a = agent.Agent()  # the next tick: the day is closed, nothing runs
         a.close_days()
-        self.assertEqual(self.kinds(), ["consolidate", "brief"])
+        self.assertEqual(self.kinds(), ["consolidate", "supersede", "brief"])  # supersession first: the brief reads current items
 
     def test_cap_reached_skip_is_recorded_and_retried_later(self):
         from chitragupta import agent, common
@@ -53,7 +53,7 @@ class DayClose(TriggerBase, unittest.TestCase):
         a = agent.Agent()
         a.close_days()
         a.store.save()
-        self.assertEqual(self.kinds(), ["consolidate"])
+        self.assertEqual(self.kinds(), ["consolidate", "supersede"])
         self.assertEqual(a.health["briefs"]["skipped"], {T: "budget"})
         self.assertEqual(a.state["brief_pending"], [T])
         self.assertNotIn("brief", self.saved())
@@ -62,7 +62,7 @@ class DayClose(TriggerBase, unittest.TestCase):
         common.write_json(common.wl("config.json"), cfg)
         a.cfg = common.load_config()
         a.refresh_briefs([])
-        self.assertEqual(self.kinds(), ["consolidate", "brief"])
+        self.assertEqual(self.kinds(), ["consolidate", "supersede", "brief"])  # supersession first: the brief reads current items
         self.assertEqual(a.state["brief_pending"], [])
 
 
