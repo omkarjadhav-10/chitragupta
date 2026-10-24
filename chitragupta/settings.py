@@ -120,6 +120,8 @@ STATIC = [
        min=0, max=50, default_value=8),
     _i("mcp.daily_call_budget", "Daily MCP job budget", "Background MCP jobs per day. Runs you ask for count separately.",
        "int", "models", min=0, max=100),
+    _i("extract_timeout_s", "Extraction timeout (seconds)", "How long one extraction call may take before it is retried "
+       "later. Large chunks can need more than 5 minutes.", "int", "models", min=120, max=1800, default_value=600),
     _i("raw_retention_days", "Keep raw events (days)", "Raw capture files older than this are pruned once processed.",
        "int", "data", min=7, max=365),
     _i("reminders.mcp", "Weekly connect reminder", "A line at session start when Slack or Jira isn't connected.", "bool",

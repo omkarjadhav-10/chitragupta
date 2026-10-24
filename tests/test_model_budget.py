@@ -54,6 +54,25 @@ class ModelBudgetTests(Isolated, unittest.TestCase):
         self.assertEqual(day["by_purpose"]["extract"], {"calls": 1, "in": 1300, "out": 300, "usd": 0.25})
         self.assertEqual(modelbudget._PENDING, [])  # drained once
 
+    def test_extraction_timeout_is_configurable_and_longer_by_default(self):
+        """Large extraction chunks can take more than 300 s: extraction gets extract_timeout_s (default 600), other
+        kinds keep their own timeouts."""
+        from chitragupta import extract
+        from chitragupta.safety import commands
+        extract.resolve_claude = lambda cfg=None: ["claude.exe"]
+        seen = []
+
+        def run(*a, **k):
+            seen.append(k.get("timeout"))
+            return 0, _claude_reply(), ""
+        commands.run = run
+        extract.call_claude("extract", "digest", self.cfg())
+        extract.call_claude("extract_delta", "digest", self.cfg())
+        extract.call_claude("extract", "digest", self.cfg(extract_timeout_s=900))
+        extract.call_claude("consolidate", "facts", self.cfg())
+        extract.call_claude("worklog_condense", "lines", self.cfg(), timeout=180)
+        self.assertEqual(seen, [600, 600, 900, 300, 180])
+
     def test_failed_call_still_counts_its_cost(self):
         from chitragupta import extract, modelbudget
         from chitragupta.safety import commands

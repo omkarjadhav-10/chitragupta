@@ -342,9 +342,15 @@ def model_for(kind, cfg):
     return models.get(kind) or models.get(base) or (models.get(fb) if fb else None) or         ("haiku" if kind.startswith("extract") else "sonnet")
 
 
-def call_claude(kind, stdin_text, cfg, timeout=300):
+EXTRACT_KINDS = ("extract", "extract_delta")
+
+
+def call_claude(kind, stdin_text, cfg, timeout=None):
     """kind: 'extract' | 'extract_delta' | 'consolidate' | 'curate' | …. Returns (structured_output, cost_usd).
-    Every call that ran is noted in the model-spend ledger (modelbudget), tokens and cost, whether it succeeded or not."""
+    Every call that ran is noted in the model-spend ledger (modelbudget), tokens and cost, whether it succeeded or not.
+    Timeout: the caller's, else extract_timeout_s (600) for an extraction chunk, else 300 s."""
+    if timeout is None:
+        timeout = int((cfg or {}).get("extract_timeout_s") or 600) if kind in EXTRACT_KINDS else 300
     exe = resolve_claude(cfg)
     if not exe:
         raise ExtractError("claude executable not found")

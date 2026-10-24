@@ -41,6 +41,7 @@ A minimal config after setup:
 | `day_starts_at` | `"HH:MM"` | `"04:00"` | Work-day boundary. Work before this time counts as the previous day. |
 | `push_enabled` | bool | `true` | `false` keeps the daily commits on this machine; they are pushed once it's `true` again. |
 | `push_interval_minutes` | int | `30` | Minimum gap between pushes. A push also happens when a session ends or a day closes. |
+| `extract_timeout_s` | int | `600` | How long one extraction call (`claude -p`) may take before it fails and is retried later. Other model calls keep 300 s (the evening condense 180 s). |
 | `raw_retention_days` | int | `30` | Raw event files older than this are pruned once they have been fully read and extracted, whether or not a GitHub remote is set (raw is never pushed). Unprocessed raw is never pruned. |
 | `extract_triggers.min_new_chars` | int | `1500` | A session is extracted once it has at least this much new text, **and** one of the next two triggers fires or the session has ended. |
 | `extract_triggers.idle_minutes` | int | `10` | Extract after this many idle minutes. |
