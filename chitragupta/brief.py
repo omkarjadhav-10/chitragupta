@@ -39,8 +39,9 @@ FACT_PREFIXES = ("commit:", "pr:", "jira:", "query:", "table:", "replay:", "test
 # --------------------------------------------------------------------------- what is current
 
 def is_current(it):
-    """Not archived, not superseded, not flagged for review (K3, K8, K12)."""
-    return isinstance(it, dict) and not it.get("archived") and it.get("status") != "superseded" and not it.get("review")
+    """Not archived, not superseded or done (a TODO git data closed), not flagged for review (K3, K8, K12)."""
+    return (isinstance(it, dict) and not it.get("archived") and it.get("status") not in ("superseded", "done")
+            and not it.get("review"))
 
 
 def current_items(tk):

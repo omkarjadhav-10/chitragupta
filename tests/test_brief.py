@@ -129,6 +129,16 @@ class CurrentItems(BriefBase, unittest.TestCase):
         self.assertNotIn("rv00000001", ids)  # flagged for review
         self.assertIn("rc00000002", ids)
 
+    def test_a_todo_git_data_closed_is_not_current(self):
+        from chitragupta import brief
+        tk = ticket()
+        tk["items"]["td00000001"] = {"id": "td00000001", "kind": "todo", "title": "push the branch", "date": "2026-10-14",
+                                     "status": "done", "closed_by": "pr:812"}
+        tk["items"]["td00000002"] = {"id": "td00000002", "kind": "todo", "title": "sweep stuck rows", "date": "2026-10-14"}
+        ids = [i["id"] for i in brief.current_items(tk)]
+        self.assertNotIn("td00000001", ids)
+        self.assertIn("td00000002", ids)
+
     def test_input_has_current_items_and_facts_never_superseded_text(self):
         from chitragupta import brief
         text = brief.build_input(T, ticket(), self.cfg())
