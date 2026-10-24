@@ -212,6 +212,17 @@ def build_digests(events, meta, candidates, already):
     return chunks
 
 
+def with_already(chunk, already):
+    """The chunk with its ALREADY_RECORDED header line recomputed (a later chunk sees what earlier chunks added)."""
+    line = redact("ALREADY_RECORDED: " + json.dumps(already, ensure_ascii=False)[:20000])
+    head, sep, rest = chunk.partition("\nALREADY_RECORDED: ")
+    if not sep:
+        return chunk
+    d = Digest(head + "\n" + line + "\n" + rest.split("\n", 1)[1] if "\n" in rest else head + "\n" + line)
+    d.turns, d.default = chunk.turns, chunk.default
+    return d
+
+
 def enrich_events(transcript_path, events, max_chars=20000):
     """Intermediate assistant text from the transcript between the first and last pending event.
     Best effort: any failure returns []."""

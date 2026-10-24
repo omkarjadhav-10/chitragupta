@@ -3,11 +3,14 @@
 Markdown is always rendered from here and never parsed back. Every write is atomic.
 IDs are stable hashes, so merging the same extraction twice is a no-op.
 """
+import json
 import os
 import re
 
 from . import common
 from . import kbnorm
+from . import offticket
+from . import sqlsent
 from .redact import redact_obj
 
 ITEM_KINDS = ["finding", "root_cause", "how_it_works", "fix", "decision", "config", "error",
@@ -275,6 +278,10 @@ def merge_extraction(store, res, ctx, prefixes):
                "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
         if t and src:
             rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
+        if t:  # K8: maybe another ticket's (or the worklog tool's own) note: flagged for review, never moved
+            rv = offticket.check(store.ticket(t), t, rec, prefixes)
+            if rv:
+                rec["review"] = rv
         _merge_item(store, dd, t, gkey, rec, it.get("updates"), tslot)
 
     for q in res.get("queries") or []:
@@ -288,6 +295,11 @@ def merge_extraction(store, res, ctx, prefixes):
                "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
         slot = tslot(t)
         qs = store.ticket(t)["queries"] if t else slot["queries"]
+        if "sent" in ctx:  # K6b: only SQL a database MCP call or a SQL command line sent counts as run
+            hit = sqlsent.find(text, ctx["sent"])
+            rec["sent"] = bool(hit)
+            if hit and hit.get("ref"):
+                rec["ref"] = hit["ref"]
         if qid not in qs:
             qs[qid] = rec
             store.bump(t or gkey, "queries")
@@ -425,6 +437,12 @@ def add_query_sighting(cur, rec):
     for k in ("revealed", "purpose"):
         if rec.get(k) and not cur.get(k):
             cur[k] = rec[k]
+    if rec.get("sent") and cur.get("sent") is not True:  # sent once is sent; never back to false
+        cur["sent"] = True
+        if rec.get("ref"):
+            cur["ref"] = rec["ref"]
+    elif rec.get("sent") is False and "sent" not in cur:
+        cur["sent"] = False
 
 
 def table_name(key, recs):
@@ -528,6 +546,11 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
                          "confidence": old.get("confidence")})
             new = dict(rec, id=iid, first_date=old.get("first_date") or old.get("date"), history=hist[-5:])
             new["evidence"] = _union(rec["evidence"], old.get("evidence"))[:10]
+            for k in ("archived", "review_kept"):  # your decisions survive an update; new text is current again
+                if old.get(k):
+                    new[k] = old[k]
+            if old.get("review_kept") or (old.get("review") and not new.get("review")):
+                new["review"] = None if old.get("review_kept") else old.get("review")
             items[iid] = new
             store.bump(t or gkey, "updates")
         else:
@@ -543,18 +566,42 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
         slot["item_ids"].append(iid)
 
 
-def already_recorded(store, tickets, limit=80):
-    """Compact view of what's known for candidate tickets, passed to the extractor."""
+ALREADY_BUDGET = 20000  # chars of ALREADY_RECORDED in an extraction header (extract.build_digests)
+
+
+def _jlen(x):
+    return len(json.dumps(x, ensure_ascii=False))
+
+
+def already_recorded(store, tickets, limit=80, budget=ALREADY_BUDGET):
+    """Compact view of what's known for candidate tickets, passed to the extractor. Each candidate gets an equal share
+    of `budget` chars, filled with its newest items first; superseded and archived items are left out."""
     out = {}
+    share = budget // max(1, len(tickets)) - 4  # the key and separators
     for t in tickets:
         tk = store.ticket(t)
-        items = sorted(tk["items"].values(), key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)[:limit]
-        out[t] = {
+        live = [i for i in tk["items"].values() if isinstance(i, dict) and not i.get("archived")
+                and i.get("status") != "superseded"]
+        items = sorted(live, key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)[:limit]
+        entry = {
             "title": tk.get("title") or tk.get("title_hint") or "",
-            "items": [{"id": i["id"], "kind": i["kind"], "title": i["title"], "confidence": i.get("confidence")}
-                      for i in items],
-            "queries": [q.get("purpose") or q["text"][:80] for q in list(tk["queries"].values())[-30:]],
+            "items": [],
+            "queries": [q.get("purpose") or (q.get("text") or "")[:80] for q in list(tk["queries"].values())[-30:]],
             "tables": sorted(tk["tables"].keys())[:60],
             "apis": sorted(tk["apis"].keys())[:60],
         }
+        size = _jlen(entry) + len(t)
+        for k in ("apis", "tables", "queries"):  # the lists give way to items when a share is small
+            while size > share // 2 and entry[k]:
+                size -= _jlen(entry[k].pop()) + 2
+        for i in items:
+            rec = {"id": i["id"], "kind": i["kind"], "title": i["title"], "confidence": i.get("confidence")}
+            if i.get("status") and i["status"] != "current":
+                rec["status"] = i["status"]
+            n = _jlen(rec) + 2
+            if size + n > share:
+                break
+            entry["items"].append(rec)
+            size += n
+        out[t] = entry
     return out

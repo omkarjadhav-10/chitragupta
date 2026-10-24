@@ -166,23 +166,47 @@ function StatusChips({ t }) {
 const KIND = { root_cause: 'Root cause', finding: 'Findings', how_it_works: 'How it works', fix: 'Fix', decision: 'Decisions', config: 'Config',
   repro_test: 'Repro and tests', reference: 'References', blocker: 'Blockers', question: 'Open questions', todo: 'To do' };
 const KIND_ICON = { root_cause: 'warn', blocker: 'bad', fix: 'ok', decision: 'check', question: 'info', todo: 'wait' };
-function Finding({ i }) {
-  return html`<li><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
-    <div class="m">${[i.date, i.time].filter(Boolean).join(' ')}${i.confidence ? ' · ' + i.confidence + ' confidence' : ''}${i.evidence && i.evidence.length ? ' · ' + [].concat(i.evidence).slice(0, 2).join('; ') : ''}</div></li>`;
+function Finding({ i, byId }) {
+  const rep = i.status === 'superseded' && byId ? byId[i.superseded_by] : null;
+  const conf = i.status === 'hypothesis' ? 'hypothesis' : i.status === 'confirmed' ? 'confirmed' : i.confidence;
+  return html`<li id=${'i-' + i.id}><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+    <div class="m">${[i.date, i.time].filter(Boolean).join(' ')}${conf ? ' · ' + conf + ' confidence' : ''}${i.evidence && i.evidence.length ? ' · ' + [].concat(i.evidence).slice(0, 2).join('; ') : ''}${i.closed_by ? ' · done: ' + i.closed_by : ''}</div>
+    ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) el.scrollIntoView({ block: 'center' }); }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</li>`;
+}
+// Current items per kind; done TODOs and items a newer one replaced are collapsed under each kind (K3).
+function KindItems({ list, byId }) {
+  const cur = list.filter((i) => i.status !== 'superseded' && i.status !== 'done');
+  const done = list.filter((i) => i.status === 'done'), sup = list.filter((i) => i.status === 'superseded');
+  return html`${cur.length ? html`<ul class="findings">${cur.map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul>` : null}
+    ${done.length ? html`<details class="more"><summary>Done (${done.length})</summary><ul class="findings">${done.map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></details>` : null}
+    ${sup.length ? html`<details class="more"><summary>Superseded (${sup.length})</summary><ul class="findings">${sup.map((i) => html`<${Finding} key=${i.id} i=${i} byId=${byId} />`)}</ul></details>` : null}`;
 }
 function Overview({ t }) {
-  const groups = {};
-  t.findings.forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
+  const groups = {}, byId = {};
+  const live = t.findings.filter((i) => !i.archived);
+  live.forEach((i) => { byId[i.id] = i; });
+  live.filter((i) => !i.review).forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
   const order = Object.keys(KIND).filter((k) => groups[k]).concat(Object.keys(groups).filter((k) => !KIND[k]));
+  const count = (k) => groups[k].filter((i) => i.status !== 'superseded' && i.status !== 'done').length;
   return html`<${GitAlerts} g=${t.git} />
     ${t.delivery ? html`<p class="lede"><strong>Delivery:</strong> ${t.delivery.text} <span class="muted small">(computed from git and PRs${t.delivery.checked_at ? ', checked ' + fmtTs(t.delivery.checked_at) : ''})</span></p>` : null}
     ${t.tldr ? html`<p class="lede"><strong>In short:</strong> ${(t.tldr_check && t.tldr_check.length ? t.tldr_check : [{ text: t.tldr }]).map((x, i) => x.outdated
       ? html`<span key=${i}><span class="muted small">${x.outdated}:</span> <s>${x.text}</s> </span>` : x.text + ' ')}</p>` : null}
     ${t.problem ? html`<p class="lede">${t.problem}</p>` : null}
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
-      <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${groups[k].length}</span></h2>
-      <ul class="findings">${groups[k].map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></section>`)
-      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}`;
+      <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${count(k)}</span></h2>
+      <${KindItems} list=${groups[k]} byId=${byId} /></section>`)
+      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
+    <${NeedsReview} t=${t} list=${live.filter((i) => i.review)} />`;
+}
+// Items recorded under this ticket that may be another ticket's (K8): never moved, resolved with an inbox line.
+function NeedsReview({ t, list }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>Needs review (${list.length})</summary>
+    <p class="muted small">Recorded under ${t.key} but maybe not about it. A line in inbox.md resolves each: <span class="mono">${t.key}: keep &lt;id&gt;</span> keeps it, <span class="mono">${t.key}: move &lt;id&gt; &lt;KEY&gt;</span> copies it to that ticket and archives it here.</p>
+    <ul class="findings">${list.map((i) => { const keep = t.key + ': keep ' + i.id, move = t.key + ': move ' + i.id + ' ' + (i.review.suggest || '<KEY>');
+      return html`<li key=${i.id}><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+        <div class="m">${i.review.why}</div><div class="m"><span class="mono">${keep}</span> <${CopyButton} text=${keep} what="the keep line" /> · <span class="mono">${move}</span> <${CopyButton} text=${move} what="the move line" /></div></li>`; })}</ul></details>`;
 }
 function Requests({ rq }) {
   if (!rq.steps.length) return html`<${Empty} title=${'No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '')} icon="api">Ask Claude to save the essential requests for this ticket to the worklog.</${Empty}>`;
@@ -193,11 +217,19 @@ function Requests({ rq }) {
       ${s.curl ? html`<details class="more"><summary>Show the curl command</summary><pre tabindex="0"><code>${s.curl}</code></pre></details>` : null}</div>`)}
     <p class="small muted">${rq.dropped ? rq.dropped + ' other captured calls left out. ' : ''}${rq.bruno_folder ? html`Bruno folder: <span class="mono">${rq.bruno_folder}</span> <${CopyButton} text=${rq.bruno_folder} label="Copy path" what="Bruno folder path" />` : null}</p>`;
 }
-function Queries({ qs }) {
-  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
-  return qs.map((q) => html`<div class="step" key=${q.id}><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
+function Query({ q }) {
+  return html`<div class="step"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
     ${q.tables && q.tables.length ? html`<div class="small muted">Tables: ${q.tables.map((x, i) => html`<code key=${i}>${x}</code> `)}</div>` : null}
-    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}<pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`);
+    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}
+    ${q.ref ? html`<div class="small muted">Sent: <span class="mono">${q.ref}</span></div>` : q.sent === null && q.evidence && q.evidence.length ? html`<div class="small muted">Saved in: <span class="mono">${q.evidence[0]}</span></div>` : null}
+    <pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`;
+}
+// Only SQL that was sent (or a script you saved) is listed; SQL the notes mention but never sent stays collapsed.
+function Queries({ qs }) {
+  const run = qs.filter((q) => q.sent !== false), notRun = qs.filter((q) => q.sent === false);
+  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
+  return html`${run.length ? run.map((q) => html`<${Query} key=${q.id} q=${q} />`) : html`<${Empty} title="No queries sent" icon="db">The notes mention SQL that was never sent; it is kept below.</${Empty}>`}
+    ${notRun.length ? html`<details class="more"><summary>Not run (${notRun.length})</summary><p class="muted small">Written or reworded in the notes, but not found among the SQL sent in the session.</p>${notRun.map((q) => html`<${Query} key=${q.id} q=${q} />`)}</details>` : null}`;
 }
 function Artifacts({ list }) {
   const cols = [
@@ -276,11 +308,11 @@ export function TicketPage({ route }) {
   const g = (t && t.git) || {};
   const nb = Object.values(g.repos || {}).reduce((a, e) => a + (e.branches || []).length, 0);
   const tabs = t ? [
-    { id: 'overview', label: 'Overview', count: t.findings.length || null },
+    { id: 'overview', label: 'Overview', count: t.findings.filter((i) => !i.archived && !i.review && i.status !== 'superseded' && i.status !== 'done').length || null },
     { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 },
     { id: 'dbflow', label: 'DB flow', count: t.dbflow.markdown ? null : 0 },
     { id: 'requests', label: 'Requests', count: t.requests.steps.length },
-    { id: 'queries', label: 'Queries', count: t.queries.length },
+    { id: 'queries', label: 'Queries', count: t.queries.filter((q) => q.sent !== false).length },
     { id: 'artifacts', label: 'Artifacts', count: t.artifacts.length },
     { id: 'timeline', label: 'Timeline', count: t.timeline.length },
     { id: 'notes', label: 'Notes' },

@@ -332,11 +332,12 @@ def _section(key, t, tk, section):
             if p.get(k):
                 L.append("%s: %s" % (label, p[k]))
     elif section == "queries":
-        for q in t["queries"]:
+        sent = [q for q in t["queries"] if q.get("sent") is not False]  # SQL never sent stays out (K6b)
+        for q in sent:
             L.append("- %s%s · %s%s" % (_one(q.get("purpose") or "query", 160), " (%s)" % q["dialect"] if q.get("dialect") else "",
                                        q.get("date") or "", " · tables " + ", ".join(q["tables"][:8]) if q.get("tables") else ""))
             L += ["```sql", (q.get("text") or "").strip()[:1500], "```"]
-        if not t["queries"]:
+        if not sent:
             L.append("No saved queries.")
         if p.get("queries"):
             L.append("File: %s" % p["queries"])

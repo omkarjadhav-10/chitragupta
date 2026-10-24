@@ -5,6 +5,7 @@ import os
 import re
 
 from . import common
+from . import supersede
 from .redact import redact
 from .store import Store, display_title, jira_status, lookup
 
@@ -62,7 +63,9 @@ def write_view(path, body, mode="local", tail=None):
 
 def item_line(it, with_date=False):
     ev = ", ".join(code(e) for e in (it.get("evidence") or [])[:5])
-    conf = it.get("confidence") or ""
+    conf = "" if it.get("status") == "confirmed" else it.get("confidence") or ""
+    if it.get("status") == "hypothesis":
+        conf = "hypothesis"
     parts = ["`[%s]`" % TAG.get(it.get("kind"), it.get("kind")), "**%s**" % it.get("title", "").strip()]
     if with_date:
         parts.insert(0, it.get("date", ""))
@@ -79,6 +82,49 @@ def item_line(it, with_date=False):
     if tail:
         s += " _(" + "; ".join(tail) + ")_"
     return s
+
+
+def hub_item(it):
+    return '- <a id="i-%s"></a>%s' % (it.get("id"), item_line(it, True))
+
+
+def item_block(items, kinds):
+    """A hub section's items (K3): the current ones; done TODOs and items a newer one replaced follow, collapsed and
+    labelled. Archived items and items waiting for review (K8) are left out here."""
+    byid = {i.get("id"): i for i in items}
+    sel = [i for i in items if i.get("kind") in kinds and not i.get("archived") and not i.get("review")]
+    cur = [i for i in sel if i.get("status") not in ("superseded", "done")]
+    done = [i for i in sel if i.get("status") == "done"]
+    sup = [i for i in sel if i.get("status") == "superseded"]
+    L = [hub_item(i) for i in sort_items(cur)]
+    if done:
+        L += ["", "<details><summary>Done (%d)</summary>" % len(done), ""]
+        L += [hub_item(i) + (" _(done: %s)_" % i["closed_by"] if i.get("closed_by") else "") for i in sort_items(done)]
+        L += ["", "</details>"]
+    if sup:
+        L += ["", "<details><summary>Superseded (%d)</summary>" % len(sup), ""]
+        for i in sort_items(sup):
+            rep = byid.get(i.get("superseded_by")) or {}
+            by = "[%s](#i-%s)" % ((rep.get("title") or "").replace("]", ")").replace("[", "("), rep["id"]) if rep                 else "a newer item"
+            L.append(hub_item(i) + " — replaced by " + by)
+        L += ["", "</details>"]
+    return L
+
+
+def needs_review(t, items):
+    """Items flagged as maybe another ticket's (K8), collapsed, each with the inbox lines that resolve it."""
+    flagged = sort_items([i for i in items if i.get("review") and not i.get("archived")])
+    if not flagged:
+        return []
+    L = ["<details><summary>Needs review (%d)</summary>" % len(flagged), "",
+         "_Recorded under %s but maybe not about it. Add a line to inbox.md: `%s: keep <id>` keeps it here, "
+         "`%s: move <id> <KEY>` copies it to that ticket and archives it here._" % (t, t, t), ""]
+    for i in flagged:
+        r = i["review"]
+        to = r.get("suggest") or "<KEY>"
+        L.append("%s — _%s_ · `%s: keep %s` · `%s: move %s %s`" % (hub_item(i), r.get("why") or "", t, i["id"], t,
+                                                                  i["id"], to))
+    return L + ["", "</details>"]
 
 
 def sort_items(items, newest_first=True):
@@ -256,7 +302,9 @@ def render_day(store, day, cfg, health):
 
     if dd.get("carried_todos"):
         L.append("## Carried over from previous day")
-        L += ["- [ ] " + t for t in dd["carried_todos"]]
+        for x in dd["carried_todos"]:
+            x = x if isinstance(x, dict) else {"text": str(x)}
+            L.append("- [x] %s _(done: %s)_" % (x.get("text"), x["closed_by"]) if x.get("closed_by") else "- [ ] " + (x.get("text") or ""))
         L.append("")
 
     # Tickets table
@@ -403,7 +451,7 @@ def ticket_section(store, dd, t, slot):
         L.append("- **Findings**")
         L += ["  - " + item_line(i) for i in finds]
     tables = [r["name"] for r in _found(tk["tables"], slot.get("table_keys"))]
-    qs = _found(tk["queries"], slot.get("query_ids"))
+    qs = [q for q in _found(tk["queries"], slot.get("query_ids")) if q.get("sent") is not False]  # never-sent SQL: data only
     if tables or qs:
         L.append("- **DB**" + (" — tables: " + ", ".join(code(x) for x in tables) if tables else ""))
         for q in qs:
@@ -539,8 +587,8 @@ def total_minutes(tk):
 
 def render_ticket(store, t):
     tk = store.ticket(t)
-    items = list(tk["items"].values())
-    by = lambda *kinds: sort_items([i for i in items if i.get("kind") in kinds])
+    items = [i for i in tk["items"].values() if isinstance(i, dict)]
+    by = lambda *kinds: item_block(items, kinds)
     L = [heading(t, tk)]
     ql = quick_links(t, tk)
     if ql:
@@ -558,9 +606,9 @@ def render_ticket(store, t):
 
     sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
     sec("Problem / context", [tk["problem"]] if tk.get("problem") else None)
-    sec("Root cause & key findings", ["- " + item_line(i, True) for i in by("root_cause", "finding", "note")])
-    sec("How it works", ["- " + item_line(i, True) for i in by("how_it_works")])
-    fix = ["- " + item_line(i, True) for i in by("fix")]
+    sec("Root cause & key findings", by("root_cause", "finding", "note"))
+    sec("How it works", by("how_it_works"))
+    fix = by("fix")
     changed = [f for f in tk["files"].values() if f.get("changed") and f.get("verified") is True]
     if changed:
         fix += ["", "%s changed — see the Code map below." % ("1 file" if len(changed) == 1 else "%d files" % len(changed))]
@@ -581,8 +629,9 @@ def render_ticket(store, t):
         db += ["| %s | %s | %s | %s | %s |" % (code(v["name"]), cell(v.get("db")), cell(v.get("purpose")),
                                               cell(", ".join(v.get("key_columns", []))), cell("; ".join(v.get("relations", []))))
                for _, v in sorted(tk["tables"].items())]
-    if tk["queries"]:
-        db += ["", "%d quer%s — see [queries.md](queries.md)." % (len(tk["queries"]), "y" if len(tk["queries"]) == 1 else "ies")]
+    nq = len(shown_queries(tk))
+    if nq:
+        db += ["", "%d quer%s — see [queries.md](queries.md)." % (nq, "y" if nq == 1 else "ies")]
     sec("Database", db)
     api = []
     if tk["apis"]:
@@ -593,16 +642,19 @@ def render_ticket(store, t):
                 for _, a in sorted(tk["apis"].items())]
     sec("APIs", api)
     sec("Integrations", ["- **%s** · %s — %s" % (g.get("system"), g.get("artifact"), g.get("notes")) for _, g in sorted(tk["integrations"].items())])
-    sec("Config & environment", ["- " + item_line(i, True) for i in by("config")])
-    sec("Errors seen", ["- " + item_line(i, True) for i in by("error")])
-    rep = ["- " + item_line(i, True) for i in by("repro_test")]
+    sec("Config & environment", by("config"))
+    sec("Errors seen", by("error"))
+    rep = by("repro_test")
     rep += ["- Bruno · %s %s — %s _(%s, last %s)_" % (b.get("method"), code(b.get("url")), b.get("name"), b.get("collection"), b.get("last"))
             for _, b in sorted(tk.get("bruno", {}).items())]
     sec("How to reproduce / test", rep)
-    sec("Decisions", ["- " + item_line(i, True) for i in by("decision")])
-    sec("Open questions · TODO · blockers", ["- " + item_line(i, True) for i in by("question", "todo", "blocker")])
+    sec("Decisions", by("decision"))
+    sec("Open questions · TODO · blockers", by("question", "todo", "blocker"))
+    rv = needs_review(t, items)
+    if rv:
+        L += ["## Needs review"] + rv + [""]
     sec("Code map", code_map(tk))
-    sec("References consulted", ["- " + item_line(i, True) for i in by("reference")])
+    sec("References consulted", by("reference"))
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     sec("Timeline", tl)
@@ -749,7 +801,8 @@ def hub_sections(t, tk):
 def render_queries(store, t):
     tk = store.ticket(t)
     L = ["# %s — Queries" % t, ""]
-    qs = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    allq = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    qs = [q for q in allq if q.get("sent") is not False]
     if not qs:
         L.append("_No queries recorded yet._")
     for q in qs:
@@ -760,8 +813,21 @@ def render_queries(store, t):
             L.append("Tables: " + ", ".join(code(x) for x in q["tables"]))
         if q.get("revealed"):
             L.append("Revealed: " + q["revealed"])
+        if q.get("ref"):
+            L.append("Sent: " + code(q["ref"]))
+        elif q.get("sent") is None and q.get("evidence"):
+            L.append("Saved in: " + ", ".join(code(e) for e in q["evidence"][:2]))
         L += ["```" + lang[1], fence_safe(q.get("text")).rstrip(), "```", ""]
+    hidden = len(allq) - len(qs)
+    if hidden:
+        L += ["_%d more quer%s the notes mention %s never found among the SQL sent; kept in the data, not listed "
+              "here (dashboard: Not run)._" % (hidden, "y" if hidden == 1 else "ies", "was" if hidden == 1 else "were"), ""]
     return "\n".join(L) + "\n"
+
+
+def shown_queries(tk):
+    """The ticket's queries that were sent (or saved by you, or recorded before sending was checked): sent != False."""
+    return [q for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False]
 
 
 def render_index(store):
@@ -852,14 +918,15 @@ def render_context(store, t):
                 continue
             L.append("- %s (%s): from %s, %s%s" % (b["branch"], name, b.get("parent") or "?", b["status"],
                                                  "; PR " + ", ".join("#%s" % n for n in b["prs"]) if b.get("prs") else ""))
-    finds = sort_items([i for i in tk["items"].values() if i.get("kind") not in OPEN_KINDS])[:8]
+    live = [i for i in tk["items"].values() if supersede.is_current(i) and i.get("status") != "done"]  # K3/K8
+    finds = sort_items([i for i in live if i.get("kind") not in OPEN_KINDS])[:8]
     if finds:
         L.append("Recent findings:")
         for i in finds:
             ev = "; ".join((i.get("evidence") or [])[:2])
             L.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
                                         " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
-    opens = sort_items([i for i in tk["items"].values() if i.get("kind") in OPEN_KINDS])[:6]
+    opens = sort_items([i for i in live if i.get("kind") in OPEN_KINDS])[:6]
     if opens:
         L.append("Open TODOs / questions:")
         L += ["- %s" % i["title"] for i in opens]

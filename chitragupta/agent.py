@@ -26,6 +26,9 @@ from . import modelbudget  # noqa: E402
 from . import render  # noqa: E402
 from . import sources  # noqa: E402
 from . import kbnorm  # noqa: E402
+from . import offticket  # noqa: E402
+from . import sqlsent  # noqa: E402
+from . import supersede  # noqa: E402
 from . import store as storemod  # noqa: E402
 from . import timesheet  # noqa: E402
 from .redact import redact  # noqa: E402
@@ -96,9 +99,11 @@ class Lock:
 # --------------------------------------------------------------------------- raw reading
 
 def read_lines(path, start, end=None):
-    """Complete JSON lines of a raw file between byte offsets. Returns (events, new_offset)."""
+    """Complete JSON lines of a raw file between byte offsets, each with its 1-based line number in the file (`_ln`,
+    for evidence refs "raw/<day>/<sid>.jsonl:<line>"). Returns (events, new_offset)."""
     try:
         with open(path, "rb") as f:
+            ln = f.read(start).count(b"\n") if start else 0
             f.seek(start)
             data = f.read() if end is None else f.read(max(0, end - start))
     except OSError:
@@ -107,10 +112,12 @@ def read_lines(path, start, end=None):
     if cut < 0:
         return [], start
     evs = []
-    for raw in data[: cut + 1].splitlines():
+    for raw in data[: cut + 1].split(b"\n")[:-1]:
+        ln += 1
         try:
             ev = json.loads(raw.decode("utf-8", "replace"))
             if isinstance(ev, dict):
+                ev["_ln"] = ln
                 evs.append(ev)
         except ValueError:
             continue
@@ -616,6 +623,9 @@ class Agent:
         for key, f in sorted(s["files"].items()):
             if f["read"] > f["extracted"]:
                 evs, _ = self._read_turns(raw_path(key), f["extracted"], f["read"], keep_time=False)
+                for e in evs:
+                    if e.get("_ln"):
+                        e["_ref"] = "raw/%s:%d" % (key, e["_ln"])
                 day = raw_day(key)
                 by_day.setdefault(day, []).extend(evs)
         if not by_day:
@@ -635,12 +645,15 @@ class Agent:
             ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                    "branch": last.get("branch"), "candidates": cands}
             ctx["edited"] = kbnorm.edited_files(evs)  # K6a: a file is "changed" only when a tool call wrote it
+            ctx["sent"] = sqlsent.sent_statements(evs)  # K6b: a query counts as run only when one of these sent it
             already = storemod.already_recorded(self.store, cands)
             meta = {"session": sid, "day": day, "repo": ctx["repo"], "branch": ctx["branch"],
                     "lines": self.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
             try:
                 cost = 0.0
-                for chunk in extract.build_digests(all_evs, meta, cands, already):
+                for n, chunk in enumerate(extract.build_digests(all_evs, meta, cands, already)):
+                    if n:  # K3: a later chunk sees what the earlier ones recorded
+                        chunk = extract.with_already(chunk, storemod.already_recorded(self.store, cands))
                     res, c = extract.call_claude("extract", chunk, self.cfg)
                     cost += c
                     cctx = dict(ctx, default=chunk.default, turns=chunk.turns)  # untagged items: their turn's ticket
@@ -819,7 +832,8 @@ class Agent:
                 if qid not in tk["queries"]:
                     tk["queries"][qid] = {"id": qid, "date": day, "time": common.hhmm(q["ts"]), "dialect": q["dialect"],
                                           "text": q["text"], "purpose": "SQL script " + q["name"], "tables": [], "kind": "read",
-                                          "revealed": ""}
+                                          "revealed": "", "sent": None,  # a script you saved: unknown whether it ran
+                                          "evidence": [q.get("path") or q["name"]]}
                     self.store.bump(q["ticket"], "queries")
                 if qid not in slot["query_ids"]:
                     slot["query_ids"].append(qid)
@@ -830,6 +844,11 @@ class Agent:
                 continue  # branch-link: / branch-unlink: / branch-abandon: / branch-restore: / strategy: lines
             if self.jwl.handle_inbox(n):
                 continue  # time: / leave: / half-day: / holiday: / workday: / resend: lines (jira worklog)
+            rd = offticket.parse_directive(n["text"]) if n.get("ticket") else None
+            if rd:  # K8: "<KEY>: keep <id>" / "<KEY>: move <id> <OTHER>" resolve a "Needs review" item
+                common.log("agent", "inbox review: " + offticket.apply_directive(self.store, n["ticket"], rd, n.get("ts"),
+                                                                               self.prefixes))
+                continue
             day = common.workday(n["ts"], cfg)
             dd = self.store.day(day)
             dd["outside"]["inbox"].append(n)
@@ -920,6 +939,7 @@ class Agent:
                 tk["branches"] = storemod._union(tk.get("branches"), [b])
                 tk["repos"] = storemod._union(tk.get("repos"), [name])
             if delivery.update_ticket(self.store, t, rx, cfg, force=t in self.git_force):
+                supersede.close_todos(tk)  # K3: git-action TODOs the new branch/PR data shows done
                 self.store.touch_ticket(t)
                 today = common.workday(common.now(), cfg)
                 if t in (self.store.day(today).get("tickets") or {}):
@@ -961,7 +981,8 @@ class Agent:
         tickets = {}
         for t, slot in dd["tickets"].items():
             tk = self.store.ticket(t)
-            items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]]
+            items = [tk["items"][i] for i in slot.get("item_ids", []) if i in tk["items"]
+                     and not tk["items"][i].get("review") and not tk["items"][i].get("archived")]  # K8: not its own
             tickets[t] = {
                 "title": tk.get("title") or tk.get("title_hint"), "approx_minutes": slot.get("minutes"), "where": slot.get("where"),
                 "activity": [w["time"] + " " + w["text"] for w in sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))],
@@ -983,7 +1004,8 @@ class Agent:
                                         "sql_scripts": [s["name"] for s in dd["outside"]["sql"]][:20],
                                         "inbox": [n["text"] for n in dd["outside"]["inbox"]][:30]},
                 "commits_no_ticket": [c["subject"] for c in dd["commits"] if not c.get("ticket")],
-                "previous_open_todos": dd.get("carried_todos") or []}
+                "previous_open_todos": [supersede.todo_text(x) for x in dd.get("carried_todos") or []
+                                        if not (isinstance(x, dict) and x.get("closed_by"))]}
         return redact(json.dumps(data, ensure_ascii=False, indent=1))[:150000]
 
     def consolidate(self, day):
@@ -994,6 +1016,11 @@ class Agent:
         if nxt and nxt > common.now() and not self.force:
             return
         res = None
+        # K3: day TODOs are {text, ticket, closed_by}; carried git-action TODOs the branch/PR data shows done close here
+        carried = [supersede.todo_obj(x, self.prefixes) for x in dd.get("carried_todos") or []]
+        if carried:
+            dd["carried_todos"] = carried
+            supersede.close_day_todos(self.store, carried)
         if has_content and fails < 6:
             try:
                 res, cost = extract.call_claude("consolidate", self.consolidation_input(day), self.cfg)
@@ -1010,7 +1037,9 @@ class Agent:
             dd["summary"] = res.get("day_summary") or dd.get("summary", "")
             dd["summary_final"] = True
             dd["standup"] = res.get("standup") or {}
-            dd["open_todos"] = res.get("open_todos") or []
+            prev = {x["text"]: x for x in carried}
+            dd["open_todos"] = [dict(prev[s]) if s in prev else supersede.todo_obj(s, self.prefixes, since=day)
+                                for s in res.get("open_todos") or [] if isinstance(s, str) and s.strip()]
             for pt in res.get("per_ticket") or []:
                 t = storemod.valid_ticket(pt.get("ticket"), None)
                 if not t or t not in dd["tickets"]:
@@ -1031,11 +1060,23 @@ class Agent:
                 self.store.touch_ticket(t)
         else:
             dd["standup"] = render.draft_standup(self.store, dd) if has_content else {}
-            dd["open_todos"] = dd.get("carried_todos") or []
+            dd["open_todos"] = [dict(x) for x in carried]
+        supersede.close_day_todos(self.store, dd["open_todos"])
+        for t in dd["tickets"]:
+            if supersede.close_todos(self.store.ticket(t)):
+                self.store.touch_ticket(t)
+        try:  # one supersession call per ticket with new items today, within today's model budget
+            cost, _ = supersede.run_day(self.store, self.cfg, self.health, day)
+            if cost:
+                dd["stats"]["cost_usd"] = round((dd["stats"].get("cost_usd") or 0) + cost, 4)
+                self._add_cost(day, cost)
+        except Exception:
+            common.log("agent", "supersession failed: " + traceback.format_exc())
         dd["closed"], dd["closed_at"] = True, common.now_iso()
         dd.pop("consolidate_next", None)
-        if dd["open_todos"]:
-            self.state["carry_todos"] = {"from": day, "todos": dd["open_todos"]}
+        still = [x for x in dd["open_todos"] if not x.get("closed_by")]  # done ones stay in the day, not carried
+        if still:
+            self.state["carry_todos"] = {"from": day, "todos": still}
             today = common.workday(common.now(), self.cfg)
             if os.path.exists(storemod.day_path(today)):
                 self._apply_carry(today)
