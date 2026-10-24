@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.5.0] - 2026-10-24
 
+- Stable-id item merges keep the newest nonempty detail, even when shorter, and advance its date, time, session and raw reference; older retries cannot replace it.
+
 Knowledge you can trust, and a one-minute brief per ticket. Work is filed under the ticket you name, old conclusions
 are superseded instead of piling up, file paths and queries are checked against what really happened, time is counted
 once, and every ticket page opens on a short, evidenced brief. Includes a data migration (backed up first).

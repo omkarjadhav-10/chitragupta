@@ -254,3 +254,5 @@ py -3 <plugin>/hooks/run.py agent rebuild --all --dry-run
 | `<storage.local_backup_dir>\worklog-kb-<day>.zip` (the last 7 kept) | the tick: the nightly backup, only when `storage.local_backup_dir` is set |
 
 `uninstall` removes the recall skill, the CLAUDE.md block (backup first), the scheduled job, the dashboard shortcuts and the data home's pre-commit hook when it calls the runtime, plus the runtime and the pointer. It keeps the share targets' `shares/` folders and the share clones (shared work, like the data home itself) and the backup zips in `storage.local_backup_dir`.
+
+Stable-id item merges keep the newest nonempty detail, even when shorter, and advance its date, time, session and raw reference; older retries cannot replace it.

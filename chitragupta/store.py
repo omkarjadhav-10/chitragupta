@@ -663,9 +663,13 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             for k in ("phase", "ref"):
                 if rec.get(k) and not old.get(k):
                     old[k] = rec[k]
-            if len(rec["detail"]) > len(old.get("detail") or "") and not older:
-                old["detail"] = rec["detail"]
-            if old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":
+            if rec["detail"] and not older:
+                if rec["detail"] != old.get("detail"):
+                    old.setdefault("history", []).append(_hist(old))
+                for k in ("detail", "date", "time", "session", "ref"):
+                    if rec.get(k) is not None:
+                        old[k] = rec[k]
+            if not older and old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":
                 old["confidence"] = "confirmed"
     else:
         items[iid] = dict(rec, id=iid, first_date=rec["date"])
