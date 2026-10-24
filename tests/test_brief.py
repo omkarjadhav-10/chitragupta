@@ -150,6 +150,24 @@ class CurrentItems(BriefBase, unittest.TestCase):
         self.assertIn(rc["text"], md)
         self.assertTrue(any(rc["text"][:40] in line for line in render.brief_context_lines(v)))
 
+    def test_header_names_the_tickets_own_branch_and_pr(self):
+        """A hotfix branch of another ticket that carried this fix is linked to the ticket, but the header names this
+        ticket's own branch and PR; an Epic with only a child's branch names none."""
+        from chitragupta import brief
+        tk = ticket()
+        tk["branches"] = ["feature/ABC-1001-x", "hotfix/ABC-1009/oct-release"]
+        tk["git"] = {"repos": {"shop-api": {"prs": [
+            {"number": 811, "state": "merged", "target": "qa", "source": "feature/ABC-1001-x"},
+            {"number": 900, "state": "closed", "target": "master", "source": "hotfix/ABC-1009/oct-release"}]}}}
+        h = brief.view(tk, T, self.cfg())["header"]
+        self.assertEqual(h["branch"], "feature/ABC-1001-x")
+        self.assertEqual(h["pr"]["number"], 811)
+        tk["branches"] = ["hotfix/ABC-1009/oct-release"]
+        tk["git"] = {"repos": {"shop-api": {"prs": [{"number": 900, "state": "closed", "target": "master",
+                                                       "source": "hotfix/ABC-1009/oct-release"}]}}}
+        h = brief.view(tk, T, self.cfg())["header"]
+        self.assertEqual((h["branch"], h["pr"]), ("", None))  # no branch of its own: none named, the lists keep them
+
     def test_a_todo_git_data_closed_is_not_current(self):
         from chitragupta import brief
         tk = ticket()
