@@ -620,6 +620,14 @@ def _merge_catalog(table, key, rec, ticket, day):
     table[key] = cur
 
 
+def _when(it):
+    return (str(it.get("date") or ""), hhmm_of(it.get("time")))
+
+
+def _hist(it):
+    return {"date": it.get("date"), "kind": it.get("kind"), "title": it.get("title"), "confidence": it.get("confidence")}
+
+
 def _merge_item(store, dd, t, gkey, rec, updates, tslot):
     slot = tslot(t)
     if t:
@@ -631,7 +639,13 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
     iid = target or common.stable_id(t or gkey, rec["kind"], rec["title"])
     if iid in items:
         old = items[iid]
-        if target:
+        older = _when(rec) < _when(old)  # a re-extracted earlier session: its text never replaces a newer one
+        if target and older:
+            hist = (old.get("history") or []) + [_hist(rec)]
+            old["history"] = sorted(hist, key=lambda h: str(h.get("date") or ""))[-5:]
+            old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
+            store.bump(t or gkey, "updates")
+        elif target:
             hist = old.get("history") or []
             hist.append({"date": old.get("date"), "kind": old.get("kind"), "title": old.get("title"),
                          "confidence": old.get("confidence")})
@@ -649,7 +663,7 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             for k in ("phase", "ref"):
                 if rec.get(k) and not old.get(k):
                     old[k] = rec[k]
-            if len(rec["detail"]) > len(old.get("detail") or ""):
+            if len(rec["detail"]) > len(old.get("detail") or "") and not older:
                 old["detail"] = rec["detail"]
             if old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":
                 old["confidence"] = "confirmed"
