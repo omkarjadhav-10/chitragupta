@@ -16,6 +16,7 @@ from . import common
 
 STATUSES = ("current", "superseded", "hypothesis", "confirmed", "done")
 SUPERSEDE_KINDS = ("root_cause", "finding", "decision", "fix", "how_it_works", "todo")
+KEY_KINDS = ("root_cause", "decision", "fix")
 INPUT_CAP = 30000  # chars of item JSON sent per ticket
 MAX_ITEMS = 80
 DETAIL_CHARS = 300
@@ -184,6 +185,9 @@ def supersede_input(store, t, day):
     pool = [i for i in tk["items"].values() if isinstance(i, dict) and not i.get("archived") and not i.get("review")
             and (i.get("kind") in SUPERSEDE_KINDS or is_user_note(i)) and i.get("status") not in ("superseded", "done")]
     pool.sort(key=lambda i: (i.get("date") or "", i.get("time") or "", i.get("id")), reverse=True)
+    # root causes, decisions, fixes and your notes are few and matter most: they go first, so a busy ticket's older
+    # conclusions never fall out of the window behind newer findings; the newest of the rest fill what is left
+    pool.sort(key=lambda i: 0 if (i.get("kind") in KEY_KINDS or is_user_note(i)) else 1)
     rows, size = [], 0
     for i in pool[:MAX_ITEMS]:
         r = {"id": i["id"], "kind": i.get("kind"), "title": i.get("title") or "",

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.support import Isolated, rd, rmtree, write_config
+from tests.support import Isolated, rd, rmtree, write_config, backup_file
 
 D = "2026-09-01"
 T = "ABC-1001"
@@ -190,6 +190,25 @@ class SupersessionTests(Base):
         st.touch_day(D)
         st.save()
 
+    def test_old_root_causes_are_sent_even_behind_many_newer_findings(self):
+        """Root causes, decisions and fixes are few and matter most: they always go in, before the newest of the rest
+        fill what is left (a busy ticket had 73 newer findings and its root causes fell out of the window)."""
+        from chitragupta import store, supersede
+        st = store.Store()
+        tk = st.ticket(T)
+        self.item(tk, "rc1", "root_cause", "Cancel skips the stock release", date="2026-08-01")
+        self.item(tk, "rc2", "root_cause", "Cancel releases stock only for paid orders", date="2026-08-02")
+        self.item(tk, "dc1", "decision", "Release stock in the cancel handler", date="2026-08-03")
+        for n in range(supersede.MAX_ITEMS + 20):
+            self.item(tk, "f%03d" % n, "finding", "Finding number %d about shop.orders" % n, date="2026-09-01",
+                      time="%02d:%02d" % (8 + n // 60, n % 60))
+        ids = [r["id"] for r in supersede.supersede_input(st, T, D)["items"]]
+        self.assertIn("rc1", ids)
+        self.assertIn("rc2", ids)
+        self.assertIn("dc1", ids)
+        self.assertIn("f%03d" % (supersede.MAX_ITEMS + 19), ids)  # the newest finding still goes in
+        self.assertLessEqual(len(ids), supersede.MAX_ITEMS)
+
     def test_three_conflicting_root_causes_leave_one_current(self):
         from chitragupta import agent, modelbudget, render
         self.day_with_causes()
@@ -272,7 +291,7 @@ class TodoMigration(Base):
         self.assertEqual(dd["carried_todos"], [{"text": "ABC-1002: ask QA", "ticket": "ABC-1002", "closed_by": None}])
         st = common.read_json(common.wl("state.json"))
         self.assertEqual(st["carry_todos"]["todos"][0]["ticket"], T)
-        self.assertTrue(os.path.isfile(os.path.join(res["backups"][-1], "data", "days", D[:4], D + ".json")))
+        self.assertTrue(os.path.isfile(backup_file(res["backups"], "kb5-todo-objects", "data", "days", D[:4], D + ".json")))
         from chitragupta import render
         self.assertIn("- [ ] ABC-1002: ask QA", render.render_day(store.Store(), D, {"day_starts_at": "04:00"}, {}))
 
