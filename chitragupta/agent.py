@@ -99,11 +99,11 @@ class Lock:
 # --------------------------------------------------------------------------- raw reading
 
 def read_lines(path, start, end=None):
-    """Complete JSON lines of a raw file between byte offsets, each with its 1-based line number in the file (`_ln`,
-    for evidence refs "raw/<day>/<sid>.jsonl:<line>"). Returns (events, new_offset)."""
+    """Complete JSON lines of a raw file between byte offsets, each tagged with its 1-based line number in the file
+    ("_ln", the item "ref" an extraction points at). Returns (events, new_offset)."""
     try:
         with open(path, "rb") as f:
-            ln = f.read(start).count(b"\n") if start else 0
+            base = f.read(start).count(b"\n") if start else 0
             f.seek(start)
             data = f.read() if end is None else f.read(max(0, end - start))
     except OSError:
@@ -112,12 +112,13 @@ def read_lines(path, start, end=None):
     if cut < 0:
         return [], start
     evs = []
-    for raw in data[: cut + 1].split(b"\n")[:-1]:
-        ln += 1
+    for n, raw in enumerate(data[: cut + 1].split(b"\n")[:-1], base + 1):
+        if not raw.strip():
+            continue
         try:
             ev = json.loads(raw.decode("utf-8", "replace"))
             if isinstance(ev, dict):
-                ev["_ln"] = ln
+                ev.setdefault("_ln", n)
                 evs.append(ev)
         except ValueError:
             continue
@@ -798,6 +799,7 @@ class Agent:
                                                    verified=True, verified_by="commit", repo=old.get("repo") or c["repo_name"])
                     if fl["path"] not in slot["files_changed"]:
                         slot["files_changed"].append(fl["path"])
+                storemod.mark_applied_fixes(tk, day)  # a fix naming a committed file is applied
                 self.store.touch_ticket(c["ticket"])
         if commits:
             self.extras.append("+%d commit%s" % (len(commits), "" if len(commits) == 1 else "s"))
@@ -975,6 +977,32 @@ class Agent:
             # run_sources() already ran this tick with a window reaching back past the previous scan,
             # so the day's commits are in before it is consolidated
             self.consolidate(day)
+            if dd.get("closed"):
+                self.refresh_briefs(sorted(dd.get("tickets") or {}))
+
+    def refresh_briefs(self, keys):
+        """Day close: rewrite the brief of each ticket (plus any left pending by the cap) whose inputs changed since its
+        brief (brief.source_hash), within brief.daily_cap and budget.model_daily_usd. Never per tick. What was made and
+        what was skipped, and why, goes to health "briefs"; a ticket skipped for the cap waits for the next day close."""
+        from . import brief
+        todo = list(dict.fromkeys(list(keys) + list(self.state.get("brief_pending") or [])))
+        made, skipped = [], {}
+        for t in todo:
+            if common.is_placeholder(t):
+                continue
+            try:
+                res = brief.generate(t, store=self.store, cfg=self.cfg, health=self.health)
+            except Exception:
+                common.log("agent", "brief %s failed: %s" % (t, traceback.format_exc()))
+                res = {"ok": False, "skipped": "error"}
+            if res.get("ok") and not res.get("skipped"):
+                made.append(t)
+            elif res.get("skipped") not in ("unchanged", None) and not res.get("epic"):
+                skipped[t] = res["skipped"]
+        self.state["brief_pending"] = [t for t in todo if skipped.get(t) == "budget"]
+        self.health["briefs"] = {"at": common.now_iso(), "made": made, "skipped": skipped}
+        if made:
+            self.extras.append("+%d brief%s" % (len(made), "" if len(made) == 1 else "s"))
 
     def consolidation_input(self, day):
         dd = self.store.day(day)

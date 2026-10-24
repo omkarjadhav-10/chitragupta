@@ -14,7 +14,8 @@ from . import sqlsent
 from .redact import redact_obj
 
 ITEM_KINDS = ["finding", "root_cause", "how_it_works", "fix", "decision", "config", "error",
-              "repro_test", "reference", "todo", "question", "blocker", "note"]
+              "repro_test", "reference", "todo", "question", "blocker", "note", "risk"]
+PHASES = ("before", "after", "both")  # how_it_works items: before the fix, after it, unchanged by it
 TICKET_RX = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
 
 
@@ -39,7 +40,7 @@ def new_ticket(t):
             "status": "", "status_inferred": "", "tldr": "", "tldr_date": "", "problem": "", "items": {}, "queries": {},
             "tables": {}, "apis": {}, "integrations": {}, "files": {}, "commits": {}, "timeline": {},
             "bruno": {}, "api_calls": {}, "replay": {}, "data_flow": {}, "table_relations": {}, "dbflow_conflicts": [],
-            "artifacts": {}}
+            "artifacts": {}, "tests": {}}
 
 
 def new_day(d):
@@ -235,8 +236,11 @@ def merge_extraction(store, res, ctx, prefixes):
         t = valid_ticket(t, known) if t else None
         return None if t and common.is_parent_ticket(t, cfg) else t  # a parent issue never gets items
 
+    touched = set()
+
     def tslot(t):
         if t:
+            touched.add(t)
             touch_ticket_meta(store, t, day, ctx.get("repo"), ctx.get("branch"))
             return dd["tickets"].setdefault(t, {"minutes": 0, "item_ids": [], "query_ids": [], "api_keys": [],
                                                  "table_keys": [], "integration_keys": [], "files_changed": [],
@@ -278,6 +282,13 @@ def merge_extraction(store, res, ctx, prefixes):
                "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
         if t and src:
             rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
+        if kind == "fix":
+            rec["state"] = "proposed"  # "applied" once an edit or a commit touches a file it names (mark_applied_fixes)
+        if kind == "how_it_works" and it.get("phase") in PHASES:
+            rec["phase"] = it["phase"]
+        ref = raw_ref(day, sid, it.get("line"))
+        if ref:
+            rec["ref"] = ref
         if t:  # K8: maybe another ticket's (or the worklog tool's own) note: flagged for review, never moved
             rv = offticket.check(store.ticket(t), t, rec, prefixes)
             if rv:
@@ -407,7 +418,44 @@ def merge_extraction(store, res, ctx, prefixes):
         if did and p not in slot["files_changed"]:
             slot["files_changed"].append(p)
 
+    for t in sorted(touched):
+        mark_applied_fixes(store.ticket(t), day)
     store.touch_day(day)
+
+
+def _names_file(text, path):
+    """True when `text` names the file at `path`: its repo path, or its file name as a whole word."""
+    low = text.lower()
+    p = path.replace("\\", "/").lower()
+    if p in low:
+        return True
+    base = p.rsplit("/", 1)[-1]
+    return len(base) >= 4 and "." in base and re.search(r"(?<![\w./-])" + re.escape(base) + r"(?![\w-])", low) is not None
+
+
+def mark_applied_fixes(tk, day=None):
+    """Fix items become state "applied" when a file they name was changed by an Edit/Write tool call or a commit
+    (a file record with verified_by edit / commit). Deterministic, never undone. Returns how many changed."""
+    files = [f for f in (tk.get("files") or {}).values()
+             if isinstance(f, dict) and f.get("changed") and f.get("verified") is True and f.get("verified_by") in ("edit", "commit")]
+    n = 0
+    for it in (tk.get("items") or {}).values():
+        if it.get("kind") != "fix" or it.get("state") == "applied" or not files:
+            continue
+        text = " ".join([it.get("title") or "", it.get("detail") or ""] + [str(e) for e in it.get("evidence") or []])
+        hit = next((f for f in sorted(files, key=lambda f: f.get("verified_by") != "commit") if _names_file(text, f.get("path") or "")), None)
+        if hit:
+            it.update(state="applied", applied_by=hit.get("verified_by"), applied_file=hit.get("path"),
+                      applied_at=day or hit.get("last") or "")
+            n += 1
+    return n
+
+
+def raw_ref(day, sid, line):
+    """"raw/<day>/<sid>.jsonl:<line>": the raw line an item came from (the digest's [HH:MM L<n>] marker), or None."""
+    if isinstance(line, bool) or not isinstance(line, int) or line < 1 or not day or not sid:
+        return None
+    return "raw/%s/%s.jsonl:%d" % (day, sid, line)
 
 
 def _merge_rec(old, new):
@@ -555,6 +603,9 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             store.bump(t or gkey, "updates")
         else:
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
+            for k in ("phase", "ref"):
+                if rec.get(k) and not old.get(k):
+                    old[k] = rec[k]
             if len(rec["detail"]) > len(old.get("detail") or ""):
                 old["detail"] = rec["detail"]
             if old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":

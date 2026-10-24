@@ -72,7 +72,7 @@ OWN = {
 }
 NEVER = ["raw captures", ".env files", "the local file list and paths", "Jira fields", "My notes"]
 KIND_TITLE = {"root_cause": "Root cause", "finding": "Findings", "how_it_works": "How it works", "fix": "Fix",
-              "decision": "Decisions", "config": "Configuration", "repro_test": "Repro and tests",
+              "decision": "Decisions", "risk": "Risks", "config": "Configuration", "repro_test": "Repro and tests",
               "reference": "References", "blocker": "Blockers", "question": "Open questions", "todo": "To do"}
 SHARE_DIR = paths.SHARE_DIR
 BUNDLE_RE = re.compile(r"^\d{8}-\d{4}-(team|public)(?:-\d+)?$")

@@ -576,6 +576,38 @@ CARD_SCHEMA = {"type": "object", "properties": {
     "required": ["found", "title", "status", "summary"], "additionalProperties": False}
 
 
+def _adf_text(x):
+    """Plain text of a description or comment body (a string, or Atlassian document JSON)."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return (x.get("text") or "") + " ".join(_adf_text(c) for c in x.get("content") or [])
+    if isinstance(x, list):
+        return " ".join(_adf_text(c) for c in x)
+    return ""
+
+
+def card_sources(raw, comments=10, description_chars=3000, comment_chars=500):
+    """The Jira description and the last `comments` comments of a jira_get_issue result, redacted and cut, kept on the
+    card as Recorded sources for the ticket brief. Comment authors are not kept.
+    -> {"description": str, "comments": [{"id", "at", "text"}]}"""
+    from .redact import redact
+    iss = unwrap(raw)
+    if not isinstance(iss, dict):
+        return {"description": "", "comments": []}
+    f = iss.get("fields") if isinstance(iss.get("fields"), dict) else {}
+    desc = iss.get("description") if iss.get("description") is not None else f.get("description")
+    lst = iss.get("comments") or (iss.get("comment") or {}).get("comments") or (f.get("comment") or {}).get("comments") or []
+    out = []
+    for c in lst[-comments:] if isinstance(lst, list) else []:
+        if isinstance(c, dict):
+            body = " ".join(_adf_text(c.get("body")).split())
+            if body:
+                out.append({"id": str(c.get("id") or ""), "at": str(c.get("created") or "")[:25],
+                            "text": common.truncate(redact(body), comment_chars)})
+    return {"description": common.truncate(redact(" ".join(_adf_text(desc).split())), description_chars), "comments": out}
+
+
 def jira_card(key, cfg, health):
     srv = server_name(cfg, "jira")
     reads = [mcp_tool(srv, "jira_get_issue")]
@@ -592,6 +624,8 @@ def jira_card(key, cfg, health):
     old = common.read_json(path, {}) or {}
     if not raw and old.get("raw"):
         rec["raw"] = old["raw"]  # keep the last good copy
+    if rec["raw"] and isinstance(out, dict):
+        out.update(card_sources(rec["raw"]))  # description + last 10 comments: the brief's Recorded sources
     common.write_json(path, rec)
     if raw and out.get("found"):
         health.setdefault("mcp", {})["jira_auth_ok"] = common.now_iso()

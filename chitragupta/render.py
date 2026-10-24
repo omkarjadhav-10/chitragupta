@@ -13,7 +13,7 @@ NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
 TAG = {"finding": "finding", "root_cause": "root cause", "how_it_works": "how it works", "fix": "fix",
        "decision": "decision", "config": "config", "error": "error", "repro_test": "repro", "reference": "reference",
-       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note"}
+       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note", "risk": "risk"}
 DIALECT = {"postgresql": ("PostgreSQL", "sql"), "sqlserver": ("SQL Server", "sql"), "mongodb": ("MongoDB", "javascript"),
            "mysql": ("MySQL", "sql"), "other": ("SQL", "sql")}
 OPEN_KINDS = ("todo", "question", "blocker")
@@ -649,6 +649,8 @@ def render_ticket(store, t):
             for _, b in sorted(tk.get("bruno", {}).items())]
     sec("How to reproduce / test", rep)
     sec("Decisions", by("decision"))
+    if by("risk"):
+        sec("Risks", by("risk"))
     sec("Open questions · TODO · blockers", by("question", "todo", "blocker"))
     rv = needs_review(t, items)
     if rv:

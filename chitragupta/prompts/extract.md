@@ -22,3 +22,6 @@ You are the extraction engine for the user's private engineering worklog. Input:
    "Found why document download fails, reproduced it on QA, and saved the steps to test it."
    "Checked the fix for all account access on/off cases, ran the tests, replied to the review comment and wrote the RCA."
 17. time_entries: only when the user states time spent or a meeting in a "note:" (e.g. "note: 1h call with Alex on ABC-1001 at 18:30"): ticket, date (YYYY-MM-DD, the work day unless they name another), start ("HH:MM" or ""), minutes, text (their words, as a worklog line). Otherwise empty.
+18. Activity lines start "[HH:MM Ln]": n is the line in the raw session file. Set an item's "line" to the n of the line it mostly comes from (null when there is none or you are unsure).
+19. how_it_works items: set "phase" to "before" (how it works now, before this ticket's fix), "after" (how it works once the fix is in) or "both" (unchanged by the fix). Use null for every other kind.
+20. kind "risk": a regression, side effect or open concern this activity actually shows (what could break, for whom, what to watch). Never speculation.

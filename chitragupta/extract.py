@@ -94,6 +94,8 @@ CONTENT_IN_DIGEST = (".bru", ".http", ".rest", ".json", ".sql", ".mmd", ".puml")
 
 def _line(ev):
     t = common.hhmm(ev.get("ts")) or "--:--"
+    if ev.get("_ln"):
+        t += " L%d" % ev["_ln"]  # the raw line, so an item can point at where it came from (item "ref")
     p = ev.get("payload") or {}
     e = ev.get("event")
     if e == "user-prompt":

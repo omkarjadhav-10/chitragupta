@@ -22,6 +22,7 @@ from . import dbflow
 from . import extract
 from . import replay
 from . import store as storemod
+from . import testruns
 from .redact import redact
 
 SCHEMA_VERSION = 2
@@ -81,12 +82,19 @@ class Features:
                 for c in replay.calls_from_event(ev, t):
                     if replay.add_call(self.store, t, c, day):
                         self.extras["requests"] += 0  # counted when saved
+                testruns.record(self.store, t, ev, day, sid)  # a test runner: one test record, no model
             elif tool in ("Write", "Edit", "MultiEdit") and ki.get("file_path") and not artmod.excluded(ki["file_path"], self.cfg):
                 self.queue_artifact(ki["file_path"], t, day, sid, ev.get("ts"), ki.get("content") if ki.get("content_mode") == "full" else None,
                                     ev.get("repo_root"), session.get("first") or ev.get("ts"))
             elif tool == "Artifact":
                 for url in ((p.get("outcome") or {}).get("artifact_links") or []) + ([ki["url"]] if ki.get("url") else []):
                     self.queue_link(url, ki.get("title") or "", t, day, sid, ki.get("file_path"))
+        elif e == "user-prompt":
+            for child, parents in common.breadcrumb_parents(p.get("prompt") or "", self.prefixes).items():
+                tk = self.store.ticket(child)  # an Epic's page lists the tickets a breadcrumb put under it
+                if any(x not in (tk.get("crumb_parents") or []) for x in parents):
+                    tk["crumb_parents"] = storemod._union(tk.get("crumb_parents"), parents)
+                    self.store.touch_ticket(child)
         elif e == "stop":
             msg = p.get("message") or ""
             found = [(b["kind"], b["text"]) for b in p.get("blocks") or []] or [(k, raw) for k, raw, _ in blocks.find(msg)]
