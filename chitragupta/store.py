@@ -625,7 +625,14 @@ def _when(it):
 
 
 def _hist(it):
-    return {"date": it.get("date"), "kind": it.get("kind"), "title": it.get("title"), "confidence": it.get("confidence")}
+    return json.loads(json.dumps({k: v for k, v in it.items() if k != "history"}))
+
+
+def _remember(it, version):
+    hist = it.setdefault("history", [])
+    snap = _hist(version)
+    if snap not in hist:
+        hist.append(snap)
 
 
 def _merge_item(store, dd, t, gkey, rec, updates, tslot):
@@ -641,15 +648,13 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
         old = items[iid]
         older = _when(rec) < _when(old)  # a re-extracted earlier session: its text never replaces a newer one
         if target and older:
-            hist = (old.get("history") or []) + [_hist(rec)]
-            old["history"] = sorted(hist, key=lambda h: str(h.get("date") or ""))[-5:]
+            _remember(old, rec)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
             store.bump(t or gkey, "updates")
         elif target:
             hist = old.get("history") or []
-            hist.append({"date": old.get("date"), "kind": old.get("kind"), "title": old.get("title"),
-                         "confidence": old.get("confidence")})
-            new = dict(rec, id=iid, first_date=old.get("first_date") or old.get("date"), history=hist[-5:])
+            hist.append(_hist(old))
+            new = dict(rec, id=iid, first_date=old.get("first_date") or old.get("date"), history=hist)
             new["evidence"] = _union(rec["evidence"], old.get("evidence"))[:10]
             for k in ("archived", "review_kept"):  # your decisions survive an update; new text is current again
                 if old.get(k):
@@ -659,13 +664,15 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             items[iid] = new
             store.bump(t or gkey, "updates")
         else:
+            if older and rec.get("detail") != old.get("detail"):
+                _remember(old, rec)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
             for k in ("phase", "ref"):
                 if rec.get(k) and not old.get(k):
                     old[k] = rec[k]
             if rec["detail"] and not older:
                 if rec["detail"] != old.get("detail"):
-                    old.setdefault("history", []).append(_hist(old))
+                    _remember(old, old)
                 for k in ("detail", "date", "time", "session", "ref"):
                     if rec.get(k) is not None:
                         old[k] = rec[k]
