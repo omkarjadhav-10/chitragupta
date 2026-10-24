@@ -30,7 +30,7 @@ tokens for both themes. `data-density="compact"` tightens spacing and `data-moti
 
 | Class / component | Use |
 |---|---|
-| `.pane`, `.rail`, `.top-nav`, `.desk` | the shell: top navigation, the side list, the page |
+| `.pane`, `.rail`, `.primary-nav`, `.more-nav`, `.desk` | the shell: top navigation, the side list, the page |
 | `PageHead`, `.pagehead`, `.pagehead-act` | a page's `h1` (focused on navigation) and its actions |
 | `.tkhead`, `.tkbar` | the ticket header and the slim bar with its tabs that stays in view |
 | `Tabs` / `TabPanel` | WAI-ARIA tabs: arrow keys, Home and End move; automatic activation |

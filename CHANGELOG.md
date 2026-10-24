@@ -48,6 +48,7 @@ once, and every ticket page opens on a short, evidenced brief. Includes a data m
 - `jira.parent_issue_types` (Epic, Initiative), `turn_tail_minutes`, `idle_minutes`, `rebuild.*` settings.
 
 ### Changed
+- Document the quiet Mix primary navigation and More pages menu with their actual component selectors.
 - Redesign the local dashboard with the quiet Mix layout: top navigation, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Dark Night ink is the default; saved theme choices remain respected. Fonts are bundled locally and embedded with their licenses in standalone ticket exports.
 - **Ticket attribution (K1, K2).** Each turn's ticket is decided once, for time and knowledge alike: the ticket named
   in the prompt (or a pasted Jira title) → the work branch of the session's own repo (never release/, environment or
