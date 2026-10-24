@@ -144,7 +144,8 @@ def event_chars(ev):
 
 
 class Digest(str):
-    """One extraction chunk: the digest text, plus `turns` [(HH:MM, ticket, src)] of the turns it holds and `default`,
+    """One extraction chunk: the digest text, plus `turns` [(HH:MM, ticket, src, raw line of the turn's first event)] of
+    the turns it holds and `default`,
     the ticket of its dominant turn (an item without a ticket falls back to its turn's ticket, then to this)."""
     turns = ()
     default = None
@@ -175,7 +176,7 @@ def build_digests(events, meta, candidates, already):
     for e in events:
         if "_src" in e and (e.get("event") == "user-prompt" or (e.get("_t"), e.get("_src")) != cur_key or not turns):
             cur_key = (e.get("_t"), e.get("_src"))
-            turns.append((redact(_turn_marker(e)), (common.hhmm(e.get("ts")), e.get("_t"), e.get("_src")), []))
+            turns.append((redact(_turn_marker(e)), (common.hhmm(e.get("ts")), e.get("_t"), e.get("_src"), e.get("_ln")), []))
         elif not turns:
             turns.append(("", None, []))
         l = _line(e)

@@ -58,11 +58,50 @@ INTERNAL_ENV = {"CHITRAGUPTA_INTERNAL": "1", "WORKLOG_INTERNAL": "1"}
 
 def prompt_path(name):
     """A prompt or schema file: a user override in <home>/.worklog/prompts wins over the packaged one.
-    `name` is relative to the prompts folder, e.g. "extract.md" or "schemas/extract.json"."""
-    override = wl("prompts", *name.split("/"))
-    if os.path.isfile(override):
-        return override
-    return os.path.join(PROMPTS_DIR, *name.split("/"))
+    `name` is relative to the prompts folder, e.g. "extract.md" or "schemas/extract.json". A stale override schema
+    (written for an older version: it lacks a field the packaged schema requires) is ignored, and so is the prompt
+    of the same name, which was written for it; agent.log says so once."""
+    parts = name.split("/")
+    packaged = os.path.join(PROMPTS_DIR, *parts)
+    override = wl("prompts", *parts)
+    if not os.path.isfile(override):
+        return packaged
+    kind = parts[-1].rsplit(".", 1)[0]
+    if (name.endswith(".md") or name.startswith("schemas/")) and stale_override(kind):
+        return packaged
+    return override
+
+
+_STALE_LOGGED = set()
+
+
+def _missing_fields(pack, over, path=""):
+    """Fields `pack` (a JSON schema) requires that `over` doesn't define, at any depth, as dotted paths."""
+    if not isinstance(pack, dict) or not isinstance(over, dict):
+        return []
+    have = over.get("properties") or {}
+    out = [path + k for k in pack.get("required") or [] if k not in have]
+    for k, v in (pack.get("properties") or {}).items():
+        if k in have:
+            out += _missing_fields(v, have[k], path + k + ".")
+    if isinstance(pack.get("items"), dict):
+        out += _missing_fields(pack["items"], over.get("items"), path)
+    return out
+
+
+def stale_override(kind):
+    """The fields an override of schemas/<kind>.json lacks (a non-empty list: stale), else []."""
+    over_p = wl("prompts", "schemas", kind + ".json")
+    pack_p = os.path.join(PROMPTS_DIR, "schemas", kind + ".json")
+    if not os.path.isfile(over_p) or not os.path.isfile(pack_p):
+        return []
+    over, pack = read_json(over_p, None), read_json(pack_p, None)
+    missing = _missing_fields(pack, over) if isinstance(over, dict) else ["(not a JSON schema)"]
+    if missing and over_p not in _STALE_LOGGED:
+        _STALE_LOGGED.add(over_p)
+        log("agent", "prompt override for %s is stale (no %s): using the packaged %s.md and schema" % (
+            kind, ", ".join(missing[:5]), kind))
+    return missing
 
 
 def wl(*parts):

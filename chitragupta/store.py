@@ -202,20 +202,41 @@ def touch_ticket_meta(store, t, day, repo=None, branch=None):
     return tk
 
 
+_HHMM = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)")
+
+
+def hhmm_of(s):
+    """"HH:MM" of an item's time as the model wrote it ("10:35", "2026-09-01 10:35", "10:35:12"), or ""."""
+    m = _HHMM.search(str(s or ""))
+    return "%02d:%s" % (int(m.group(1)), m.group(2)) if m and int(m.group(1)) < 24 else ""
+
+
+def _turn_at(ctx, hhmm):
+    """The chunk's turn (hhmm, ticket, src[, line]) an item at `hhmm` happened in: the last one started by then."""
+    hit = None
+    for tu in ctx.get("turns") or []:
+        if tu and hhmm and tu[0] and tu[0] <= hhmm:
+            hit = tu
+    return hit
+
+
+def turn_line(ctx, hhmm):
+    """The raw line of the turn an item at `hhmm` happened in (its prompt line), or None."""
+    tu = _turn_at(ctx, hhmm_of(hhmm))
+    return tu[3] if tu and len(tu) > 3 and tu[3] else None
+
+
 def turn_of(ctx, hhmm=None):
     """(ticket, src) an extracted item falls back to when the model gave it no ticket: the turn it happened in (the
     chunk's `turns`, by the item's HH:MM time), else the chunk's dominant turn (`default`). Without turns (older
     callers) the session-day's only candidate, as before."""
     turns = [t for t in ctx.get("turns") or [] if t]
     if turns:
-        hit = None
-        for start, t, src in turns:
-            if hhmm and start and start <= hhmm:
-                hit = (t, src)
-        if hit and hit[0]:
-            return hit
+        hit = _turn_at(ctx, hhmm_of(hhmm) if hhmm else None)
+        if hit and hit[1]:
+            return hit[1], hit[2]
         d = ctx.get("default")
-        return (d, next((s for _, t, s in turns if t == d), None)) if d else (None, None)
+        return (d, next((tu[2] for tu in turns if tu[1] == d), None)) if d else (None, None)
     if "default" in ctx:
         return ctx.get("default"), None
     c = ctx.get("candidates") or []
@@ -290,14 +311,15 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         rec = {"kind": kind, "title": title, "detail": (it.get("detail") or "").strip(),
                "evidence": [e for e in (it.get("evidence") or []) if e][:8],
                "confidence": it.get("confidence") or "likely", "date": day,
-               "time": it.get("time") or ctx.get("time", ""), "session": sid[:8]}
+               "time": hhmm_of(it.get("time")) or it.get("time") or ctx.get("time", ""), "session": sid[:8]}
         if t and src:
             rec["src"] = src  # where the ticket came from: prompt / jira-title / branch / carry, or model
         if kind == "fix":
             rec["state"] = "proposed"  # "applied" once an edit or a commit touches a file it names (mark_applied_fixes)
         if kind == "how_it_works" and it.get("phase") in PHASES:
             rec["phase"] = it["phase"]
-        ref = raw_ref(day, sid, it.get("line"))
+        # the raw line the model named, else the line of the turn the item happened in (its prompt line)
+        ref = raw_ref(day, sid, it.get("line")) or raw_ref(day, sid, turn_line(ctx, it.get("time")))
         if ref:
             rec["ref"] = ref
         if t:  # K8: maybe another ticket's (or the worklog tool's own) note: flagged for review, never moved

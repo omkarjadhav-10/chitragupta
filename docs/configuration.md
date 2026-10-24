@@ -332,7 +332,7 @@ Chitragupta counts as set up only when the resolved home has a `.worklog\config.
 
 ## Prompt overrides
 
-The prompts for model calls ship with the plugin (`chitragupta/prompts/*.md`, with JSON schemas in `prompts/schemas/`). To change one, put a file with the same name in `<home>\.worklog\prompts\`, for example `<home>\.worklog\prompts\extract.md` or `<home>\.worklog\prompts\schemas\extract.json`, and it wins over the packaged copy. The prompt files are:
+The prompts for model calls ship with the plugin (`chitragupta/prompts/*.md`, with JSON schemas in `prompts/schemas/`). To change one, put a file with the same name in `<home>\.worklog\prompts\`, for example `<home>\.worklog\prompts\extract.md` or `<home>\.worklog\prompts\schemas\extract.json`, and it wins over the packaged copy. An override schema written for an older version (one that lacks a field the packaged schema requires, such as the per-item `line` of `extract`) is ignored together with the prompt of the same name, and `agent.log` says so once: copy the packaged files again and re-apply your change. The prompt files are:
 
 - `extract`
 - `extract_delta`
