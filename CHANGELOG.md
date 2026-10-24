@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.5.0] - 2026-10-24
 
+- Jira-only brief verification is recomputed in both directions from the current status and brief.verified_statuses; reopening or removing a matching status revokes it unless a current passing test or replay independently supports verification.
+
 - Stable-id item merges keep the newest nonempty detail, even when shorter, and advance its date, time, session and raw reference; older retries cannot replace it.
 
 Knowledge you can trust, and a one-minute brief per ticket. Work is filed under the ticket you name, old conclusions

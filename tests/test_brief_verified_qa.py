@@ -66,3 +66,22 @@ class VerifiedByQa(tb.BriefBase, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JiraVerificationRegressions(VerifiedByQa):
+    def test_reopened_jira_status_revokes_jira_only_verification(self):
+        self.status("QA COMPLETED")
+        self.output["after"]["verified"] = {"state": "verified", "text": "QA passed it.", "cites": ["jira:" + tb.T]}
+        self.gen()
+        self.status("In Progress")
+        self.assertEqual(self.after()["state"], "not-verified")
+
+    def test_removing_a_verified_status_revokes_jira_only_verification(self):
+        from chitragupta import common
+        self.status("QA COMPLETED")
+        self.output["after"]["verified"] = {"state": "verified", "text": "QA passed it.", "cites": ["jira:" + tb.T]}
+        self.gen()
+        cfg = common.read_json(common.wl("config.json"))
+        cfg["brief"]["verified_statuses"] = ["Signed Off"]
+        common.write_json(common.wl("config.json"), cfg)
+        self.assertEqual(self.after()["state"], "not-verified")

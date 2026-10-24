@@ -753,14 +753,17 @@ def view(tk, key=None, cfg=None):
             if sid == "after":
                 v = dict(s.get("verified") or {"state": "not-verified", "text": "", "cites": []})
                 js = S.jira_status(tk)
-                by_test = v.get("state") == "verified" and any(not str(c).startswith("jira:") for c in v.get("cites") or [])
-                if not by_test and qa_verified(js, cfg):
+                proof = [c for c in v.get("cites") or [] if c in _Ctx(key, tk, None).passing]
+                by_test = v.get("state") == "verified" and bool(proof)
+                if by_test:
+                    v["label"], v["cites"] = "Verified", proof
+                elif qa_verified(js, cfg):
                     v = {"state": "verified", "label": "Verified by QA (Jira: %s)" % js, "cites": ["jira:" + key],
                          "text": v.get("text") if v.get("state") == "verified" else ""}
-                elif v.get("state") != "verified":
-                    v["state"], v["label"] = "not-verified", "Not verified yet"
                 else:
-                    v["label"] = "Verified"
+                    if v.get("state") == "verified":
+                        v["text"], v["cites"] = "", []
+                    v["state"], v["label"] = "not-verified", "Not verified yet"
                 d["verified"] = v
                 cited += v.get("cites") or []
         else:
