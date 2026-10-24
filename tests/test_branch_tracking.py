@@ -551,7 +551,7 @@ class Migration(TrackingCase):
         newcfg = common.read_json(common.wl("config.json"))
         self.assertEqual(newcfg["branching"]["guard_mode"], "warn")
         self.assertEqual(newcfg["chitragupta_migrations"], list(migrate.all_ids()), res.get("error"))
-        self.assertEqual(common.read_json(common.hp("data", "meta.json"))["schema_version"], 4)
+        self.assertEqual(common.read_json(common.hp("data", "meta.json"))["schema_version"], 5)  # 4, then the 0.5.0 steps
         self.assertEqual(common.read_json(common.hp("data", "branches.json")), legacy)  # the old file is left as it was
         self.assertTrue(migrate.run(wait_s=0)["already"])
         # the kept parent survives the first tick even though the reflog would infer the same

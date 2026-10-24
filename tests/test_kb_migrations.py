@@ -142,7 +142,8 @@ class RawRelativeKeysTests(Isolated, unittest.TestCase):
             "pending_chars": 0, "days": [self.D], "source": "hook"}}})
         res = migrate.run(wait_s=0)
         self.assertIn("raw-relative-keys", res.get("applied") or [], res)
-        with open(os.path.join(res["backups"][-1], ".worklog", "state.json"), encoding="utf-8") as f:
+        with open(os.path.join([b for b in res["backups"] if "raw-relative-keys" in b][0], ".worklog", "state.json"),
+                  encoding="utf-8") as f:
             self.assertIn("OldHome", f.read())  # the old state was backed up first
         files = common.read_json(common.wl("state.json"))["sessions"]["s1"]["files"]
         self.assertEqual(files, {"%s/s1.jsonl" % self.D: done})  # duplicates merged by the larger offsets
@@ -160,6 +161,31 @@ class RawRelativeKeysTests(Isolated, unittest.TestCase):
         a.run_extractions(any_size=True)
         self.assertEqual(self.calls, ["extract"])
         self.assertEqual(list(a.state["sessions"]["s1"]["files"]), ["%s/s1.jsonl" % self.D])
+
+
+class SchemaVersionTests(Isolated, unittest.TestCase):
+    """The last 0.5.0 step: data/meta.json schema_version 4 -> 5, after a backup; never lowered."""
+    def setUp(self):
+        self.isolate()
+
+    def test_raised_to_5_after_a_backup_and_never_lowered(self):
+        from chitragupta import common, kb5
+        common.write_json(common.hp("data", "meta.json"), {"schema_version": 4, "other": 1})
+        backed = []
+        kb5.schema_v5(True, [], backed.extend)
+        self.assertEqual(common.read_json(common.hp("data", "meta.json")), {"schema_version": 4, "other": 1})
+        notes = []
+        kb5.schema_v5(False, notes, backed.extend)
+        self.assertEqual(common.read_json(common.hp("data", "meta.json")), {"schema_version": 5, "other": 1})
+        self.assertIn(common.hp("data", "meta.json"), backed)
+        self.assertTrue(notes)
+        common.write_json(common.hp("data", "meta.json"), {"schema_version": 6})
+        kb5.schema_v5(False, [], backed.extend)
+        self.assertEqual(common.read_json(common.hp("data", "meta.json")), {"schema_version": 6})
+
+    def test_it_is_the_last_step(self):
+        from chitragupta import migrate
+        self.assertEqual(migrate.KB_STEPS[-1], ("kb5-schema-version", "kb5:schema_v5"))
 
 
 if __name__ == "__main__":

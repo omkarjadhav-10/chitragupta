@@ -361,3 +361,20 @@ def todo_objects(dry_run, notes, backup):
     if st_changed:
         common.write_json(spath, st)
     request_rerender(dry_run)
+
+
+SCHEMA_VERSION = 5
+
+
+def schema_v5(dry_run, notes, backup):
+    """The last 0.5.0 step: data/meta.json schema_version -> 5 (never lowered), once every data step above has run."""
+    p = common.hp("data", "meta.json")
+    meta = common.read_json(p, {}) or {}
+    if not isinstance(meta, dict) or int(meta.get("schema_version") or 1) >= SCHEMA_VERSION:
+        return
+    notes.append("data/meta.json: schema_version %s -> %d" % (meta.get("schema_version", 1), SCHEMA_VERSION))
+    backup([p])
+    if dry_run:
+        return
+    meta["schema_version"] = SCHEMA_VERSION
+    common.write_json(p, meta)
