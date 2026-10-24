@@ -162,6 +162,10 @@ class CurrentItems(BriefBase, unittest.TestCase):
         h = brief.view(tk, T, self.cfg())["header"]
         self.assertEqual(h["branch"], "feature/ABC-1001-x")
         self.assertEqual(h["pr"]["number"], 811)
+        tk["git"]["repos"]["shop-api"]["prs"].append({"number": 812, "state": "closed", "target": "master",
+                                                      "source": "feature/ABC-1001-x"})
+        h = brief.view(tk, T, self.cfg())["header"]
+        self.assertEqual(h["pr"]["number"], 811)  # a merged PR before a newer one closed unmerged
         tk["branches"] = ["hotfix/ABC-1009/oct-release"]
         tk["git"] = {"repos": {"shop-api": {"prs": [{"number": 900, "state": "closed", "target": "master",
                                                        "source": "hotfix/ABC-1009/oct-release"}]}}}

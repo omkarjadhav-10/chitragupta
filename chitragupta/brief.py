@@ -600,13 +600,14 @@ def _header(key, tk, b=None):
             "prs": [{"number": p["number"], "target": p.get("target") or "", "state": p.get("state") or ""} for p in _prs(tk)],
             "updated": (b or {}).get("generated_at") or tk.get("last") or ""}
     # the one repo / branch / PR the header line names: the ticket's own (its key in the branch name; another
-    # ticket's hotfix branch that carried the fix stays in the lists only), an open PR before a merged one, the newest
+    # ticket's hotfix branch that carried the fix stays in the lists only), an open PR, else a merged one, else any, the newest
     own = re.compile(r"(?<![A-Z0-9])%s(?![0-9])" % re.escape(key.upper()))
     h["repo"] = (h["repos"] or [""])[0]
     h["branch"] = ([x for x in h["branches"] if own.search(x.upper())] or [""])[-1]
     mine = [p for p, raw in zip(h["prs"], _prs(tk)) if not raw.get("source") or own.search(raw["source"].upper())]
     opn = [p for p in mine if p["state"] == "open"]
-    h["pr"] = (opn or mine or [None])[-1]
+    merged = [p for p in mine if p["state"] == "merged"]
+    h["pr"] = (opn or merged or mine or [None])[-1]
     return h
 
 
