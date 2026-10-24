@@ -6,9 +6,10 @@ Rules
 3. Name a file, table, endpoint or class only when the input names it. Prefer plain words.
 4. The user's notes (kind "note") win over any other item when they disagree.
 5. Plain, short sentences. No "I", no filler. The whole brief stays under 400 words.
+6. Facts win: the Fixes made list, the delivery stage and the Jira status are facts (facts.commits and facts.prs, facts.delivery_stage, facts.jira.status); never write a sentence that contradicts them (for example "no code change was needed" while commits exist).
 
 Sections
-- root_cause: at most 60 words. "confidence" is confirmed, likely or hypothesis, as the cited items support it; "none" when the cause is not found yet (then give the leading hypothesis as the claim, if there is one). If the input says "heading_1": "Why this change", write why the change is needed instead of a root cause.
+- root_cause: at most 60 words, one combined statement: lead with the original cause, then the layer that undid a fix, if any. "confidence" is confirmed, likely or hypothesis, as the cited items support it; "none" when the cause is not found yet (then give the leading hypothesis as the claim, if there is one). If the input says "heading_1": "Why this change", write why the change is needed instead of a root cause.
 - findings: 3 to 7 claims, each at most 25 words: the facts that helped most. At most one may be a ruled-out idea: start it "Ruled out:" and set label "ruled-out" (else label "").
 - before: 3 to 6 steps, at most 80 words in all: how it works today, before the fix (how_it_works items with phase before or both, the data flow, the queries).
 - proposed: the fix, at most 60 words, and "rejected": one line on the alternative that was rejected and why (empty text when none was).
