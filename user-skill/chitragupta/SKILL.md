@@ -64,7 +64,9 @@ available.
 3. Never claim more than the files say. If something isn't recorded, say so plainly. Answer from current items: in
    the ticket JSON an item with `status: "superseded"` was replaced by `superseded_by`, `archived` is out of every view,
    `review` means it may belong to another ticket (the hub's "Needs review"), and a TODO with `status: "done"` was
-   closed by `closed_by` (a PR or a pushed branch). Mention a superseded item only as history.
+   closed by `closed_by` (a PR or a pushed branch). Mention a superseded item only as history. An item archived with
+   reason "rebuild …" was replaced when the ticket was rebuilt from raw (`agent rebuild <KEY> --dry-run` prices one;
+   the user runs it, you don't).
 4. Ticket questions ("what was the root cause of ABC-1234?", "what did we change?", "any risks?"): answer from the brief
    first (`get_ticket(key)` leads with it; `get_ticket(key, section="brief")` has all of it with what each evidence id
    is), keep its evidence ids, and go to the findings only for detail it doesn't have. The user's corrections win:

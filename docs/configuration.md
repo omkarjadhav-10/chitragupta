@@ -95,6 +95,15 @@ Every internal model call (extraction, day summary, curation, DB flow, worklog c
 
 A ticket brief (see "The ticket brief" in [architecture.md](architecture.md)) is one call with `models.brief` (unset: `models.consolidate`). Its tokens and cost are recorded on the brief itself (`brief.tokens`, `brief.cost_usd`) and in the ledger under `by_purpose.brief`. A brief skipped for the cap waits for the next day close, `/cg:ticket <KEY> --brief` or the dashboard's Refresh brief.
 
+## `rebuild`
+
+`agent rebuild <KEY…> | --all` (see "Rebuilding a ticket from raw" in [architecture.md](architecture.md)) prices itself before it starts and refuses when the estimate is over the cap.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `rebuild.cap_usd` | number | `8` | The most one rebuild may spend. A real run whose estimate is higher changes nothing; one that reaches it mid-run stops cleanly and continues when run again. `--cap-usd N` overrides it for one run. |
+| `rebuild.est_usd_per_chunk` | number | `0.02` | The cost per extraction chunk used in the estimate when the spend ledger has no recent `extract` calls (with calls, their average is used). |
+
 ## `paths`
 
 Absolute paths to executables. Setup fills in any that are empty and replaces a recorded `claude` path that no longer exists.

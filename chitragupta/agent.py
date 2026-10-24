@@ -3,6 +3,8 @@
     agent tick [--force]   one pass: ingest -> extract -> sources -> close days -> render -> commit -> push
     agent loop             fallback launcher: tick every 5 minutes forever (single instance via locks/loop.lock)
     agent render [--all]   re-render markdown from data/
+    agent rebuild <KEY>... | --all [--dry-run] [--cap-usd N] [--no-brief]
+                           rebuild tickets' knowledge from the raw events on disk (chitragupta/rebuild.py)
     agent status           print health.json
 """
 import copy
@@ -1510,6 +1512,9 @@ def main(argv):
     if cmd == "render":
         cmd_render("--all" in argv)
         return 0
+    if cmd == "rebuild":
+        from . import rebuild
+        return rebuild.main(argv[1:])
     if cmd == "backfill-upgrade01":
         return cmd_backfill("--no-llm" not in argv, [a for a in argv[1:] if not a.startswith("--")])
     if cmd == "status":
