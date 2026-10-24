@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.support import GIT_IDENTITY, PY, Isolated, rmtree, write_config
+from tests.support import GIT_IDENTITY, PY, Isolated, rmtree, write_config, backup_file
 
 DAY = "2026-09-01"
 T = "ABC-1001"
@@ -126,7 +126,7 @@ class Migration(Isolated, unittest.TestCase):
         self.assertIsNone(f["src/A.java"]["verified"])
         self.assertTrue(f["src/A.java"]["changed"])  # kept; the path check decides whether it is shown
         self.assertTrue(f["src/B.java"]["verified"])
-        self.assertTrue(os.path.isfile(os.path.join(res["backups"][-1], "data", "tickets", T + ".json")))
+        self.assertTrue(os.path.isfile(backup_file(res["backups"], "kb5-paths-verified", "data", "tickets", T + ".json")))
 
 
 if __name__ == "__main__":

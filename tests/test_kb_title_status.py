@@ -3,7 +3,7 @@ import os
 import types
 import unittest
 
-from tests.support import PY, Isolated, write_config
+from tests.support import PY, Isolated, write_config, backup_file
 
 DAY = "2026-09-01"
 
@@ -119,7 +119,7 @@ class Migration(Isolated, unittest.TestCase):
         self.assertEqual((a["title"], a["title_hint"], a["status_inferred"], a["status"]), ("", "Guessed", "fix_ready", "fix_ready"))
         self.assertEqual((b["title"], b["status_inferred"], b["status"]), ("Real", "in_progress", "QA COMPLETED"))
         self.assertEqual((c["title"], c.get("status_inferred", ""), c["status"]), ("Mine", "", "Done"))
-        self.assertTrue(os.path.isfile(os.path.join(res["backups"][-1], "data", "tickets", "ABC-1001.json")))
+        self.assertTrue(os.path.isfile(backup_file(res["backups"], "kb5-title-status", "data", "tickets", "ABC-1001.json")))
 
 
 if __name__ == "__main__":

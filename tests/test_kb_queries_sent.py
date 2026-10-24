@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import Isolated, rmtree, write_config
+from tests.support import Isolated, rmtree, write_config, backup_file
 
 D = "2026-10-14"
 SID = "s1"
@@ -173,7 +173,7 @@ class Migration(Base):
         self.assertIs(q["q2"]["sent"], False)
         self.assertIsNone(q["q3"]["sent"])  # its raw is gone: unknown, still shown
         self.assertIsNone(q["q4"]["sent"])  # a saved script
-        self.assertTrue(os.path.isfile(os.path.join(res["backups"][-1], "data", "tickets", "ABC-1001.json")))
+        self.assertTrue(os.path.isfile(backup_file(res["backups"], "kb5-queries-sent", "data", "tickets", "ABC-1001.json")))
 
 
 if __name__ == "__main__":

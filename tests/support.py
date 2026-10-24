@@ -215,3 +215,11 @@ def _leftovers(dirs, n=10):
         for dp, _, fs in os.walk(d):
             out += [os.path.join(dp, f) for f in fs]
     return out[:n] or dirs
+
+
+def backup_file(backups, step, *rel):
+    """Where a migration step's backup keeps the copy of <rel> (manifest.json: a too-long path is stored under _long)."""
+    import json
+    dest = [b for b in backups if os.path.basename(b).startswith("chitragupta-%s-" % step)][0]
+    with open(os.path.join(dest, "manifest.json"), encoding="utf-8") as f:
+        return os.path.join(dest, json.load(f)[os.path.join(*rel)])
