@@ -129,6 +129,28 @@ class ParentNeverGetsWorkTests(AttrCase):
         self.assertEqual(len(st.ticket("ABC-1001")["items"]), 1)
         self.assertEqual(len(st.ticket("ABC-1001")["queries"]), 1)
 
+    def test_merge_only_into_selected_tickets(self):
+        """A rebuild of some tickets (K12) merges nothing into the others, or into no ticket; it counts what it left."""
+        from chitragupta import store as storemod
+        from chitragupta.store import Store
+        st = Store()
+        res = {"activity_summary": "looked at refunds",
+               "items": [{"kind": "finding", "title": "Cancel keeps stock", "ticket": "ABC-1001"},
+                         {"kind": "finding", "title": "Refund rounds down", "ticket": "ABC-1002"},
+                         {"kind": "finding", "title": "Untagged", "time": "09:00"}],
+               "queries": [{"text": "select 1 from shop.refunds", "ticket": "ABC-1002"}],
+               "tables": [{"name": "shop.refunds", "ticket": "ABC-1002"}],
+               "apis": [{"method": "GET", "path": "/refunds", "ticket": "ABC-1002"}],
+               "files": [{"path": "src/Refund.java", "ticket": "ABC-1002"}]}
+        ctx = {"day": D, "session": "s1", "time": "10:00", "repo": None, "branch": "qa", "candidates": ["ABC-1001"],
+               "default": None, "turns": [("10:00", "ABC-1001", "prompt")]}
+        storemod.merge_extraction(st, res, ctx, ["ABC"], only={"ABC-1001"})
+        self.assertEqual(sorted(i["title"] for i in st.ticket("ABC-1001")["items"].values()), ["Cancel keeps stock"])
+        self.assertNotIn("ABC-1002", st.day(D)["tickets"])
+        self.assertEqual(st.day(D)["other"], {})
+        self.assertEqual(ctx["ignored"], {"ABC-1002": 5, "-": 1})
+        self.assertNotIn("shop.refunds", st.catalog()["tables"])
+
     def test_hook_files_the_breadcrumb_child(self):
         repo = self.repo("shop-api", "qa")
         run_hook("user-prompt", {"session_id": "h1", "cwd": repo, "user_prompt": "ABC-1000 / ABC-1001\nwhy?"},

@@ -222,8 +222,10 @@ def turn_of(ctx, hhmm=None):
     return (c[0], None) if len(c) == 1 else (None, None)
 
 
-def merge_extraction(store, res, ctx, prefixes):
-    """Merge one validated extraction result. ctx: day, session, time, repo, branch, candidates."""
+def merge_extraction(store, res, ctx, prefixes, only=None):
+    """Merge one validated extraction result. ctx: day, session, time, repo, branch, candidates. `only` (a rebuild of
+    some tickets): anything filed to another ticket, or to none, is left out and counted in ctx["ignored"]
+    ({ticket or "-": n})."""
     day, sid = ctx["day"], ctx["session"]
     known = {p.upper() for p in prefixes}
     dd = store.day(day)
@@ -238,6 +240,13 @@ def merge_extraction(store, res, ctx, prefixes):
 
     touched = set()
 
+    def skip(t):
+        if only is None or t in only:
+            return False
+        ign = ctx.setdefault("ignored", {})
+        ign[t or "-"] = ign.get(t or "-", 0) + 1
+        return True
+
     def tslot(t):
         if t:
             touched.add(t)
@@ -251,7 +260,7 @@ def merge_extraction(store, res, ctx, prefixes):
     # ticket titles
     for link in res.get("ticket_links") or []:
         t = resolve(link.get("ticket"))
-        if t and link.get("title_hint"):
+        if t and link.get("title_hint") and (only is None or t in only):
             tk = touch_ticket_meta(store, t, day, ctx.get("repo"), ctx.get("branch"))
             if tk.get("title_hint_source") in (None, "", "branch"):
                 tk["title_hint"], tk["title_hint_source"] = link["title_hint"][:90], "model"
@@ -261,10 +270,10 @@ def merge_extraction(store, res, ctx, prefixes):
     if summ:
         t = default_t or (resolve((res.get("ticket_links") or [{}])[0].get("ticket")) if res.get("ticket_links") else None)
         entry = {"time": ctx.get("time", ""), "text": summ, "session": sid[:8]}
-        slot = tslot(t)
-        if entry["text"] not in [w["text"] for w in slot["what_i_did"]]:
+        slot = tslot(t) if only is None or t in only else None
+        if slot is not None and entry["text"] not in [w["text"] for w in slot["what_i_did"]]:
             slot["what_i_did"].append(entry)
-        if summ not in [a["text"] for a in dd["activity"]]:
+        if slot is not None and summ not in [a["text"] for a in dd["activity"]]:
             dd["activity"].append({"time": entry["time"], "ticket": t, "group": None if t else gkey, "text": summ})
 
     for it in res.get("items") or []:
@@ -276,6 +285,8 @@ def merge_extraction(store, res, ctx, prefixes):
         t = resolve(it.get("ticket"))
         src = (tsrc if t == tt else "model") if t else tsrc
         t = t or tt
+        if skip(t):
+            continue
         rec = {"kind": kind, "title": title, "detail": (it.get("detail") or "").strip(),
                "evidence": [e for e in (it.get("evidence") or []) if e][:8],
                "confidence": it.get("confidence") or "likely", "date": day,
@@ -300,6 +311,8 @@ def merge_extraction(store, res, ctx, prefixes):
         if not text:
             continue
         t = resolve(q.get("ticket")) or default_t
+        if skip(t):
+            continue
         qid = query_id(t or gkey, text)
         rec = {"id": qid, "date": day, "time": ctx.get("time", ""), "dialect": q.get("dialect") or "other",
                "text": text, "purpose": q.get("purpose") or "", "tables": q.get("tables") or [],
@@ -325,6 +338,8 @@ def merge_extraction(store, res, ctx, prefixes):
         if not name:
             continue
         t = resolve(tb.get("ticket")) or default_t
+        if skip(t):
+            continue
         slot = tslot(t)
         own = store.ticket(t)["tables"] if t else slot["tables"]
         key = kbnorm.table_key(name, [k for k in own if "." in k])
@@ -346,6 +361,8 @@ def merge_extraction(store, res, ctx, prefixes):
             continue
         method = (a.get("method") or "").upper().strip() or "ANY"
         t = resolve(a.get("ticket")) or default_t
+        if skip(t):
+            continue
         key = kbnorm.api_key(method, path)
         host = (a.get("host_or_service") or "").strip()
         rec = {"method": method, "path": path, "host_or_service": host,
@@ -370,6 +387,8 @@ def merge_extraction(store, res, ctx, prefixes):
         if not art:
             continue
         t = resolve(ig.get("ticket")) or default_t
+        if skip(t):
+            continue
         key = "%s|%s" % ((ig.get("system") or "other").lower(), art.lower())
         rec = {"system": ig.get("system") or "other", "artifact": art, "notes": ig.get("notes") or "", "last": day}
         _merge_catalog(cat["integrations"], key, rec, t, day)
@@ -390,6 +409,8 @@ def merge_extraction(store, res, ctx, prefixes):
         if not p:
             continue
         t = resolve(fl.get("ticket")) or default_t
+        if skip(t):
+            continue
         slot = tslot(t)
         # the model's path is a claim: `changed` only when this session edited it (or a commit has it, agent.py);
         # an unedited path stays verified None until the pathcheck step finds it in git
