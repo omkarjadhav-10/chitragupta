@@ -26,7 +26,7 @@ async function launch() {
 (async () => {
   const browser = await launch();
   for (const theme of ['light', 'dark']) {
-    for (const width of theme === 'light' ? [1440, 1280, 900] : [1440]) {
+    for (const width of [1440, 1280, 900]) {
       console.log(theme + ' · ' + width + ' px');
       // bypassCSP only so the test can inject axe; the page itself runs under the real CSP in every other check
       const ctx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, bypassCSP: true });
@@ -38,7 +38,7 @@ async function launch() {
       for (const [name, hash] of PAGES) {
         errors.length = 0;
         const t0 = Date.now();
-        await page.goto(base + hash, { waitUntil: 'domcontentloaded' });
+        await page.goto(base + '?theme=' + theme + hash, { waitUntil: 'domcontentloaded' });
         await page.waitForSelector('#page-title', { timeout: 10000 }).catch(() => errors.push('no page heading'));
         await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 10000 }).catch(() => errors.push('still loading after 10 s'));
         const ms = Date.now() - t0;
@@ -52,12 +52,41 @@ async function launch() {
           check(!v.length, msg + ': axe serious/critical ' + (v.join(', ') || 'none'));
           check(ms < 1000 || name === 'setup', msg + ': first view ' + ms + ' ms');
         }
-        if (width === 900) check(!(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), msg + ': no horizontal scroll');
+        check(!(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), msg + ': no horizontal scroll');
         check(!errors.length, msg + ': no errors' + (errors.length ? ' — ' + errors.join(' | ') : ''));
       }
       await ctx.close();
     }
   }
+
+  console.log('appearance');
+  const appearance = await browser.newContext({ colorScheme: 'light' });
+  const ap = await appearance.newPage();
+  await ap.goto(base);
+  const mode = () => ap.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  const canvas = () => ap.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  check(await mode() === 'dark' && await canvas() === 'rgb(15, 18, 22)', 'fresh browser defaults to Night ink on a light system');
+  await ap.evaluate(() => localStorage.setItem('cg-theme', 'light'));
+  await ap.reload();
+  check(await mode() === 'light' && await canvas() === 'rgb(250, 250, 248)', 'saved Light is preserved');
+  await ap.goto(base + '?theme=dark#/today');
+  check(await mode() === 'dark' && await ap.evaluate(() => localStorage.getItem('cg-theme')) === 'light', 'URL override is temporary');
+  await ap.evaluate(() => localStorage.setItem('cg-theme', 'system'));
+  await ap.goto(base);
+  check(await mode() === 'system' && await canvas() === 'rgb(250, 250, 248)', 'saved System follows a light system');
+  await ap.emulateMedia({ colorScheme: 'dark' });
+  check(await canvas() === 'rgb(15, 18, 22)', 'System follows a live system theme change');
+  await ap.waitForSelector('#page-title');
+  await ap.getByRole('button', { name: 'Theme: system. Switch to light', exact: true }).click();
+  await ap.reload();
+  check(await mode() === 'light', 'theme switch persists across reloads');
+  await appearance.close();
+  const noStorage = await browser.newContext({ colorScheme: 'light' });
+  await noStorage.addInitScript(() => Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage unavailable'); } }));
+  const ns = await noStorage.newPage();
+  await ns.goto(base);
+  check(await ns.evaluate(() => document.documentElement.getAttribute('data-theme')) === 'dark', 'unavailable local storage still defaults to dark');
+  await noStorage.close();
 
   console.log('keyboard');
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -109,6 +138,84 @@ async function launch() {
     es.addEventListener('cursor', () => { clearTimeout(t); es.close(); res(true); });
   }));
   check(sse, 'live updates: /api/events sends a cursor');
+
+  console.log('redesign interactions');
+  const recorded = await (await page.request.get(base + 'api/today')).json();
+  await page.setViewportSize({ width: 900, height: 900 });
+  await page.goto(base + '#/today');
+  await page.getByRole('button', { name: 'Pages', exact: true }).click();
+  check(await page.locator('#more-pages a').count() === 10, 'compact navigation exposes every page');
+  await page.keyboard.press('Escape');
+  check(await page.locator('#more-pages').count() === 0, 'Escape closes navigation from its trigger');
+  await page.locator('.dayline-span').first().click();
+  check(await page.locator('.dayline-detail').isVisible(), 'Day Line stretches expose their recorded details');
+
+  await page.goto(base + '#/tickets');
+  await page.getByRole('searchbox', { name: 'Filter tickets', exact: true }).fill('ABC-1001');
+  await page.waitForFunction(() => document.querySelectorAll('tbody tr').length === 1);
+  check((await page.locator('tbody').innerText()).includes('ABC-1001'), 'ticket filtering preserves the matching row');
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await page.getByRole('button', { name: 'Title', exact: true }).click();
+  check(await page.locator('th[aria-sort="ascending"]').innerText() === 'Title', 'ticket columns remain sortable');
+
+  await page.goto(base + '#/timesheet?day=' + today);
+  await page.locator('.markday').waitFor();
+  check(await page.locator('.dcell[aria-pressed="true"]').count() === 1, 'calendar retains the selected day');
+  await page.locator('.markday select').selectOption('holiday');
+  await page.getByRole('textbox', { name: 'Holiday name (optional)' }).fill('Synthetic holiday');
+  await page.locator('.markday').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.markday [aria-live]').textContent.includes('Added'));
+  check((await page.locator('.markday [aria-live]').innerText()).includes('Synthetic holiday'), 'calendar marking uses the protected action on the synthetic home');
+  const csv = await page.request.get(base + 'api/timesheet.csv?period=month');
+  check(csv.ok() && (await csv.text()).includes('ABC-1001'), 'timesheet CSV still exports recorded tickets');
+
+  await page.goto(base + '#/settings');
+  const sendAt = page.locator('input[type="time"]').first();
+  const originalTime = await sendAt.inputValue();
+  const changedTime = originalTime === '20:15' ? '20:30' : '20:15';
+  await sendAt.fill(changedTime);
+  await page.getByRole('button', { name: 'Review 1 change', exact: true }).click();
+  check(await page.getByRole('dialog', { name: 'Review changes' }).isVisible(), 'settings open the existing review before save');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.settings-save'));
+  await page.reload();
+  check(await page.locator('input[type="time"]').first().inputValue() === changedTime, 'reviewed settings persist through the protected write path');
+
+  const exportResponse = await page.request.get(base + 'api/tickets/ABC-1002/export?mode=full');
+  const exported = await exportResponse.text();
+  const exportPage = await ctx.newPage();
+  const exportErrors = [];
+  exportPage.on('pageerror', (e) => exportErrors.push(e.message));
+  exportPage.on('console', (m) => { if (m.type() === 'error') exportErrors.push(m.text()); });
+  exportPage.on('request', (r) => { if (!/^(data|blob):/.test(r.url())) exportErrors.push(r.url()); });
+  await exportPage.goto('data:text/html;base64,' + Buffer.from(exported).toString('base64'));
+  await exportPage.waitForSelector('#page-title');
+  await exportPage.evaluate(() => document.fonts.ready);
+  check(!exportErrors.length && await exportPage.locator('.font-licenses a').count() === 2, 'standalone export renders with embedded fonts and licenses and no network requests');
+  await exportPage.close();
+
+  let dayVariant;
+  await page.route('**/api/today', (r) => r.fulfill({ json: dayVariant }));
+  const emptyDay = { ...recorded, total_minutes: 0, tickets: [], other: [], lanes: [], worklog_saved: null };
+  dayVariant = { ...emptyDay, day_kind: 'workday', target_minutes: 480, worklog_preview: { kind: 'nudge', entries: [] } };
+  await page.goto(base + '#/today');
+  await page.locator('.day-total').waitFor();
+  check((await page.locator('.worklog-ledger').innerText()).includes('Nothing tracked yet today'), 'morning state has an honest empty worklog');
+  dayVariant = { ...emptyDay, day_kind: 'weekend', target_minutes: null, worklog_preview: { kind: 'none', reason: 'weekend', entries: [] } };
+  await page.reload();
+  await page.locator('.day-total').waitFor();
+  check((await page.locator('.day-total').innerText()).includes('A weekend. No daily target.'), 'weekend state does not invent an eight-hour target');
+  for (const [status, label] of [['sent', 'Sent to Slack'], ['failed', 'Send failed']]) {
+    dayVariant = { ...recorded, worklog_saved: { entries: recorded.worklog_preview.entries, text: recorded.worklog_preview.text, status, sent_at: recorded.day + 'T20:00:00', history: [] } };
+    await page.reload();
+    await page.locator('.worklog-ledger').waitFor();
+    check((await page.locator('.worklog-ledger').innerText()).includes(label), 'saved worklog state: ' + status);
+  }
+  await page.unroute('**/api/today');
+  await page.route('**/api/today', (r) => r.fulfill({ status: 500, json: { error: 'Synthetic load failure' } }));
+  await page.reload();
+  await page.getByText('Synthetic load failure', { exact: true }).waitFor();
+  check(await page.getByText('Synthetic load failure', { exact: true }).isVisible(), 'failed reads retain the dashboard error state');
   await browser.close();
   console.log(failed ? failed + ' check(s) failed' : 'all checks passed');
   process.exit(failed ? 1 : 0);

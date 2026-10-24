@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def main(argv):
-    shots = argv[argv.index("--shots") + 1] if "--shots" in argv else ""
+    shots = os.path.abspath(argv[argv.index("--shots") + 1]) if "--shots" in argv else ""
     home = tempfile.mkdtemp(prefix="cg-ui-home-")
     user = tempfile.mkdtemp(prefix="cg-ui-user-")
     for k in [k for k in os.environ if k.startswith(("CHITRAGUPTA_", "WORKLOG_"))]:

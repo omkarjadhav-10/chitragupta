@@ -18,6 +18,7 @@ Modes
 
 Exports live under tickets/, which the data home never pushes (storage.push_paths allows daily/ and README.md only).
 """
+import base64
 import copy
 import json
 import os
@@ -284,6 +285,32 @@ def _inline(text, tag):
     return re.sub(r"(?i)</" + tag, "<\\\\/" + tag, text)
 
 
+def _export_css():
+    """Keep the locally served typefaces inside the standalone export too."""
+    from .dashboard import server
+    css = _app_file("app.css")
+    for name in ("source-serif-4", "ibm-plex-sans"):
+        with open(os.path.join(server.APP_DIR, "fonts", name + ".woff2"), "rb") as font:
+            data = base64.b64encode(font.read()).decode("ascii")
+        css = css.replace("/app/fonts/" + name + ".woff2", "data:font/woff2;base64," + data)
+    return css
+
+
+def _font_notices():
+    """Distribute each embedded font's OFL with the exported document, available offline."""
+    from .dashboard import server
+    links = []
+    for name, label in (("source-serif-4", "Source Serif 4"), ("ibm-plex-sans", "IBM Plex Sans")):
+        path = server.vendor_path("fonts", name + ".LICENSE")
+        license_text = common.read_text(path) if path else ""
+        if not license_text:
+            raise RuntimeError("missing font license: " + name)
+        data = base64.b64encode(license_text.encode("utf-8")).decode("ascii")
+        links.append('<p><a download="%s-OFL.txt" href="data:text/plain;charset=utf-8;base64,%s">%s: SIL Open Font License 1.1</a></p>'
+                     % (name, data, label))
+    return '<details class="font-licenses"><summary>Font licenses</summary>%s</details>' % "".join(links)
+
+
 def render(t):
     """The dashboard page (app/index.html) with its CSS, scripts, the snapshot and — when a diagram needs it — Mermaid
     inlined. A CSP inside the file blocks every request."""
@@ -294,7 +321,7 @@ def render(t):
     for tag in _PAGE_TAGS:
         page = re.sub(tag, "", page)
     head = ('<meta http-equiv="Content-Security-Policy" content="%s">\n<script>%s</script>\n<style>%s</style>\n'
-            % (EXPORT_CSP, _inline(_app_file("theme.js"), "script"), _inline(_app_file("app.css"), "style")))
+            % (EXPORT_CSP, _inline(_app_file("theme.js"), "script"), _inline(_export_css(), "style")))
     data = '<script id="cg-export" type="application/json">%s</script>\n' % _json_for_script(t)
     data += '<script id="cg-modules" type="application/json">%s</script>\n' % _json_for_script(app_modules())
     if needs_mermaid(t):
@@ -302,6 +329,7 @@ def render(t):
         if js:
             data += "<script>%s</script>\n" % _inline(js, "script")
     data += "<script>%s</script>\n" % _LOADER
+    data += _font_notices()
     title = "%s · Chitragupta export" % t.get("key", "")
     page = page.replace("<title>Chitragupta</title>", "<title>%s</title>" % _esc(title), 1)
     return page.replace(HEAD_MARKER, head, 1).replace(MARKER, data, 1)

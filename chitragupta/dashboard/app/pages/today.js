@@ -2,23 +2,22 @@
 // and tonight's Jira entries with a copy button per field.
 import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtMin, clock, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction } from '../lib/core.js';
+import { useApi, fmtMin, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction } from '../lib/core.js';
 import { Icon, Status, CopyButton, Empty, Load, PageHead, TicketLink, Scroll, Dialog } from '../lib/ui.js';
-import { Desk, pageKeys, paletteOpen } from '../lib/shell.js';
+import { Desk, pageKeys } from '../lib/shell.js';
 
 const SAVED_WORD = { sent: 'Sent to Slack', nudged: 'Reminder sent', failed: 'Send failed', composed: 'Composed, not sent yet', none: 'Nothing to send' };
 
-function Ring({ value, target }) {
-  const R = 76, C = 2 * Math.PI * R, pct = Math.min(1, target ? value / target : 0);
-  return html`<div class="ring" role="img" aria-label=${fmtMin(value) + ' tracked of ' + fmtMin(target) + ' target'}>
-    <svg viewBox="0 0 172 172" aria-hidden="true"><circle cx="86" cy="86" r=${R} fill="none" stroke="var(--sunk)" stroke-width="12" />
-      <circle class="arc" cx="86" cy="86" r=${R} fill="none" stroke="var(--accent)" stroke-width="12" stroke-linecap="round" stroke-dasharray=${C * pct + ' ' + C} /></svg>
-    <div class="c" aria-hidden="true"><div class="v">${clock(value)}</div><div class="of">tracked · target ${fmtMin(target).replace(' 00m', '')}</div></div></div>`;
-}
-
 function hhmm(ts) { return ts && ts.length >= 16 ? ts.slice(11, 16) : ts || ''; }
 
-function Lanes({ lanes, commits, slots }) {
+function Lanes({ lanes, commits, slots, entries, isToday }) {
+  const [selected, setSelected] = useState(null);
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    if (!isToday) return undefined;
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, [isToday]);
   const all = lanes.flatMap((l) => l.spans || []);
   if (!all.length && lanes.some((l) => l.minutes > 0)) {  // totals in the day file, but no activity left to place them in the day
     return html`<p class="muted small">The times of day aren't available for this day, only the totals.</p>
@@ -30,18 +29,28 @@ function Lanes({ lanes, commits, slots }) {
   const span = Math.max(60, hi - lo);
   const x = (t) => Math.max(0, Math.min(100, ((mins(hhmm(t)) - lo) / span) * 100));
   const ticks = [];
-  for (let m = lo; m <= hi; m += Math.max(60, Math.round(span / 6 / 60) * 60)) ticks.push(html`<span key=${m}>${pad(Math.floor(m / 60))}:00</span>`);
-  return html`<div class="lanes">
-    <div class="hours" aria-hidden="true"><span></span><span class="ticks">${ticks}</span><span></span></div>
-    ${lanes.map((l) => html`<div class=${'lane ' + slots[l.ticket || '']} key=${l.ticket || 'other'}>
-      <div class="who">${l.ticket ? html`<${TicketLink} k=${l.ticket} />` : html`<span class="tkey">Other work</span>`}<span class="t">${l.ticket ? l.title || '' : 'No ticket'}</span></div>
-      <div class="track" aria-hidden="true">
-        ${(l.spans || []).map((s, i) => html`<span key=${i} class="seg" style=${{ left: x(s[0]) + '%', width: Math.max(0.4, x(s[1]) - x(s[0])) + '%' }} title=${hhmm(s[0]) + '–' + hhmm(s[1])}></span>`)}
-        ${commits.filter((c) => (c.ticket || '') === (l.ticket || '')).map((c, i) => html`<span key=${'c' + i} class="tick" style=${{ left: x(c.time) + '%' }} title=${'Commit ' + c.time + ': ' + (c.subject || '')}></span>`)}
-      </div>
-      <div class="m">${fmtMin(l.minutes)}</div></div>`)}
+  for (let m = lo; m <= hi; m += Math.max(60, Math.round(span / 6 / 60) * 60)) ticks.push(html`<span key=${m} style=${{ left: ((m - lo) / span) * 100 + '%' }}>${pad(Math.floor(m / 60))}:00</span>`);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return html`<div class="dayline">
+    <div class="dayline-axis" aria-hidden="true">${ticks}</div>
+    <div class="dayline-row"><span class="dayline-label">Worked</span><div class="dayline-track">
+      ${lanes.map((l) => (l.spans || []).map((s, i) => html`<button type="button" key=${(l.ticket || 'other') + i} class=${'dayline-span ' + slots[l.ticket || '']}
+        style=${{ left: x(s[0]) + '%', width: Math.max(0.4, x(s[1]) - x(s[0])) + '%' }}
+        aria-label=${(l.ticket || 'Other work') + ', ' + hhmm(s[0]) + ' to ' + hhmm(s[1])}
+        onClick=${() => setSelected({ ticket: l.ticket, title: l.title, from: hhmm(s[0]), to: hhmm(s[1]) })}>
+        <span>${l.ticket || 'Other'}</span></button>`))}
+      ${commits.map((c, i) => html`<span key=${i} class="dayline-commit" style=${{ left: x(c.time) + '%' }} title=${'Commit ' + c.time + ': ' + (c.subject || '')}></span>`)}
+      ${isToday && nowMinutes >= lo && nowMinutes <= hi ? html`<span class="dayline-now" style=${{ left: ((nowMinutes - lo) / span) * 100 + '%' }}><span>now</span></span>` : null}
+    </div></div>
+    <div class="dayline-row"><span class="dayline-label">Jira</span><div class="dayline-track jira-track">
+      ${(entries || []).map((e, i) => html`<span key=${i} class="jira-span" style=${{ left: x(e.start) + '%', width: Math.max(0.4, Math.min(100 - x(e.start), (e.minutes || 0) / span * 100)) + '%' }}
+        title=${e.ticket + ': ' + e.start + ', ' + e.duration}><span>${e.ticket}</span></span>`)}
+    </div></div>
   </div>
-  <div class="legend"><span><i class="tick"></i>Commit</span><span>Each row is a ticket; bars are the stretches you worked on it.</span></div>
+  ${selected ? html`<div class="dayline-detail" role="status"><span>${selected.from}–${selected.to}</span>
+    <span>${selected.ticket ? html`<${TicketLink} k=${selected.ticket} />` : 'Other work'} ${selected.title || ''}</span>
+    <button type="button" class="btn quiet" onClick=${() => setSelected(null)}>Close</button></div>` : null}
+  <div class="legend"><span><i class="tick"></i>Commit</span><span>Choose a stretch to see the work. Jira shows the rounded entries below.</span></div>
   <details class="more"><summary>Show the day as a table</summary>
     <${Scroll} label="The day as a table"><table><caption class="sr">Time per ticket with the times worked</caption>
       <thead><tr><th scope="col">Ticket</th><th scope="col">Worked</th><th scope="col" class="num">Time</th></tr></thead>
@@ -85,8 +94,9 @@ function Entries({ d, onReload }) {
       const what = 'for entry ' + (i + 1) + ' (' + e.ticket + ')';
       return html`<div class="entry" key=${i}>
         <div class="fld"><span class="lab">Start</span><div class="val"><span>${e.start}</span><${CopyButton} text=${e.start} quiet what=${'start ' + what} /></div></div>
+        <div class="entry-ticket"><${TicketLink} k=${e.ticket} />${e.manual ? html`<span class="muted small">Logged by hand</span>` : null}</div>
         <div class="fld"><span class="lab">Duration</span><div class="val"><span>${e.duration}</span><${CopyButton} text=${e.duration} quiet what=${'duration ' + what} /></div></div>
-        <div class="fld desc"><span class="lab"><${TicketLink} k=${e.ticket} />${e.manual ? ' · logged by hand' : ''} · description</span>
+        <div class="fld desc"><span class="lab sr">Description</span>
           <div class="val txt"><span>${e.description}${!useSaved && e.pending_condense ? html` <span class="chip small" title="This line is shortened by the model when the message is composed at 20:00">condensed at ${pv.send_at || '20:00'}</span>` : null}</span><${CopyButton} text=${e.description} quiet what=${'description ' + what} /></div></div></div>`;
     })}</div>
     <div class="entry-foot"><span class="muted small">${useSaved ? 'Version ' + (saved.version || 1) + '. '
@@ -96,7 +106,7 @@ function Entries({ d, onReload }) {
   }
   if (!useSaved) body = html`${body}<${PreviewButtons} d=${d} pv=${pv} onDone=${onReload} />`;
   body = html`${body}<${SendHistory} saved=${saved} day=${d.day} />`;
-  return html`<section class="sec" aria-labelledby="sec-jira"><div class="sec-head"><h2 id="sec-jira">${d.is_today === false ? 'Jira entries' : "Tonight's Jira entries"}</h2>
+  return html`<section class="sec worklog-ledger" aria-labelledby="sec-jira"><div class="sec-head"><h2 id="sec-jira">${d.is_today === false ? 'Worklog' : "Tonight's worklog"}</h2>
     <p class="sub">${entries.length ? fmtMin(total) + ' in ' + plural(entries.length, 'entry', 'entries') : ''}${pv.target ? ' · target ' + fmtMin(pv.target) : ''}</p><span class="grow"></span>${state}</div>${body}</section>`;
 }
 
@@ -161,7 +171,7 @@ export function TodayPage({ route }) {
   const res = useApi(day ? '/api/day/' + encodeURIComponent(day) : '/api/today');
   const tks = useApi('/api/tickets');
   const d = res.data;
-  // Bars come from the activity blocks (when you worked); minutes come from the day file, like the ring, the
+  // Stretches come from activity blocks; minutes come from the day file, like the summary, the
   // Timesheet and the ticket totals, so every number on the page agrees.
   const lanes = useMemo(() => {
     if (!d) return [];
@@ -185,36 +195,37 @@ export function TodayPage({ route }) {
     pageKeys.set(keys);
     return () => pageKeys.set({});
   }, [d, shown]);
-  const target = (d && (d.target_minutes || (d.worklog_preview || {}).target)) || 480;
+  const dayKind = d && d.day_kind;
+  const suppliedTarget = d && (d.target_minutes ?? (d.worklog_preview || {}).target);
+  const target = suppliedTarget ?? (['weekend', 'holiday', 'leave'].includes(dayKind) ? 0 : 480);
   const isToday = d ? d.is_today !== false && !day : !day;
-  const rail = html`<div class="now">
-      ${d ? html`<${Ring} value=${d.total_minutes} target=${target} />` : html`<div class="ring"></div>`}
-      <p class="on">${!d || !lanes.length ? 'Nothing tracked yet' : lanes[0].ticket ? html`Most time on <b>${lanes[0].ticket}</b>` : 'Most time on work without a ticket'}${d && d.last_activity ? ' · last activity ' + d.last_activity : ''}</p>
-      <div class="daynav">
+  const dayTools = html`<div class="day-tools"><div class="daynav">
         <a class="btn" href=${shown ? '#/day/' + addDays(shown, -1) : '#/today'}><${Icon} name="left" size=${16} />Previous day</a>
         ${day ? html`<a class="btn" href="#/today">Today</a>` : null}
         ${day ? html`<a class="btn" href=${'#/day/' + addDays(shown, 1)}>Next<${Icon} name="right" size=${16} /></a>` : null}
       </div>
-      <label class="field" style="margin-top:12px;width:100%">Go to a day
-        <input type="date" value=${shown || ''} max=${isoDay(new Date())} onChange=${(e) => { const v = e.currentTarget.value; if (v) go('#/day/' + v); }} /></label></div>
-    <h2>${isToday ? "Today's tickets" : 'Tickets that day'}</h2>
+      <label class="field"><span class="sr">Go to a day</span>
+        <input type="date" value=${shown || ''} max=${isoDay(new Date())} onChange=${(e) => { const v = e.currentTarget.value; if (v) go('#/day/' + v); }} /></label></div>`;
+  const ticketSummary = html`<section class="sec day-tickets"><h2>${isToday ? "Today's tickets" : 'Tickets that day'}</h2>
     <ul class="rlist">${lanes.length ? lanes.map((l) => html`<li key=${l.ticket || 'other'}>${l.ticket
       ? html`<a href=${'#/tickets/' + encodeURIComponent(l.ticket)} class=${slots[l.ticket]}><span class="sw"></span><span><span class="k">${l.ticket}</span><span class="t">${l.title || ''}</span></span><span class="m">${fmtMin(l.minutes)}</span></a>`
       : html`<div class="ritem to"><span class="sw"></span><span><span class="k">Other work</span><span class="t">No ticket</span></span><span class="m">${fmtMin(l.minutes)}</span></div>`}</li>`)
-      : html`<li class="muted small" style="padding:8px">No tickets yet.</li>`}</ul>`;
-  return html`<${Desk} rail=${rail} railLabel="Day summary">
+      : html`<li class="muted small" style="padding:8px">No tickets yet.</li>`}</ul></section>`;
+  return html`<${Desk} className="today-desk">
     <${Load} res=${res} lines=${8}>${(d) => html`
-      <${PageHead} title=${isToday ? 'Today' : fmtDay(d.day)} sub=${(isToday ? fmtDay(d.day) + ' · ' : '') + plural(d.sessions || 0, 'session') + ' · ' + plural(d.commits || 0, 'commit') + (d.closed ? ' · day closed' : '') + (d.updated_at ? ' · updated ' + fmtTs(d.updated_at) : '')}>
-        <button type="button" class="btn" onClick=${() => paletteOpen.set(true)}><${Icon} name="tickets" size=${16} />Open a ticket<kbd>Ctrl K</kbd></button>
+      <${PageHead} title=${fmtDay(d.day)} sub=${plural(d.sessions || 0, 'session') + ' · ' + plural(d.commits || 0, 'commit') + (d.closed ? ' · day closed' : '')}>
+        ${dayTools}
       </${PageHead}>
+      <div class="day-total"><div><span class="tracked-total">${fmtMin(d.total_minutes)}</span><span class="total-target">${target ? 'of ' + fmtMin(target) : 'tracked'}</span></div>
+        <p>${target ? d.total_minutes >= target ? 'Daily target reached.' : fmtMin(Math.max(0, target - d.total_minutes)) + ' to your daily target.' : ({ weekend: 'A weekend. No daily target.', holiday: 'A holiday. No daily target.', leave: 'On leave. No daily target.' }[dayKind] || 'No daily target.')}${d.updated_at ? html`<span class="updated-at">Updated ${fmtTs(d.updated_at)}</span>` : null}</p></div>
       ${d.summary ? html`<p class="lede">${d.summary}</p>` : null}
-      <${Alerts} tickets=${day ? dayAlerts(d.alerts) : tks.data && tks.data.tickets} />
       ${!(d.tickets || []).length && !(d.other || []).length && !d.worklog_saved ? html`<${Empty} title=${'Nothing was recorded on ' + fmtDay(d.day)} icon="day">
         No Claude Code sessions, commits or Jira entries for this day. Use the date picker or previous and next to move; <a href="#/today">go to Today</a>.</${Empty}>` : html`
-      <section class="sec" aria-labelledby="sec-day"><div class="sec-head"><h2 id="sec-day">The day, ticket by ticket</h2>
+      <section class="sec dayline-section" aria-labelledby="sec-day"><div class="sec-head"><h2 id="sec-day">The day line</h2>
         <p class="sub">${fmtMin(d.total_minutes)} tracked${d.other && d.other.length ? ', ' + fmtMin(d.other.reduce((a, o) => a + o.minutes, 0)) + ' without a ticket' : ''}</p></div>
-        <${Lanes} lanes=${lanes} commits=${d.commit_list || []} slots=${slots} /></section>
-      <${Entries} d=${Object.assign({ is_today: isToday }, d)} onReload=${res.reload} />`}
+        <${Lanes} lanes=${lanes} commits=${d.commit_list || []} slots=${slots} entries=${(d.worklog_saved && d.worklog_saved.entries && d.worklog_saved.entries.length ? d.worklog_saved.entries : (d.worklog_preview || {}).entries) || []} isToday=${isToday} /></section>`}
+      <div class="day-bottom"><div><${Entries} d=${Object.assign({ is_today: isToday }, d)} onReload=${res.reload} /></div>
+        <aside class="day-margin" aria-label="Day notes">${ticketSummary}<h2>Needs you</h2><${Alerts} tickets=${day ? dayAlerts(d.alerts) : tks.data && tks.data.tickets} /></aside></div>
       <${DayEvents} events=${d.branch_events} />
       ${d.other && d.other.length ? html`<section class="sec" aria-labelledby="sec-other"><div class="sec-head"><h2 id="sec-other">Other work</h2><p class="sub">Repos and branches with no ticket</p></div>
         <ul class="other-list">${d.other.map((o) => html`<li key=${o.group}><span>${o.group}</span><span>${fmtMin(o.minutes)}</span></li>`)}</ul></section>` : null}

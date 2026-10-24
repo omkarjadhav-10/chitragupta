@@ -31,16 +31,17 @@ The installed app window and the shortcuts only work on this machine: the server
 
 ## Layout
 
-- **Top bar:** the command field (<kbd>Ctrl</kbd> <kbd>K</kbd>), status for capture, Slack and each MCP server (each an icon and words, linking to Health), and the theme switch.
-- **Navigation** down the left: Today, Tickets, Timesheet, Knowledge, Search, Health, and at the bottom Setup and Settings. *Show labels* (or <kbd>[</kbd>) widens it; the choice is remembered in this browser.
-- **Side list:** each page's own list or filters (the day's tickets, ticket filters, months, tables, result types). Below 1040 px it folds into a *Show …* button above the page.
-- **The page.**
+- **Top navigation:** Today, Tickets, Timesheet, Knowledge, Health and Settings, with the current page underlined. Health shows a count of current problems. **More** opens DB map, Search, Team notes and Setup; below 1100 px, **Pages** contains all destinations. <kbd>[</kbd> toggles this menu; <kbd>Esc</kbd> closes it.
+- **Go to:** opens the command palette (<kbd>Ctrl</kbd> <kbd>K</kbd>). The theme switch sits beside it.
+- **Page layout:** quiet ruled sections, a full-width ticket table with filters above it, and a monthly calendar with selected-day details. Knowledge, Settings and other pages with a side list fold it into a *Show …* button below 1000 px.
+- **Ticket evidence:** recorded sources sit beside each finding; a compact ticket switcher preserves quick access to other tickets.
+- **Health and Settings:** Health opens with current problems and expandable component diagnostics. Unsaved settings appear in a sticky review bar; saving still requires the existing review step.
 
 ## Pages
 
 | Route | Shows |
 |---|---|
-| `#/today` | A ring of time tracked against the day's target; delivery alerts across all tickets; **the day, ticket by ticket**: one lane per ticket with the stretches you worked and a tick for each commit (also as a table); **tonight's Jira entries** with a copy button for each start, duration and description and *Copy all* for the whole message. Before 20:00 this is **the message the sender would send now**, built by the sender's own code from the latest Jira data and condensed lines it has: no Jira or model call, nothing saved. It says when the Jira data is from ("Jira data as of 19:40", or that there is none yet, so time already in Jira isn't subtracted) and marks each line that is still *condensed at 20:00*. **Refresh from Jira** (one read-only Jira call) and **Preview exactly** (one condensing call, whose lines the 20:00 message reuses) make it exact; both count against the daily MCP budget, keep the 20:00 calls in reserve, and can be hidden in Settings. Once the day is composed, it shows the saved message and whether it was sent; **Send again** queues one `resend:` for the next background run (a double click counts once). A past day whose activity is gone shows its totals without the times of day. |
+| `#/today` | A large tracked-time summary against the day's target; **the Day Line** with parallel Worked and Jira rows, selectable stretches of recorded activity and commit ticks (also as a table); ticket totals and delivery alerts in the margin; **tonight's worklog** with a copy button for each start, duration and description and *Copy all* for the whole message. Before 20:00 this is **the message the sender would send now**, built by the sender's own code from the latest Jira data and condensed lines it has: no Jira or model call, nothing saved. It says when the Jira data is from ("Jira data as of 19:40", or that there is none yet, so time already in Jira isn't subtracted) and marks each line that is still *condensed at 20:00*. **Refresh from Jira** (one read-only Jira call) and **Preview exactly** (one condensing call, whose lines the 20:00 message reuses) make it exact; both count against the daily MCP budget, keep the 20:00 calls in reserve, and can be hidden in Settings. Once the day is composed, it shows the saved message and whether it was sent; **Send again** queues one `resend:` for the next background run (a double click counts once). A past day whose activity is gone shows its totals without the times of day. |
 | `#/day/YYYY-MM-DD` | Any past day: its timeline and entries, the message as it was sent (with its send history: every version, why it was sent and Slack's answer) or as it would be sent, the branch and PR events of that day, and the current alerts of that day's tickets. Move with the date picker, the previous and next buttons, or <kbd>p</kbd> / <kbd>n</kbd>. A day with nothing recorded says so. |
 | `#/tickets` | Every ticket, sortable by key, title, status, last activity, time, findings and requests. Filter by text, status, repo, *only with delivery alerts* and last active; the filters live in the address, so a filtered list can be bookmarked. Long lists scroll without slowing down. |
 | `#/tickets/ABC-1001` | One ticket with a header that stays in view (title, Jira status, repo and branch chips, time, alerts) and tabs: **Overview** (in short, the problem, findings grouped by kind: root cause, fix, decisions, open questions…), **Branches & PRs** (the branch graph, delivery matrix, branches and PRs; see [branch-tracking.md](branch-tracking.md)), **DB flow** (with the QA worked example), **Requests** (copy as curl), **Queries**, **Artifacts**, **Timeline** (each day links to that day) and **Notes** (the ticket's README and its files). *Export* and *Export to share* download the page as one HTML file. |
@@ -69,7 +70,7 @@ One index serves the Search page, the command palette, `/cg:search` and the MCP 
 
 ## Command palette
 
-<kbd>Ctrl</kbd> <kbd>K</kbd> (or <kbd>/</kbd>) opens it from anywhere. Type part of a page, ticket, table, API or word: it lists matching pages, tickets and actions, then what search finds in your worklog. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> closes. Actions: switch theme, show or hide navigation labels, copy tonight's Jira message, download the timesheet CSV, show the keyboard shortcuts.
+<kbd>Ctrl</kbd> <kbd>K</kbd> (or <kbd>/</kbd>) opens it from anywhere. Type part of a page, ticket, table, API or word: it lists matching pages, tickets and actions, then what search finds in your worklog. <kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> closes. Actions: switch theme, show or hide the More / Pages menu, copy tonight's Jira message, download the timesheet CSV, show the keyboard shortcuts.
 
 ## Keyboard shortcuts
 
@@ -81,7 +82,7 @@ One index serves the Search page, the command palette, `/cg:search` and the MCP 
 | <kbd>?</kbd> | Show the shortcuts |
 | <kbd>g</kbd> then <kbd>t</kbd> · <kbd>k</kbd> · <kbd>s</kbd> · <kbd>n</kbd> · <kbd>b</kbd> · <kbd>f</kbd> · <kbd>m</kbd> · <kbd>h</kbd> · <kbd>u</kbd> · <kbd>e</kbd> | Today · Tickets · Timesheet · Knowledge · DB map · Search · Team notes · Health · Setup · Settings |
 | <kbd>j</kbd> / <kbd>k</kbd> | Next / previous item in the side list |
-| <kbd>[</kbd> | Show or hide navigation labels |
+| <kbd>[</kbd> | Show or hide the More / Pages menu |
 | <kbd>c</kbd> | Today: copy the whole Jira message |
 | <kbd>p</kbd> / <kbd>n</kbd> | Today and Timesheet: previous / next day or month |
 | <kbd>1</kbd> … <kbd>8</kbd> | Ticket: switch tab |
@@ -95,8 +96,8 @@ The page keeps one Server-Sent Events connection (`/api/events`) open while the 
 
 ## Appearance and accessibility
 
-- **Themes:** system, light or dark; the switch is in the top bar and on Settings. Density (comfortable or compact) and motion (system, reduce or full) are on Settings. All three are remembered in this browser only.
-- **Fonts:** the system's own (Segoe UI Variable and Sitka on Windows), so nothing is downloaded.
+- **Themes:** dark **Night ink** is the default for a browser without a saved preference. Saved Light and System choices are preserved. `?theme=light` or `?theme=dark` overrides the theme for that visit without saving it. The switch is in the top bar and on Settings. Density (comfortable or compact) and motion (system, reduce or full) are on Settings. Preferences are remembered in this browser only.
+- **Fonts:** Source Serif 4 headings and IBM Plex Sans body text, served locally with system fallbacks. No external font requests. Ticket exports embed the fonts and include downloadable copies of their open licenses.
 - **Keyboard:** a skip link, landmarks and one heading per page; every control can be reached and used from the keyboard with a visible focus ring; dialogs keep focus inside and give it back when closed; moving to a new page moves focus to its heading.
 - **Screen readers:** tabs, dialogs, the palette (combobox and listbox) and option groups follow the WAI-ARIA patterns; copy confirmations and updates are announced in a polite live region; charts and diagrams have a table or text version next to them.
 - **Never colour alone:** every status has an icon and a word.

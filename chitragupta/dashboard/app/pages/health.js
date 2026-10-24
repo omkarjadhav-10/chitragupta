@@ -7,6 +7,7 @@ import { Icon, Status, CopyButton, Empty, Load, PageHead, Scroll } from '../lib/
 import { Desk, pageKeys } from '../lib/shell.js';
 import { McpStatusPanel } from '../lib/mcpstatus.js';
 import { SchedulerPanel } from '../lib/scheduler.js';
+import { healthIssues } from '../lib/health.js';
 
 function Card({ title, status, big, lines, id }) {
   return html`<section class="card" aria-labelledby=${id}><h2 id=${id}>${title}${status}</h2>${big != null ? html`<div class="big">${big}</div>` : null}
@@ -75,10 +76,16 @@ export function HealthPage() {
       const sf = s.safety || {};
       const blocks = sf.blocks_24h || 0;
       const budgetHit = mc.budget && mc.calls_today >= mc.budget;
+      const problems = healthIssues(s);
       return html`
       <${PageHead} title="Health" sub=${fmtDay(s.day) + ' · checked ' + fmtTs(s.now)}>
         <${CopyButton} text=${diagnostics(s, setup.data)} label="Copy diagnostics" what="the diagnostics" /></${PageHead}>
-      ${s.paused ? html`<div class="alert" role="status"><${Icon} name="warn" size=${18} /><div class="grow"><strong>Capture is paused.</strong> Nothing new is recorded until you resume with /cg:pause off.</div></div>` : null}
+      <section class="health-summary" aria-labelledby="health-summary-title">
+        <h2 id="health-summary-title">${problems.length ? problems.length === 1 ? 'One thing needs a look.' : problems.length + ' things need a look.' : 'No current problems reported.'}</h2>
+        <p class="muted">${problems.length ? 'Your worklog stays on this machine. Review the affected components below.' : 'Capture, background runs and enabled integrations are monitored here. Optional integrations may be switched off.'}</p>
+        ${problems.map((p, i) => html`<article class="health-problem" key=${i}><h3>${p.title}</h3><p>${p.detail}</p>${p.href !== '#/health' ? html`<a href=${p.href}>Review setup</a>` : null}</article>`)}
+      </section>
+      <details class="health-details"><summary>All components and diagnostics</summary>
       <div class="grid" style="margin-bottom:28px">
         <${Card} id="h-cap" title="Capture" status=${s.paused ? html`<${Status} kind="warn">Paused</${Status}>` : hk == null ? html`<${Status} kind="bad">No events</${Status}>` : hk <= 24 * 60 ? html`<${Status} kind="ok">Recording</${Status}>` : html`<${Status} kind="warn">Quiet</${Status}>`}
           big=${hk == null ? '—' : ago(hk)} lines=${[s.hooks.last_event ? 'Last captured event ' + fmtTs(s.hooks.last_event) : 'No hook event captured yet. Start a Claude Code session in a repo.']} />
@@ -124,6 +131,6 @@ export function HealthPage() {
       <section class="sec" aria-labelledby="h-err"><div class="sec-head"><h2 id="h-err">Recent errors</h2><p class="sub">${plural(s.errors_total || 0, 'error')} all time</p></div>
         ${(s.errors || []).length ? html`<ul class="findings">${s.errors.slice().reverse().map((e, i) => html`<li key=${i}><span class="chip">${e.source}</span> <span class="mono small" style="overflow-wrap:anywhere">${e.text}</span></li>`)}</ul>`
           : html`<${Empty} title="No recent errors" icon="ok" />`}</section>
-      <p class="muted small">Dashboard ${(s.dashboard || {}).version || ''} · port ${(s.dashboard || {}).port || ''} · started ${fmtTs((s.dashboard || {}).started_at)} · data home <span class="mono">${s.home}</span></p>`;
+      <p class="muted small">Dashboard ${(s.dashboard || {}).version || ''} · port ${(s.dashboard || {}).port || ''} · started ${fmtTs((s.dashboard || {}).started_at)} · data home <span class="mono">${s.home}</span></p></details>`;
     }}</${Load}></${Desk}>`;
 }

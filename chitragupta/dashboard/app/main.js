@@ -1,11 +1,11 @@
-// The shell: top bar (command field, status pills, theme), the Desk layout (nav · rail · pane), routing, the command
+// The shell: top navigation, command palette, theme, page rail and content, routing, the command
 // palette (Ctrl+K), keyboard shortcuts (?) and live updates.
 import { render } from '/vendor/preact.module.js';
 import { useEffect, useState, useRef, useMemo } from '/vendor/hooks.module.js';
 import { html } from './lib/html.js';
-import { route, useStore, useApi, store, prefs, go, href, startLive, connection, api, EXPORT, toast, copyText } from './lib/core.js';
+import { route, useStore, useApi, go, href, startLive, connection, api, EXPORT, toast, copyText } from './lib/core.js';
 import { Icon, Toasts, Dialog, themeMode } from './lib/ui.js';
-import { NAV, NAV_END, paletteOpen, keysOpen, navLabels, pageKeys, setTheme, Desk } from './lib/shell.js';
+import { NAV, NAV_END, paletteOpen, keysOpen, morePagesOpen, pageKeys, setTheme, Desk } from './lib/shell.js';
 import { TodayPage } from './pages/today.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
 import { TimesheetPage } from './pages/timesheet.js';
@@ -16,54 +16,42 @@ import { SearchPage } from './pages/search.js';
 import { HealthPage } from './pages/health.js';
 import { SetupPage } from './pages/setup.js';
 import { SettingsPage } from './pages/settings.js';
+import { healthIssues } from './lib/health.js';
 
 // ------------------------------------------------------------------ top bar
-// Top-bar status: one pill per service, its own icon plus a small state badge (✓ on · – off · ! needs a look), so the
-// state never depends on colour alone. The words are the tooltip and the accessible name.
-function statusPills(s) {
-  if (!s) return [];
-  const pills = [];
-  const hk = s.hooks && s.hooks.minutes_ago;
-  pills.push(Object.assign({ svc: 'capture' }, s.paused ? { kind: 'warn', text: 'Capture paused' }
-    : hk != null && hk <= 24 * 60 ? { kind: 'ok', text: 'Capture on' } : { kind: 'warn', text: 'Capture quiet' }));
-  const sl = s.slack || {};
-  pills.push(Object.assign({ svc: 'chat' }, sl.enabled === false || sl.status === 'off' ? { kind: 'off', text: 'Slack off' }
-    : sl.status === 'not_connected' || !sl.configured ? { kind: 'off', text: 'Slack not connected' }
-      : sl.send_warning ? { kind: 'bad', text: 'Slack failing' } : { kind: 'ok', text: 'Slack on' }));
-  const mc = s.mcp || {};
-  const live = (mc.live && (mc.live.servers || mc.live.rows)) || [];
-  (mc.configured || []).forEach((c) => {
-    const name = c.role === 'database' ? 'Database MCP' : 'Jira MCP';
-    const svc = c.role === 'database' ? 'db' : 'tickets';
-    if (!c.enabled) { pills.push({ svc, kind: 'off', text: name + ' off' }); return; }
-    const hit = live.find((x) => (x.name || x.server) === c.server) || (mc.servers || []).find((x) => x.server === c.server);
-    const st = hit ? (hit.status || '') : '';
-    pills.push(st === 'connected' ? { svc, kind: 'ok', text: name + ' connected' } : { svc, kind: 'bad', text: name + (st ? ' ' + st : ' unknown') });
-  });
-  return pills;
-}
-const BADGE = { ok: 'check', off: 'dash', warn: 'alert', bad: 'alert' };
-function Pill({ p }) {
-  return html`<a class=${'pill ' + p.kind} href="#/health" title=${p.text} aria-label=${p.text}>
-    <span class="pill-ic" aria-hidden="true"><${Icon} name=${p.svc} size=${18} /><span class="pill-badge"><${Icon} name=${BADGE[p.kind] || 'alert'} size=${8} /></span></span>
-    <span class="lbl" aria-hidden="true">${p.text}</span></a>`;
-}
 function TopBar() {
   const st = useApi(EXPORT ? null : '/api/status');
   const conn = useStore(connection);
   const theme = useStore(themeMode);
   const next = { system: 'light', light: 'dark', dark: 'system' }[theme] || 'light';
-  const pills = statusPills(st.data);
-  return html`<header class="top">
-    <a class="brand" href="#/today"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Chitragupta</a>
-    <button type="button" class="cmd" onClick=${() => paletteOpen.set(true)} aria-haspopup="dialog" aria-keyshortcuts="Control+K">
-      <${Icon} name="search" size=${16} /><span>Type a ticket, a table, an API, or a command</span><kbd>Ctrl K</kbd></button>
+  const r = useStore(route);
+  const more = useStore(morePagesOpen);
+  const problems = healthIssues(st.data);
+  const primary = NAV.concat(NAV_END).filter((n) => ['today', 'tickets', 'timesheet', 'knowledge', 'health', 'settings'].includes(n.id));
+  const secondary = NAV.concat(NAV_END).filter((n) => !primary.includes(n));
+  useEffect(() => {
+    if (!more) return undefined;
+    const close = (e) => { if (!e.target.closest('.top')) morePagesOpen.set(false); };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [more]);
+  const item = (n, cls = '') => html`<a key=${n.id} class=${cls} href=${'#/' + n.id}
+    onClick=${() => morePagesOpen.set(false)} aria-current=${r.name === n.id || (r.name === 'day' && n.id === 'today') ? 'page' : null}>
+    ${n.label}${n.id === 'health' && problems.length ? html`<span class="health-count">${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}</span>` : null}</a>`;
+  return html`<header class="top" onKeyDown=${(e) => { if (more && e.key === 'Escape') { morePagesOpen.set(false); document.querySelector('.more-pages').focus(); } }}>
+    <a class="brand" href="#/today">Chitragupta</a>
+    <nav class="primary-nav" aria-label="Pages">${primary.map((n) => item(n))}</nav>
     <div class="top-right">
-      ${conn === 'offline' ? html`<${Pill} p=${{ svc: 'system', kind: 'bad', text: 'Dashboard offline' }} />` : null}
-      ${pills.map((p) => html`<${Pill} key=${p.text} p=${p} />`)}
+      ${conn === 'offline' ? html`<a class="offline-status" href="#/health">Offline</a>` : null}
+      <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls="more-pages"
+        onClick=${() => morePagesOpen.set(!more)}><span class="desktop-more">More</span><span class="mobile-more">Pages</span><${Icon} name=${more ? 'up' : 'down'} size=${14} /></button>
+      <button type="button" class="cmd" onClick=${() => paletteOpen.set(true)} aria-haspopup="dialog" aria-label="Go to a page, ticket, or command" aria-keyshortcuts="Control+K">
+        <span>Go to</span><kbd>Ctrl K</kbd></button>
       <button type="button" class="btn quiet icon" title=${'Theme: ' + theme} onClick=${() => setTheme(next)} aria-label=${'Theme: ' + theme + '. Switch to ' + next}>
         <${Icon} name=${theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'system'} size=${16} /></button>
     </div>
+    ${more ? html`<nav id="more-pages" class="more-nav" aria-label="More pages" onKeyDown=${(e) => { if (e.key === 'Escape') { morePagesOpen.set(false); document.querySelector('.more-pages').focus(); } }}>
+      <div class="mobile-primary">${primary.map((n) => item(n))}</div>${secondary.map((n) => item(n))}</nav>` : null}
   </header>`;
 }
 
@@ -74,7 +62,7 @@ const ACTIONS = [
   { id: 'theme-system', title: 'Use the system theme', sub: 'Appearance', run: () => setTheme('system') },
   { id: 'theme-light', title: 'Use the light theme', sub: 'Appearance', run: () => setTheme('light') },
   { id: 'theme-dark', title: 'Use the dark theme', sub: 'Appearance', run: () => setTheme('dark') },
-  { id: 'labels', title: 'Show or hide navigation labels', sub: 'Shortcut [', run: () => { const v = !navLabels.get(); navLabels.set(v); prefs.set('nav', v ? 'labels' : 'icons'); } },
+  { id: 'labels', title: 'Show or hide more pages', sub: 'Shortcut [', run: () => morePagesOpen.set(!morePagesOpen.get()) },
   { id: 'copy-worklog', title: "Copy tonight's Jira message", sub: 'From the Today page', run: () => api('/api/today').then((d) => {
     const s = d.worklog_saved, p = d.worklog_preview || {};
     const text = (s && s.text) || p.text || '';
@@ -154,7 +142,7 @@ const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
   ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
   ['g then h', 'Health'], ['g then u', 'Setup'], ['g then e', 'Settings'],
-  ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide navigation labels'], ['Esc', 'Close a dialog'],
+  ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
 function KeysDialog() {
   const open = useStore(keysOpen);
@@ -167,7 +155,7 @@ function KeysDialog() {
 }
 function typing(t) { return t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); }
 function railStep(dir) {
-  const links = Array.from(document.querySelectorAll('.rail .rlist a'));
+  const links = Array.from(document.querySelectorAll('.rlist a'));
   if (!links.length) return;
   let i = links.indexOf(document.activeElement);
   if (i < 0) i = links.findIndex((a) => a.getAttribute('aria-current'));
@@ -189,7 +177,7 @@ function useShortcuts() {
       if (e.key === 'g') { pendingG = Date.now(); return; }
       if (e.key === '/') { e.preventDefault(); paletteOpen.set(true); return; }
       if (e.key === '?') { e.preventDefault(); keysOpen.set(true); return; }
-      if (e.key === '[') { const v = !navLabels.get(); navLabels.set(v); prefs.set('nav', v ? 'labels' : 'icons'); return; }
+      if (e.key === '[') { morePagesOpen.set(!morePagesOpen.get()); return; }
       if (e.key === 'j') { e.preventDefault(); railStep(1); return; }
       if (e.key === 'k') { e.preventDefault(); railStep(-1); return; }
       const pk = pageKeys.get()[e.key];

@@ -305,7 +305,7 @@ export function Markdown({ text, keepTitle }) {
 }
 
 // ------------------------------------------------------------------ Mermaid: loaded on first use, themed, zoom + pan
-export const themeMode = store(document.documentElement.getAttribute('data-theme') || 'system');
+export const themeMode = store(document.documentElement.getAttribute('data-theme') || 'dark');
 export function effectiveDark() {
   const t = themeMode.get();
   if (t === 'dark') return true;
@@ -350,14 +350,23 @@ function renderSvg(code, dark) {
 export function Diagram({ code, label, quiet, alt }) {
   const [state, setState] = useState({ svg: null, error: null });
   const theme = useStore(themeMode);
+  const [systemDark, setSystemDark] = useState(effectiveDark());
   const [view, setView] = useState({ k: 1, x: 0, y: 0 });
   const box = useRef(null);
   const drag = useRef(null);
   useEffect(() => {
+    if (theme !== 'system' || !window.matchMedia) return undefined;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const changed = () => setSystemDark(media.matches);
+    changed();
+    media.addEventListener('change', changed);
+    return () => media.removeEventListener('change', changed);
+  }, [theme]);
+  useEffect(() => {
     let live = true;
     renderSvg(code, effectiveDark()).then((svg) => live && setState({ svg, error: null }), (e) => live && setState({ svg: null, error: e }));
     return () => { live = false; };
-  }, [code, theme]);
+  }, [code, theme, systemDark]);
   const zoom = (f) => setView((v) => ({ ...v, k: Math.max(0.4, Math.min(4, v.k * f)) }));
   const key = (e) => {
     const step = 40;

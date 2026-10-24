@@ -278,10 +278,7 @@ export function SettingsPage() {
       <span class="sw" style=${{ background: g.items && g.items.some((it) => keys.indexOf(it.key) >= 0) ? 'var(--accent)' : 'var(--rule)' }}></span>
       <span class="k" style="font-weight:500">${g.label}</span><span class="m"></span></a></li>`)}</ul>` : null;
   return html`<${Desk} rail=${rail} railLabel="Setting groups">
-    <${PageHead} title="Settings" sub="Changes go through the same checks and write path as /cg:setup, and each one is recorded">
-      ${keys.length ? html`<button type="button" class="btn quiet" onClick=${() => { setPending({}); setErrors({}); }}>Discard</button>
-        <button type="button" class="btn primary" disabled=${!!local.length} onClick=${() => setReview(true)}>Review ${keys.length} change${keys.length === 1 ? '' : 's'}</button>` : null}
-    </${PageHead}>
+    <${PageHead} title="Settings" sub="Choose how your work is recorded and your daily worklog is prepared." />
     <p class="sr" aria-live="polite">${keys.length ? keys.length + ' unsaved changes' : ''}</p>
     <${Load} res=${res} lines=${12}>${(d) => html`
       ${d.groups.map((g) => html`<section class="sec setgroup" key=${g.id} id=${'g-' + g.id} aria-labelledby=${'h-' + g.id}>
@@ -298,6 +295,10 @@ export function SettingsPage() {
         <p class="muted small">Status and Repair only: setup registers it, uninstall removes it.</p><${SchedulerPanel} /></section>
       <${Appearance} />
       <${History} rows=${d.history || []} onUndo=${undo} busy=${busy} />`}</${Load}>
+    ${keys.length ? html`<div class="settings-save" role="region" aria-label="Unsaved changes"><div><strong>${keys.length} unsaved change${keys.length === 1 ? '' : 's'}</strong>
+      <p class="muted small">Review your changes before saving.</p></div><span class="grow"></span>
+      <button type="button" class="btn quiet" onClick=${() => { setPending({}); setErrors({}); }}>Discard</button>
+      <button type="button" class="btn primary" disabled=${!!local.length} onClick=${() => setReview(true)}>Review ${keys.length} change${keys.length === 1 ? '' : 's'}</button></div>` : null}
     <${Dialog} open=${review} title="Review changes" onClose=${() => setReview(false)} wide>
       <p>These settings change when you save. Nothing is saved until then.</p>
       <${Scroll} label="Changes to save"><table><caption class="sr">Changes to save</caption><thead><tr><th scope="col">Setting</th><th scope="col">Now</th><th scope="col">After saving</th></tr></thead>
