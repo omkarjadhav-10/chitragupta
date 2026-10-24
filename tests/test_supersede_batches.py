@@ -74,3 +74,16 @@ class Batches(Isolated, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SingletonTail(Batches):
+    def test_final_finding_is_classified_without_key_items(self):
+        from chitragupta import supersede
+        tk = self.st.ticket(T)
+        tk["items"] = {}
+        for n in range(161):
+            self.add(tk, "f%03d" % n, "finding", "Finding %d about shop.orders" % n, D)
+        supersede.run_day(self.st, self.cfg(), {}, D, tickets=[T])
+        self.assertEqual({r["id"] for b in self.sent for r in b["items"]}, set(tk["items"]))
+        self.assertEqual(len(self.sent), 2)
+        self.assertGreaterEqual(len(self.sent[-1]["items"]), 2)

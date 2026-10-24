@@ -260,3 +260,5 @@ Stable-id item merges keep the newest nonempty detail, even when shorter, and ad
 Jira-only brief verification is recomputed in both directions from the current status and brief.verified_statuses; reopening or removing a matching status revokes it unless a current passing test or replay independently supports verification.
 
 Item history retains complete prior text, confidence, session, time and raw provenance for explicit updates and older stable-id retries, without discarding versions beyond five. Existing historical entries remain readable; previously lost detail cannot be reconstructed.
+
+A final singleton supersession batch is classified too, with an already-seen current item as comparison context when it fits, within the item, character and model-spend limits.
