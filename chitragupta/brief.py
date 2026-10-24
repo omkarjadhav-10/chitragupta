@@ -34,6 +34,20 @@ INPUT_CAP = 100_000  # ~25k tokens of input
 WORD_CAP = 400
 CONF_RANK = {"none": 0, "hypothesis": 1, "likely": 2, "confirmed": 3}
 FACT_PREFIXES = ("commit:", "pr:", "jira:", "query:", "table:", "replay:", "test:")
+VERIFIED_STATUSES = ["QA COMPLETED", "QA PASSED", "READY FOR RELEASE", "DONE", "CLOSED", "RESOLVED"]
+
+
+def verified_statuses(cfg=None):
+    """Jira statuses that mean QA verified the fix (brief.verified_statuses)."""
+    from . import configstore
+    v = configstore.get(cfg if cfg is not None else common.load_config(), "brief.verified_statuses", None)
+    return [str(x) for x in v] if isinstance(v, list) else list(VERIFIED_STATUSES)
+
+
+def qa_verified(status, cfg=None):
+    """True when a Jira status is one of brief.verified_statuses (any case)."""
+    s = " ".join(str(status or "").split()).upper()
+    return bool(s) and s in {" ".join(x.split()).upper() for x in verified_statuses(cfg)}
 
 
 # --------------------------------------------------------------------------- what is current
@@ -424,6 +438,9 @@ def validate(out, key, tk, kind, card=None):
     vtext = claim("after", {"text": ver.get("text"), "cites": ver.get("cites")}, 40) if ver.get("text") else None
     vcites = _norm_cites(ver.get("cites"))
     proven = [c for c in vcites if c in ctx.passing]
+    if not proven and "jira:" + key in vcites and \
+            qa_verified(card.get("status") if card and card.get("status") else S.jira_status(tk)):
+        proven = ["jira:" + key]  # no passing test or replay: QA's Jira status is the proof
     state = "verified" if ver.get("state") == "verified" and proven else "not-verified"
     sec["after"] = {"steps": claims("after", af.get("steps"), total=80, most=6),
                     "verified": {"state": state, "text": vtext["text"] if vtext else "",
@@ -735,7 +752,12 @@ def view(tk, key=None, cfg=None):
             d["text"] = None if d["steps"] else NOT_RECORDED
             if sid == "after":
                 v = dict(s.get("verified") or {"state": "not-verified", "text": "", "cites": []})
-                if v.get("state") != "verified":
+                js = S.jira_status(tk)
+                by_test = v.get("state") == "verified" and any(not str(c).startswith("jira:") for c in v.get("cites") or [])
+                if not by_test and qa_verified(js, cfg):
+                    v = {"state": "verified", "label": "Verified by QA (Jira: %s)" % js, "cites": ["jira:" + key],
+                         "text": v.get("text") if v.get("state") == "verified" else ""}
+                elif v.get("state") != "verified":
                     v["state"], v["label"] = "not-verified", "Not verified yet"
                 else:
                     v["label"] = "Verified"

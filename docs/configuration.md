@@ -93,6 +93,7 @@ Every internal model call (extraction, day summary, curation, DB flow, worklog c
 |---|---|---|---|
 | `budget.model_daily_usd` | number | `3.0` | When today's model spend reaches this, supersession and ticket briefs wait until tomorrow (each skip is logged in `agent.log` and counted under `model_usage.<day>.skipped`). Extraction, the day summary and the other purposes are never stopped by it. |
 | `brief.daily_cap` | int | `8` | At most this many ticket-brief calls a day, whatever the spend. |
+| `brief.verified_statuses` | list of strings | `["QA COMPLETED","QA PASSED","READY FOR RELEASE","DONE","CLOSED","RESOLVED"]` | Jira statuses that mean QA verified the fix. A brief whose ticket has no passing test or replay but whose Jira status is one of these (any case) shows "Verified by QA (Jira: <status>)", cited `jira:<KEY>`. |
 
 A ticket brief (see "The ticket brief" in [architecture.md](architecture.md)) is one call with `models.brief` (unset: `models.consolidate`). Its tokens and cost are recorded on the brief itself (`brief.tokens`, `brief.cost_usd`) and in the ledger under `by_purpose.brief`. A brief skipped for the cap waits for the next day close, `/cg:ticket <KEY> --brief` or the dashboard's Refresh brief.
 

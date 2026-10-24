@@ -118,6 +118,10 @@ STATIC = [
        min=0, max=100, default_value=3.0),
     _i("brief.daily_cap", "Ticket briefs per day", "At most this many brief rebuilds a day.", "int", "models",
        min=0, max=50, default_value=8),
+    _i("brief.verified_statuses", "Jira statuses that mean QA verified", "A brief shows \"Verified by QA\" for a "
+       "ticket in one of these Jira statuses (one per line, any case) when no passing test or replay proves it.",
+       "names", "models", default_value=["QA COMPLETED", "QA PASSED", "READY FOR RELEASE", "DONE", "CLOSED",
+                                         "RESOLVED"]),
     _i("mcp.daily_call_budget", "Daily MCP job budget", "Background MCP jobs per day. Runs you ask for count separately.",
        "int", "models", min=0, max=100),
     _i("extract_timeout_s", "Extraction timeout (seconds)", "How long one extraction call may take before it is retried "

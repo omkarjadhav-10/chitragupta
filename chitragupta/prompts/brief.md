@@ -13,7 +13,7 @@ Sections
 - before: 3 to 6 steps, at most 80 words in all: how it works today, before the fix (how_it_works items with phase before or both, the data flow, the queries).
 - proposed: the fix, at most 60 words, and "rejected": one line on the alternative that was rejected and why (empty text when none was).
 - fixes_made: "summary": one sentence on what the commits and PRs changed. The list of commits and PRs is added from the data, so never list them yourself; leave the text empty when there are none.
-- after: the same steps as "before" once the fix is in (phase after or both). "verified": state "verified" only when a test: or replay: fact shows it passing, and cite it; otherwise "not-verified" with how to verify it (the test or replay step to run).
+- after: the same steps as "before" once the fix is in (phase after or both). "verified": state "verified" only when a test: or replay: fact shows it passing (cite it) or, with neither, when the Jira status says QA verified it (cite jira:<KEY>); otherwise "not-verified" with how to verify it (the test or replay step to run).
 - cons: at most 5 claims, each at most 20 words. label "recorded" for a risk the input records (a risk item, a Jira comment, a note), citing it; label "suggested" for one you infer from the proposed fix, citing that fix item. At most 2 suggested.
 
 Never output secrets or patient data.

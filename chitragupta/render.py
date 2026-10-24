@@ -782,12 +782,19 @@ def claim_texts(s):
                 out.append((CLAIM_LABEL.get(c.get("label")), c["text"].strip(), c.get("cites") or []))
     for key in ("rejected", "summary", "verified"):
         c = s.get(key)
-        if isinstance(c, dict) and c.get("text"):
+        if isinstance(c, dict) and (c.get("text") or (key == "verified" and c.get("state") == "verified")):
             label = {"rejected": "Rejected", "summary": None}.get(key)
             if key == "verified":
-                label = "Verified" if c.get("state") == "verified" else "Not verified"
-            out.append((label, c["text"].strip(), c.get("cites") or []))
+                label = verified_label(c)
+            out.append((label, (c.get("text") or "").strip(), c.get("cites") or []))
     return out
+
+
+def verified_label(c):
+    """"Verified", "Verified by QA (Jira: <status>)" or "Not verified": the view's label, else from the state."""
+    if c.get("state") == "verified":
+        return c.get("label") or "Verified"
+    return "Not verified"
 
 
 def render_brief(v, items=None):
@@ -813,6 +820,8 @@ def render_brief(v, items=None):
         return out
 
     def line(label, text, cites):
+        if label and not (text or "").strip():
+            return "**%s**" % label + refs(cites)
         return ("**%s:** " % label if label else "") + (text or "").strip() + refs(cites)
 
     h = v.get("header") or {}
@@ -858,10 +867,10 @@ def render_brief(v, items=None):
             L += ["- " + line(None, f.get("text"), f.get("cites")) for f in s.get("list") or []]
             for key_, label in (("rejected", "Rejected"), ("summary", None), ("verified", None)):
                 c = s.get(key_)
-                if isinstance(c, dict) and c.get("text"):
+                if isinstance(c, dict) and (c.get("text") or (key_ == "verified" and c.get("state") == "verified")):
                     if key_ == "verified":
-                        label = "Verified" if c.get("state") == "verified" else "Not verified"
-                    L += ["", line(label, c["text"], c.get("cites"))]
+                        label = verified_label(c)
+                    L += ["", line(label, c.get("text"), c.get("cites"))]
             L.append("")
     for cid in order:
         n, kind, rest, label = notes[cid]

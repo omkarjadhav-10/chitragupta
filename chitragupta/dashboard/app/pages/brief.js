@@ -122,7 +122,7 @@ function StepsCard({ s, ctx }) {
   const v = s.verified;
   return html`<div class="card"><h3 id=${'b-' + s.id}>${s.heading || HEAD[s.id]}</h3>
     ${(s.steps || []).length ? html`<ol>${s.steps.map((x, i) => html`<li key=${i}>${x.text}</li>`)}</ol>` : html`<${NotYet} s=${s} />`}
-    ${v && (v.text || v.state) ? html`<p class="ver"><${Status} kind=${v.state === 'verified' ? 'ok' : 'warn'}>${v.state === 'verified' ? 'Verified' : 'Not verified'}</${Status}> ${v.text || ''}</p>` : null}
+    ${v && (v.text || v.state) ? html`<p class="ver"><${Status} kind=${v.state === 'verified' ? 'ok' : 'warn'}>${v.state === 'verified' ? v.label || 'Verified' : 'Not verified'}</${Status}> ${v.text || ''}</p>` : null}
     <${Cites} list=${uniq((s.steps || []).map((x) => x.cites).concat([v && v.cites]))} ctx=${ctx} /></div>`;
 }
 function BeforeAfter({ before, after, ctx }) {
