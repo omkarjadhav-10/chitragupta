@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 from tests import support
 from tests.support import Isolated
@@ -221,7 +222,11 @@ def snapshot(root):
 class Base(Isolated, unittest.TestCase):
     def setUp(self):
         self.isolate()
-        self.days = build_home(self.home)
+        fixed = common.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        clock = mock.patch.object(common, "now", return_value=fixed)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.days = build_home(self.home, fixed)
         from chitragupta import extract
         self._real_call = extract.call_claude
 

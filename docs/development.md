@@ -152,3 +152,5 @@ Users get the update through Claude Code's plugin update. Their next session's m
 - removes its hook entries, skill and CLAUDE.md block
 
 `--dry-run` shows the plan without changing anything. `scripts/cutover.py rollback` restores everything from the manifest. Data is never deleted.
+
+Dashboard unit and browser fixtures freeze their clock at local noon. This keeps their activity samples nonempty even when checks start in the first minute after midnight.

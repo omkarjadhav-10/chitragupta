@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,7 +32,11 @@ def main(argv):
     from tests.test_dashboard import build_home
     from tests.test_dashboard_v2 import add_v2_fixtures
     from chitragupta.dashboard import server
-    days = build_home(home)
+    from chitragupta import common
+    fixed = common.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    clock = mock.patch.object(common, "now", return_value=fixed)
+    clock.start()
+    days = build_home(home, fixed)
     add_v2_fixtures(home, days)
     srv, _t = server.start_in_thread(0)
     try:
@@ -44,6 +49,7 @@ def main(argv):
         srv.server_close()
         shutil.rmtree(home, ignore_errors=True)
         shutil.rmtree(user, ignore_errors=True)
+        clock.stop()
 
 
 if __name__ == "__main__":
