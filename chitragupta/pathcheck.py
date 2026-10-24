@@ -6,6 +6,10 @@ read-only `git rev-parse --verify -q <sha>:<path>` (through gitro, so the safety
 against the ticket's branch heads in the repo the record belongs to, or the repo's HEAD when no branch is tracked.
 Whether a path exists at a commit never changes, so answers are cached per (repo, sha, path) in
 .worklog/cache/pathcheck.json. At most `budget` git calls run per tick; the rest waits for the next tick.
+
+The same step tells committed files from files only edited in a session: a changed file whose only proof is an
+Edit/Write tool call gets `committed` True or False from the file lists of the ticket's commits (recorded by the
+commit scan, or for older commits read with `git log --no-walk --name-only`, cached per (repo, sha)).
 """
 import os
 
@@ -15,6 +19,8 @@ from . import gitro
 
 BUDGET = 40
 CACHE_MAX = 20000
+COMMIT_CACHE_MAX = 3000
+_SEP = "\x1e"
 
 
 def cache_path():
@@ -42,7 +48,9 @@ class _Run:
         self.calls, self.heads_memo = 0, {}
         cache = common.read_json(cache_path(), {}) or {}
         self.known = cache.get("paths") or {}
+        self.commit_files = cache.get("commit_files") or {}
         self.cache = cache
+        self.waiting = False
 
     def git_ok(self, root, args):
         self.calls += 1
@@ -87,6 +95,78 @@ class _Run:
         return None if waiting else False
 
 
+    def files_of(self, name, shas):
+        """{sha: [paths]} of the commits in repo `name` whose file lists can be read now (cached, else git)."""
+        out, todo = {}, []
+        for sha in shas:
+            ck = "%s|%s" % (gitcmd.repo_key(name), sha)
+            if ck in self.commit_files:
+                out[sha] = self.commit_files[ck]
+            else:
+                todo.append(sha)
+        root = repo_root(self.cfg, name) if todo else None
+        if todo and not root:
+            return out
+        for i in range(0, len(todo), 50):
+            if self.calls >= self.budget:
+                self.waiting = True
+                break
+            part = todo[i:i + 50]
+            self.calls += 1
+            rc, so, _ = gitro.run(self.cfg, root, ["log", "--no-walk", "--name-only", "--format=" + _SEP + "%H"] + part)
+            if rc != 0:
+                continue  # a sha this clone doesn't have: its files stay unknown
+            for rec in so.split(_SEP):
+                lines = [x.strip() for x in rec.strip().splitlines() if x.strip()]
+                if not lines:
+                    continue
+                full = lines[0]
+                sha = next((s for s in part if full.startswith(s)), full)
+                out[sha] = self.commit_files["%s|%s" % (gitcmd.repo_key(name), sha)] = lines[1:200]
+        return out
+
+    def mark_committed(self, tk):
+        """Set `committed` on the ticket's files changed only by Edit/Write calls. Returns True when one changed."""
+        edits = [f for f in (tk.get("files") or {}).values()
+                 if isinstance(f, dict) and f.get("changed") and f.get("verified_by") == "edit"]
+        if not edits:
+            return False
+        shas = {}  # repo key -> {sha: recorded files or None}
+        for c in (tk.get("commits") or {}).values():
+            if isinstance(c, dict) and c.get("sha") and c.get("repo_name"):
+                shas.setdefault(c["repo_name"], {})[c["sha"]] = c.get("files") if isinstance(c.get("files"), list) else None
+        for name, x in ((tk.get("git") or {}).get("repos") or {}).items():
+            for row in (x or {}).get("rows") or []:
+                for sha in row.get("shas") or []:
+                    have = shas.setdefault(name, {})
+                    if not any(s.startswith(sha) or sha.startswith(s) for s in have):
+                        have[sha] = None
+        files, unknown = {}, set()
+        for name, m in shas.items():
+            got = self.files_of(name, [s for s, fl in m.items() if fl is None])
+            key = gitcmd.repo_key(name)
+            for sha, fl in m.items():
+                fl = fl if fl is not None else got.get(sha)
+                if fl is None:
+                    unknown.add(key)
+                else:
+                    files.setdefault(key, set()).update(fl)
+        changed = False
+        for f in edits:
+            repos = [gitcmd.repo_key(f["repo"])] if f.get("repo") else list(files) + list(unknown)
+            path = (f.get("path") or "").replace("\\", "/")
+            if any(path in files.get(k, ()) for k in repos):
+                val = True
+            elif any(k in unknown for k in repos):
+                continue  # a commit whose files aren't known yet: ask again on a later tick
+            else:
+                val = False
+            if f.get("committed") is not val:
+                f["committed"] = val
+                changed = True
+        return changed
+
+
 def _pending(rec):
     return isinstance(rec, dict) and rec.get("verified") is None
 
@@ -112,14 +192,20 @@ def run(store, cfg, budget=BUDGET):
                 if ok:
                     rec["verified_by"] = "git"
                 changed = True
+        r.waiting = False
+        if r.mark_committed(tk):
+            changed = True
         if changed:
             store.touch_ticket(t)
-        if any(_pending(x) for x in (tk.get("files") or {}).values()):
+        if r.waiting or any(_pending(x) for x in (tk.get("files") or {}).values()):
             left.add(t)
     known = r.known
     if len(known) > CACHE_MAX:
         known = dict(list(known.items())[-CACHE_MAX:])
-    common.write_json(cache_path(), {"seeded": True, "pending": sorted(left), "paths": known})
+    cf = r.commit_files
+    if len(cf) > COMMIT_CACHE_MAX:
+        cf = dict(list(cf.items())[-COMMIT_CACHE_MAX:])
+    common.write_json(cache_path(), {"seeded": True, "pending": sorted(left), "paths": known, "commit_files": cf})
     if r.calls:
         common.log("agent", "pathcheck: %d git call(s), %d ticket(s) still pending" % (r.calls, len(left)))
     return r.calls

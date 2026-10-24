@@ -887,6 +887,29 @@ def item_anchor(i):
     return "".join('<a id="i-%s"></a>' % x for x in [i.get("id")] + list(i.get("aliases") or []) if x)
 
 
+def committed(tk, f):
+    """True when a commit of the ticket changed file record `f`, False when none did, None when not known yet (a
+    commit whose file list wasn't read yet)."""
+    if f.get("committed") or f.get("verified_by") == "commit":
+        return True
+    commits = [c for c in (tk.get("commits") or {}).values() if isinstance(c, dict)]
+    if any(f.get("path") in (c.get("files") or ()) for c in commits):
+        return True
+    if f.get("committed") is False or all(isinstance(c.get("files"), list) for c in commits):
+        return False
+    return None
+
+
+def change_label(tk, f):
+    """The code map's Changed cell: "yes" for a file a commit changed (or not known yet), "edited, not committed"
+    for one only a session's Edit/Write tool call changed, "—" for one that wasn't changed."""
+    if not f.get("changed"):
+        return "—"
+    if f.get("verified_by") == "edit" and committed(tk, f) is False:
+        return "edited, not committed"
+    return "yes"
+
+
 def code_map(tk):
     """One table of the ticket's verified files (edited, committed or found in git), changed ones first, each listed
     once; paths only the model named, and that git hasn't confirmed, go under a collapsed list."""
@@ -898,7 +921,7 @@ def code_map(tk):
     L = []
     if ok:
         L += ["| File | Role | Changed |", "|---|---|---|"]
-        L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), "yes" if f.get("changed") else "—") for f in ok]
+        L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), change_label(tk, f)) for f in ok]
     if rest:
         L += ["", "<details><summary>Unverified paths (%d)</summary>" % len(rest), "",
               "_Named in the notes but not (yet) found in the repo: not edited in a session, not in a commit._", ""]

@@ -794,11 +794,12 @@ class Agent:
             if c["ticket"]:
                 slot = self.ensure_tslot(day, c["ticket"], c["repo"], c["ref"])
                 tk = self.store.ticket(c["ticket"])
-                tk["commits"][c["sha"]] = rec
+                tk["commits"][c["sha"]] = dict(rec, files=[fl["path"] for fl in c["files"]][:200])
                 for fl in c["files"]:
                     old = tk["files"].get(fl["path"]) or {}
                     tk["files"][fl["path"]] = dict(old, path=fl["path"], role=old.get("role", ""), changed=True, last=day,
-                                                   verified=True, verified_by="commit", repo=old.get("repo") or c["repo_name"])
+                                                   verified=True, verified_by="commit", committed=True,
+                                                   repo=old.get("repo") or c["repo_name"])
                     if fl["path"] not in slot["files_changed"]:
                         slot["files_changed"].append(fl["path"])
                 storemod.mark_applied_fixes(tk, day)  # a fix naming a committed file is applied

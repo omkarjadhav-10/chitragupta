@@ -342,6 +342,7 @@ def ticket(key):
         return None
     tk = tk or {}
     out = ticket_summary(key, tk)
+    from ..render import change_label
     out.update({
         "problem": tk.get("problem") or "", "title_source": tk.get("title_source") or "",
         "branches": _linked_branches(tk), "jira": tk.get("jira") or {},
@@ -349,7 +350,9 @@ def ticket(key):
         "dbflow": _dbflow(key, paths), "artifacts": _artifacts(key, tk),
         "timeline": [{"day": d, "minutes": int((v or {}).get("minutes") or 0), "line": (v or {}).get("line") or ""}
                      for d, v in sorted((tk.get("timeline") or {}).items(), reverse=True)],
-        "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
+        "files": [dict(f, change=change_label(tk, f)) for f in sorted(
+            (f for f in (tk.get("files") or {}).values() if isinstance(f, dict)),
+            key=lambda f: f.get("last") or "", reverse=True)[:60]],
         "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
     })
     from .. import brief, delivery
