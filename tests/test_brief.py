@@ -129,6 +129,27 @@ class CurrentItems(BriefBase, unittest.TestCase):
         self.assertNotIn("rv00000001", ids)  # flagged for review
         self.assertIn("rc00000002", ids)
 
+    def test_view_carries_what_every_surface_reads(self):
+        """The engine's view and the renderers meet: the header's single repo/branch/PR and the fallback's root-cause
+        text and cites are what the dashboard, the README and the SessionStart context read."""
+        from chitragupta import brief, render
+        tk = ticket()
+        tk.pop("brief", None)
+        tk["repos"], tk["branches"] = ["shop-api"], ["feature/ABC-1001-x"]
+        tk["git"] = {"repos": {"shop-api": {"prs": [{"number": 811, "state": "merged", "target": "qa"},
+                                                    {"number": 812, "state": "open", "target": "release"}]}}}
+        v = brief.view(tk, T, self.cfg())
+        h = v["header"]
+        self.assertEqual((h["repo"], h["branch"]), ("shop-api", "feature/ABC-1001-x"))
+        self.assertEqual(h["pr"]["number"], 812)  # an open PR before a merged one
+        rc = v["fallback"]["root_cause"]
+        self.assertTrue(rc["text"])
+        self.assertEqual(rc["cites"], [rc["id"]])
+        md = "\n".join(render.render_brief(v, tk["items"])) if isinstance(render.render_brief(v, tk["items"]), list) \
+            else render.render_brief(v, tk["items"])
+        self.assertIn(rc["text"], md)
+        self.assertTrue(any(rc["text"][:40] in line for line in render.brief_context_lines(v)))
+
     def test_a_todo_git_data_closed_is_not_current(self):
         from chitragupta import brief
         tk = ticket()

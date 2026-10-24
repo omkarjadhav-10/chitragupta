@@ -592,13 +592,19 @@ def refresh(key, wait_s=None, force=False):
 
 def _header(key, tk, b=None):
     st = _stage(tk)
-    return {"key": key, "title": S.display_title(tk), "title_hint": tk.get("title_hint") or "",
+    h = {"key": key, "title": S.display_title(tk), "title_hint": tk.get("title_hint") or "",
             "jira_type": (tk.get("jira") or {}).get("type") or "", "jira_status": S.jira_status(tk),
             "status_inferred": tk.get("status_inferred") or "",
             "stage": {"kind": st["kind"], "text": st["text"]} if st else None,
             "repos": list(tk.get("repos") or []), "branches": list(tk.get("branches") or []),
             "prs": [{"number": p["number"], "target": p.get("target") or "", "state": p.get("state") or ""} for p in _prs(tk)],
             "updated": (b or {}).get("generated_at") or tk.get("last") or ""}
+    # the one repo / branch / PR the header line names (an open PR before a merged one, the newest of each)
+    h["repo"] = (h["repos"] or [""])[0]
+    h["branch"] = (h["branches"] or [""])[-1]
+    opn = [p for p in h["prs"] if p["state"] == "open"]
+    h["pr"] = (opn or h["prs"] or [None])[-1]
+    return h
 
 
 def _fallback(tk):
@@ -608,10 +614,11 @@ def _fallback(tk):
                             i.get("date") or "", i.get("time") or ""), reverse=True)
     st = _stage(tk)
     rc = rcs[0] if rcs else None
-    return {"root_cause": {"id": rc["id"], "title": rc.get("title") or "", "confidence": rc.get("confidence") or ""}
-            if rc else None,
+    return {"root_cause": {"id": rc["id"], "title": rc.get("title") or "", "text": rc.get("title") or "",
+                           "confidence": rc.get("confidence") or "", "cites": [rc["id"]]} if rc else None,
             "stage": (st or {}).get("text") or "",
-            "tldr": render.tldr_text(tk, st, md=False) if tk.get("tldr") else ""}
+            "tldr": render.tldr_text(tk, st, md=False) if tk.get("tldr") else "",
+            "problem": tk.get("problem") or ""}
 
 
 def _evidence(tk, cited, fx):
