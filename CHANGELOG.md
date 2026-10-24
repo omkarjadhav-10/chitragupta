@@ -4,6 +4,86 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
+Knowledge you can trust, and a one-minute brief per ticket. Work is filed under the ticket you name, old conclusions
+are superseded instead of piling up, file paths and queries are checked against what really happened, time is counted
+once, and every ticket page opens on a short, evidenced brief. Includes a data migration (backed up first).
+
+### Added
+- **Ticket brief.** Each ticket gets a short brief (`tk["brief"]`, `chitragupta/brief.py`): Root cause (or "Why this
+  change" for a Story or Task), Helpful findings, How it works today, Proposed fix, Fixes made, How it works after the
+  fix and Possible cons (*Recorded* or *Suggested*), about 400 words. One JSON-schema model call (`models.brief`, else
+  `models.consolidate`) over the ticket's current items and deterministic facts, never raw events. Every claim must
+  cite an evidence id (an item, `commit:`, `pr:`, `jira:`, `query:`, `table:`, `replay:`, `test:`); claims that cite
+  nothing, a missing or superseded id, or a path, table, endpoint or class the ticket's verified records don't contain
+  are dropped and listed. "Fixes made" and the statuses come from git, PR and Jira data, never from model text. Your
+  inbox correction (`ABC-1001: root cause: …`, `fix: …`, `cons: …`) replaces the model's wording and survives
+  regeneration. Written at day close when its inputs changed, by `/cg:ticket <KEY> --brief`, and by the dashboard's
+  **Refresh brief** (new allowlisted action `brief-refresh`); "New findings since …" shows when it is out of date.
+- The ticket page, the hub `README.md`, the single-file export, the SessionStart context and the MCP server's
+  `get_ticket` (new section `brief`) lead with the brief; everything extracted stays one click away under
+  *All findings*. An Epic (any `jira.parent_issue_types`) gets no brief: its page lists its child tickets.
+  `docs/design.md` documents the dashboard's tokens and the brief's components.
+- **`agent rebuild <KEY...> | --all`** rebuilds tickets' knowledge from the raw events on disk under the current rules.
+  `--dry-run` prices it from the spend ledger and writes nothing; a real run takes the agent lock, refuses over
+  `rebuild.cap_usd`, backs up first, archives the old extracted items (never deletes them; your notes stay current),
+  re-extracts, recomputes minutes (keeping `minutes_before_rebuild`), runs supersession and the brief, and re-renders
+  hubs and INDEX. Daily files are not touched.
+- **Model spend ledger and daily cap.** Every internal model call records tokens and cost per day and purpose
+  (`health.model_usage`). `budget.model_daily_usd` ($3) gates supersession and briefs (never extraction);
+  `brief.daily_cap` (8). Health, doctor and the dashboard show today's spend against the cap. `models.*` accept
+  explicit model ids.
+- Extraction inputs for the brief: raw line numbers (items keep `ref: raw/<day>/<session>.jsonl:<line>`), how-it-works
+  `phase` (before / after / both), fix `state` (proposed / applied when an edit or commit touches a file it names), a
+  `risk` item kind, deterministic test-run records, and the Jira card's description and last 10 comments (redacted).
+- `jira.parent_issue_types` (Epic, Initiative), `turn_tail_minutes`, `idle_minutes`, `rebuild.*` settings.
+
+### Changed
+- **Ticket attribution (K1, K2).** Each turn's ticket is decided once, for time and knowledge alike: the ticket named
+  in the prompt (or a pasted Jira title) → the work branch of the session's own repo (never release/, environment or
+  base branches) → the last ticket named in the session. Raw events record `ticket_src`. A pasted breadcrumb gives its
+  last id; an id typed in your own words beats one in pasted text; a parent issue never receives time or items.
+- **Time (K10).** Minutes are turn intervals (prompt → last event of the turn, + `turn_tail_minutes` 5, split at
+  `idle_minutes` 15), counted once across parallel sessions and split between their tickets. Session start/end events
+  no longer count; commits and Bruno runs count as the 15 minutes before them; Bruno file times count only today.
+- **Supersession (K3).** At day close one per-ticket call (budget-gated) marks older root causes, decisions and
+  findings on the same subject as superseded (kept, collapsed, linked to their replacement); text is never rewritten
+  and your notes are never superseded. Git-action TODOs (rebase, push, open a PR, merge, cherry-pick) close from
+  branch and PR data. The extractor's "already recorded" list is split per ticket and refreshed per chunk.
+- **Titles and status (K4, K9).** A title comes only from the Jira card or you; guesses are kept as a labelled hint
+  and the key is shown until then. The Jira status and the inferred status are stored and shown apart. A delivery
+  stage computed from branch and PR data leads the hub, dashboard and SessionStart context; a TL;DR sentence that
+  contradicts it is marked outdated.
+- **Verified specifics (K6).** Changed files come only from edits and commits; other paths are checked with read-only
+  `git rev-parse <sha>:<path>` and hidden until verified. `queries.md` lists only SQL that was actually sent, each
+  with its raw line; SQL that was only mentioned stays in the data under *Not run*.
+- **One record per thing (K7).** APIs (method + path template), tables (schema-qualified), queries (normalised SQL) and
+  files are deduplicated; merged records keep every source and old ids as aliases; one Code map.
+- **Off-ticket items (K8)** are flagged under *Needs review*, never moved or deleted; inbox `KEY: keep <id>` /
+  `KEY: move <id> OTHER` resolve them (a move copies and archives).
+- **Jira cards (K5)** are fetched for every ticket active in the last 7 days whose card is missing or stale.
+- **Replay safety (K11).** Steps that change a shared record are flagged in `requests.md` and need `--yes` in
+  `replay.sh` outside local; a restore step only when the before-state was captured; repeat steps get their own
+  `.bru` so `bru run` matches `replay.sh`.
+- Schema cards (O2): writer detection is one ordered, schema-aware catalog query per table; a routine is a writer only
+  when its source writes the table; known writers are never dropped by a failed or empty run.
+- Raw capture older than `raw_retention_days` is pruned once processed on every install, not only after a push (O7).
+
+### Fixed
+- The home folder itself is captured time-only (O1); raw events from folders that are now ignored are never
+  extracted (O5); extraction state survives copying or moving the data home (O4).
+- A privacy check that returns unknown now pauses the push and says so, as `docs/privacy.md` promised (O6).
+- Doctor and Health show the security log's counts and layer breakdown from the same window, with other plugins'
+  entries apart (O3).
+- `docs/architecture.md` says what uninstall removes and keeps (O9).
+
+### Migration
+Forward-only steps, each backing up what it changes to `.worklog/backups/chitragupta-<step>-<time>/` first, run by
+the next tick or `migrate`: `raw-relative-keys`, `kb5-db-schema-writers`, `kb5-dedupe-keys`, `kb5-title-status`,
+`kb5-paths-verified`, `kb5-queries-sent`, `kb5-todo-objects`, `kb5-schema-version` (`data/meta.json` 4 → 5). Nothing
+is deleted. Existing hubs keep their old content until you run `agent rebuild`.
+
 ## [0.4.1] - 2026-10-20
 
 Fixes from the end-to-end audit of 19 Oct: the `/cg:` guard's scope, read-only gaps in the query and command guards,
