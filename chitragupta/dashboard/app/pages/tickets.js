@@ -367,7 +367,7 @@ export function TicketPage({ route }) {
             <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a>
             <${ShareButton} k=${t.key} /></div>`}
         </div></div>
-      ${t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
+      ${!(t.brief && t.brief.has_brief) && t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
       ${tab === 'branches' ? null : html`<${GitAlerts} g=${t.git} />`}
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>

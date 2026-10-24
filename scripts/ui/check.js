@@ -201,6 +201,18 @@ async function launch() {
   check(headingWidth >= 390 * .7, 'ticket heading keeps reading width on a phone');
   await page.setViewportSize({ width: 900, height: 1000 });
 
+  const briefTicket = await (await page.request.get(base + 'api/tickets/ABC-1002')).json();
+  briefTicket.tldr = 'Legacy summary awaiting an earlier fix.';
+  briefTicket.brief = { ...briefTicket.brief, has_brief: true, sections: [{ id: 'root_cause', heading: 'Root cause', confidence: 'confirmed',
+    claims: [{ text: 'The reservation was never released.', cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] }] };
+  await page.route('**/api/tickets/ABC-1002', r => r.fulfill({ json: briefTicket }));
+  await page.goto(base + '#/tickets/ABC-1002');
+  await page.reload();
+  await page.locator('article.brief').waitFor();
+  check(await page.locator('.ticket-summary').count() === 0 && (await page.locator('article.brief').innerText()).includes('The reservation was never released.'),
+    'generated brief leads without the legacy model summary');
+  await page.unroute('**/api/tickets/ABC-1002');
+
   let dayVariant;
   await page.route('**/api/today', (r) => r.fulfill({ json: dayVariant }));
   const emptyDay = { ...recorded, total_minutes: 0, tickets: [], other: [], lanes: [], worklog_saved: null };

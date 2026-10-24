@@ -81,6 +81,7 @@ once, and every ticket page opens on a short, evidenced brief. Includes a data m
 - Raw capture older than `raw_retention_days` is pruned once processed on every install, not only after a push (O7).
 
 ### Fixed
+- Let generated ticket briefs lead the page without repeating the legacy model summary in the header.
 - Stack ticket header actions below the title on phones so the brief metadata and heading retain their reading width.
 - The home folder itself is captured time-only (O1); raw events from folders that are now ignored are never
   extracted (O5); extraction state survives copying or moving the data home (O4).
