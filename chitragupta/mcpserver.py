@@ -347,7 +347,7 @@ def _brief_section(t):
             L += ["", "### " + head]
             rows = render.claim_texts(s)
             L += ["- %s%s%s" % (lab + ": " if lab else "", _one(text, 700), ids(cites)) for lab, text, cites in rows] or \
-                 ["- " + (s.get("empty") or render.NOT_YET)]
+                 ["- " + render.brief_empty_text(s)]
     if seen:
         L += ["", "Evidence:"]
         for cid, c in seen:

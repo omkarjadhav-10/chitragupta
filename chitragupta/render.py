@@ -695,6 +695,24 @@ def brief_heading(s):
     return s.get("heading") or BRIEF_HEAD.get(s["id"]) or s["id"].replace("_", " ").capitalize()
 
 
+def brief_rows(s, key):
+    """A section's claims, steps or list rows, each text once: a view that gives the same rows as steps and as claims
+    (older views did, for the before/after sections) prints them once, as steps."""
+    rows = [c for c in s.get(key) or [] if isinstance(c, dict)]
+    if key == "claims" and s.get("steps"):
+        seen = {" ".join(str(x.get("text") or "").split()) for x in s["steps"] if isinstance(x, dict)}
+        rows = [c for c in rows if " ".join(str(c.get("text") or "").split()) not in seen]
+    return rows
+
+
+def brief_empty_text(s):
+    """What an empty section says: the view's text ("Not recorded yet", "Not started", …), never its flag."""
+    for k in ("text", "empty"):
+        if isinstance(s.get(k), str) and s[k]:
+            return s[k]
+    return NOT_YET
+
+
 def brief_empty(s):
     return not (s.get("claims") or s.get("steps") or s.get("list") or (s.get("summary") or {}).get("text")
                 or (s.get("rejected") or {}).get("text") or (s.get("verified") or {}).get("text"))
@@ -726,9 +744,9 @@ def cite_target(kind, rest):
 def claim_texts(s):
     """[(label or None, text, cites)] of a section's claims, steps and list rows, in order (for the plain surfaces)."""
     out = []
-    for key in ("claims", "steps", "list"):
-        for c in s.get(key) or []:
-            if isinstance(c, dict) and c.get("text"):
+    for key in ("steps", "claims", "list"):
+        for c in brief_rows(s, key):
+            if c.get("text"):
                 out.append((CLAIM_LABEL.get(c.get("label")), c["text"].strip(), c.get("cites") or []))
     for key in ("rejected", "summary", "verified"):
         c = s.get(key)
@@ -800,11 +818,11 @@ def render_brief(v, items=None):
                 head += " _(your correction)_"
             L += [head, ""]
             if brief_empty(s):
-                L += ["_%s._" % (s.get("empty") or NOT_YET), ""]
+                L += ["_%s._" % brief_empty_text(s).rstrip("."), ""]
                 continue
-            L += ["%d. %s" % (n, line(None, x.get("text"), x.get("cites"))) for n, x in enumerate(s.get("steps") or [], 1)]
+            L += ["%d. %s" % (n, line(None, x.get("text"), x.get("cites"))) for n, x in enumerate(brief_rows(s, "steps"), 1)]
             L += [("" if s["id"] == "root_cause" else "- ") + line(CLAIM_LABEL.get(c.get("label")), c.get("text"), c.get("cites"))
-                  for c in s.get("claims") or []]
+                  for c in brief_rows(s, "claims")]
             L += ["- " + line(None, f.get("text"), f.get("cites")) for f in s.get("list") or []]
             for key_, label in (("rejected", "Rejected"), ("summary", None), ("verified", None)):
                 c = s.get(key_)

@@ -90,7 +90,11 @@ function isEmpty(s) {
   return !((s.claims || []).length || (s.steps || []).length || (s.list || []).length || (s.summary && s.summary.text)
     || (s.rejected && s.rejected.text) || (s.verified && s.verified.text));
 }
-function NotYet({ s }) { return html`<p class="bempty">${(s && s.empty) || 'Not recorded yet'}</p>`; }
+// what an empty section says: the view's text ("Not recorded yet", "Not started", …), never its empty flag
+function NotYet({ s }) {
+  const say = [s && s.text, s && s.empty].find((x) => typeof x === 'string' && x);
+  return html`<p class="bempty">${say || 'Not recorded yet'}</p>`;
+}
 function Label({ c }) {
   const l = LAB[c.label];
   return l ? html`<span class=${'lab ' + l[1]}>${l[0]}</span> ` : null;

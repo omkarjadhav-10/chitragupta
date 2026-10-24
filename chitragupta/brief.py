@@ -642,6 +642,35 @@ def _evidence(tk, cited, fx):
     return out
 
 
+_LABEL_WORDS = {"ruled-out": r"ruled[\s-]*out", "recorded": "recorded", "suggested": "suggested",
+                "rejected": "rejected", "verified": r"(?:not\s+)?verified(?:\s+yet)?"}
+
+
+def strip_label(text, label):
+    """A claim's text without a leading "<Label>:" that its label already shows ("Ruled out: Ruled out: x" once)."""
+    rx = _LABEL_WORDS.get(label or "")
+    text = str(text or "")
+    if not rx:
+        return text
+    out = re.sub(r"^\s*(?:\*\*)?(?:%s)\s*(?:\*\*)?\s*[:–—-]\s*(?:\*\*)?\s*" % rx, "", text, count=1, flags=re.I)
+    return out[:1].upper() + out[1:] if out and out != text else (out or text)
+
+
+def _fix_rows(fx):
+    """The "Fixes made" list as the renderers show it: one row per commit and PR (cited by its own id), then the stage."""
+    rows = []
+    for x in fx:
+        if x["kind"] == "commit":
+            text = "%s %s%s" % (x["id"].split(":", 1)[1], x.get("text") or "", " (%s)" % x["date"] if x.get("date") else "")
+        elif x["kind"] == "pr":
+            st = " ".join(y for y in (x.get("state") or "", x.get("date") or "") if y)
+            text = x.get("text") or x["id"] + (" (%s)" % st if st else "")
+        else:
+            text = "Reached: %s" % (x.get("text") or "")
+        rows.append({"text": text.strip(), "cites": [x["id"]] if x["kind"] in ("commit", "pr") else []})
+    return rows
+
+
 def view(tk, key=None, cfg=None):
     """Everything the brief surfaces render, ready to show (D2 renders only from this):
     {"key", "kind", "epic": False, "header", "has_brief", "stale", "generated_at", "model", "tokens", "cost_usd",
@@ -669,6 +698,14 @@ def view(tk, key=None, cfg=None):
             if isinstance(s.get(k), dict) and not still(s[k]):
                 s[k] = None
     ov = apply_overrides(sec, tk)
+    for s in sec.values():  # a label the renderers add is never printed twice ("Ruled out: Ruled out: …")
+        for c in s.get("claims") or []:
+            if isinstance(c, dict) and c.get("label"):
+                c["text"] = strip_label(c.get("text"), c["label"])
+        if isinstance(s.get("rejected"), dict):
+            s["rejected"]["text"] = strip_label(s["rejected"].get("text"), "rejected")
+        if isinstance(s.get("verified"), dict):
+            s["verified"]["text"] = strip_label(s["verified"].get("text"), "verified")
     fx = fixes_made(tk)
     out_secs, cited = [], []
     for sid in SECTIONS:
@@ -688,11 +725,12 @@ def view(tk, key=None, cfg=None):
                 d["text"] = None if d["claims"] else NOT_RECORDED
         elif sid == "fixes_made":
             d["items"] = fx
+            d["list"] = _fix_rows(fx)  # what the renderers print, each row with its evidence id
             d["summary"] = s.get("summary") if fx and s.get("summary") else None
             d["empty"] = not fx
             d["text"] = None if fx else "Not started"
         elif sid in ("before", "after"):
-            d["steps"] = d["claims"] = s.get("steps") or []
+            d["steps"] = s.get("steps") or []  # steps only: a renderer that read them as claims too printed each twice
             d["empty"] = not d["steps"]
             d["text"] = None if d["steps"] else NOT_RECORDED
             if sid == "after":
@@ -711,7 +749,7 @@ def view(tk, key=None, cfg=None):
                 d["rejected"] = s.get("rejected")
                 if d["rejected"]:
                     cited += d["rejected"].get("cites") or []
-        for c in d["claims"] + ([d["summary"]] if d.get("summary") else []):
+        for c in d["claims"] + d.get("steps", []) + ([d["summary"]] if d.get("summary") else []):
             cited += c.get("cites") or []
         out_secs.append(d)
     view_ = {"key": key, "kind": kind, "epic": False, "header": _header(key, tk, b), "has_brief": bool(b),
@@ -777,6 +815,9 @@ def _cite(c):
     return " [%s]" % ", ".join(c.get("cites") or []) if c.get("cites") else ""
 
 
+_TEXT_LABEL = {"ruled-out": "Ruled out", "recorded": "Recorded", "suggested": "Suggested"}
+
+
 def text_lines(v):
     """A view as plain text, for `/cg:ticket <KEY> --brief`."""
     h = v.get("header") or {}
@@ -816,10 +857,11 @@ def text_lines(v):
                 L.append(s["summary"]["text"] + _cite(s["summary"]))
         if s.get("text"):
             L.append(s["text"] + (": leading hypothesis" if s.get("leading_hypothesis") else ""))
-        steps = s["id"] in ("before", "after")
-        for n, c in enumerate(s.get("claims") or [], 1):
-            lab = "[%s] " % c["label"].capitalize() if s["id"] == "cons" and c.get("label") else ""
-            L.append(("%d. " % n if steps else "- ") + lab + c["text"] + _cite(c))
+        for n, c in enumerate(s.get("steps") or [], 1):
+            L.append("%d. " % n + c["text"] + _cite(c))
+        for c in s.get("claims") or []:
+            lab = "[%s] " % _TEXT_LABEL.get(c.get("label"), c.get("label")) if c.get("label") else ""
+            L.append("- " + lab + c["text"] + _cite(c))
         if s.get("rejected"):
             L.append("Rejected: " + s["rejected"]["text"] + _cite(s["rejected"]))
         if s.get("verified"):
