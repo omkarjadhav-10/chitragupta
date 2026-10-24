@@ -585,8 +585,40 @@ def total_minutes(tk):
     return sum((v or {}).get("minutes") or 0 for v in tk.get("timeline", {}).values())
 
 
+EPIC_NOTE = "This is an Epic: its work is under its child tickets."
+
+
+def is_epic(tk):
+    from . import brief
+    return brief.kind_of(tk) == "epic"
+
+
+def render_epic(t, tk):
+    """An Epic's hub: its children (one line and status each), its days, the items archived as its children's work
+    (collapsed) and your notes. None of the knowledge sections: that work belongs to the children."""
+    items = [i for i in tk["items"].values() if isinstance(i, dict)]
+    L = [heading(t, tk), "",
+         "| Status | First worked | Last worked | ≈ Total time |", "|---|---|---|---|",
+         "| %s | %s | %s | %s |" % (status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
+                                   fmt_time(total_minutes(tk))), "", "_%s_" % EPIC_NOTE, ""]
+    L += render_brief(brief_view(tk, t), tk["items"])
+    tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
+          for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
+    if tl:
+        L += ["## Timeline"] + tl + [""]
+    old = sort_items([i for i in items if i.get("archived")])
+    if old:
+        L += ["<details><summary>Archived (%d)</summary>" % len(old), "",
+              "_Recorded under %s before it was known to be an Epic; kept here, out of every current view._" % t, ""]
+        L += [hub_item(i) for i in old] + ["", "</details>", ""]
+    L += ["## My notes", NOTES_BLOCK, ""]
+    return "\n".join(L)
+
+
 def render_ticket(store, t):
     tk = store.ticket(t)
+    if is_epic(tk):
+        return render_epic(t, tk)
     items = [i for i in tk["items"].values() if isinstance(i, dict)]
     by = lambda *kinds: item_block(items, kinds)
     L = [heading(t, tk)]
@@ -985,6 +1017,8 @@ def hub_sections(t, tk):
 def render_queries(store, t):
     tk = store.ticket(t)
     L = ["# %s — Queries" % t, ""]
+    if is_epic(tk):
+        return "\n".join(L + ["_%s_" % EPIC_NOTE]) + "\n"
     allq = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
     qs = [q for q in allq if q.get("sent") is not False]
     if not qs:

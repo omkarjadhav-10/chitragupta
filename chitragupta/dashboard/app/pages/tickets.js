@@ -376,9 +376,10 @@ export function TicketPage({ route }) {
       <${TabPanel} idBase="tk" active=${tab}>
         ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
         ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
-        ${tab === 'dbflow' ? html`<${DbFlow} df=${t.dbflow} />` : null}
-        ${tab === 'requests' ? html`<${Requests} rq=${t.requests} />` : null}
-        ${tab === 'queries' ? html`<${Queries} qs=${t.queries} />` : null}
+        ${t.epic && (tab === 'dbflow' || tab === 'requests' || tab === 'queries') ? html`<${Empty} title=${t.epic_note} icon="info">Open a child ticket from the Overview for its DB flow, requests and queries.</${Empty}>` : null}
+        ${tab === 'dbflow' && !t.epic ? html`<${DbFlow} df=${t.dbflow} />` : null}
+        ${tab === 'requests' && !t.epic ? html`<${Requests} rq=${t.requests} />` : null}
+        ${tab === 'queries' && !t.epic ? html`<${Queries} qs=${t.queries} />` : null}
         ${tab === 'artifacts' ? html`<${Artifacts} list=${t.artifacts} />` : null}
         ${tab === 'timeline' ? html`<${Timeline} days=${t.timeline} />` : null}
         ${tab === 'notes' ? html`<${Notes} t=${t} />` : null}

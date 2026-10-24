@@ -354,6 +354,12 @@ def ticket(key):
     })
     from .. import brief, delivery
     out["brief"] = brief.view(tk, key)
+    if out["brief"].get("epic"):  # an Epic's knowledge is its children's: the tabs say so instead of showing it
+        from ..render import EPIC_NOTE
+        out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[],
+                   requests={"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0,
+                             "bruno_folder": None},
+                   dbflow={"markdown": "", "qa_trace": None})
     out["delivery"] = delivery.stage(tk.get("git") or {})
     out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
     return out
