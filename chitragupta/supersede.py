@@ -3,8 +3,9 @@
     close_todos       a TODO about a git action (rebase, push, open a PR, merge, cherry-pick to <target>) is done when the
                       ticket's branch and PR data shows it happened: status "done", closed_by "pr:<n>" / "branch:<name>"
     close_day_todos   the same for a day's open_todos ({text, ticket, closed_by})
-    run_day           at day close, one model call per ticket that got new items that day (purpose "supersede", gated by
-                      budget.model_daily_usd): it groups items by subject and says which ones a newer item replaced
+    run_day           at day close, per ticket that got new items that day, model calls (purpose "supersede", each gated
+                      by budget.model_daily_usd) that group items by subject and say which ones a newer item replaced;
+                      a ticket with more candidates than one call holds gets several batches, so each is judged once
 
 Nothing here rewrites an item's text or deletes one: only `status`, `subject`, `superseded_by` and `closed_by` are set.
 Your own notes (inbox lines, kind "note") are never superseded by a model item.
@@ -17,8 +18,8 @@ from . import common
 STATUSES = ("current", "superseded", "hypothesis", "confirmed", "done")
 SUPERSEDE_KINDS = ("root_cause", "finding", "decision", "fix", "how_it_works", "todo")
 KEY_KINDS = ("root_cause", "decision", "fix")
-INPUT_CAP = 30000  # chars of item JSON sent per ticket
-MAX_ITEMS = 80
+INPUT_CAP = 60000  # chars of item JSON sent per call
+MAX_ITEMS = 160  # items per call; a ticket with more candidates gets more calls (batches)
 DETAIL_CHARS = 300
 
 
@@ -178,29 +179,63 @@ def tickets_with_new_items(store, day):
     return out
 
 
-def supersede_input(store, t, day):
-    """The ticket's candidate items, newest first, capped: id, kind, title, short detail, day, status."""
-    tk = store.ticket(t)
-    from . import store as S
+def _candidates(tk):
+    """The ticket's current candidates, newest first."""
     pool = [i for i in tk["items"].values() if isinstance(i, dict) and not i.get("archived") and not i.get("review")
             and (i.get("kind") in SUPERSEDE_KINDS or is_user_note(i)) and i.get("status") not in ("superseded", "done")]
     pool.sort(key=lambda i: (i.get("date") or "", i.get("time") or "", i.get("id")), reverse=True)
-    # root causes, decisions, fixes and your notes are few and matter most: they go first, so a busy ticket's older
-    # conclusions never fall out of the window behind newer findings; the newest of the rest fill what is left
-    pool.sort(key=lambda i: 0 if (i.get("kind") in KEY_KINDS or is_user_note(i)) else 1)
+    return pool
+
+
+def _is_key(i):
+    return i.get("kind") in KEY_KINDS or is_user_note(i)
+
+
+def _row(i):
+    r = {"id": i["id"], "kind": i.get("kind"), "title": i.get("title") or "",
+         "detail": common.truncate((i.get("detail") or "").strip(), DETAIL_CHARS), "day": i.get("date") or "",
+         "status": i.get("status") or "current", "confidence": i.get("confidence") or ""}
+    if is_user_note(i):
+        r["by_user"] = True
+    return r
+
+
+def _size(r):
+    return len(json.dumps(r, ensure_ascii=False)) + 2
+
+
+def _batch(tk, sent):
+    """One call's rows: the current root causes, decisions, fixes and notes of yours first (few, and what the rest is
+    judged against; any that don't fit in half a call wait their turn with the rest), then the newest candidates not
+    sent yet in this run (`sent`), within MAX_ITEMS and INPUT_CAP. [] when every candidate was sent."""
+    pool = _candidates(tk)
     rows, size = [], 0
-    for i in pool[:MAX_ITEMS]:
-        r = {"id": i["id"], "kind": i.get("kind"), "title": i.get("title") or "",
-             "detail": common.truncate((i.get("detail") or "").strip(), DETAIL_CHARS), "day": i.get("date") or "",
-             "status": i.get("status") or "current", "confidence": i.get("confidence") or ""}
-        if is_user_note(i):
-            r["by_user"] = True
-        n = len(json.dumps(r, ensure_ascii=False)) + 2
-        if size + n > INPUT_CAP:
+    for i in (i for i in pool if _is_key(i)):
+        r = _row(i)
+        if len(rows) >= MAX_ITEMS // 2 or size + _size(r) > INPUT_CAP // 2:
             break
         rows.append(r)
-        size += n
-    return {"ticket": t, "title": S.display_title(tk) or tk.get("title_hint") or "", "day": day, "items": rows}
+        size += _size(r)
+    have = {r["id"] for r in rows}
+    rest = [i for i in pool if i["id"] not in sent and i["id"] not in have]
+    if not rest and have <= sent:
+        return []
+    for i in rest:
+        r = _row(i)
+        if len(rows) >= MAX_ITEMS or size + _size(r) > INPUT_CAP:
+            break
+        rows.append(r)
+        size += _size(r)
+    return rows
+
+
+def supersede_input(store, t, day, sent=None):
+    """One call's input for ticket `t`: its key items (root causes, decisions, fixes, your notes) and the newest of
+    the candidates not in `sent`, each with id, kind, title, short detail, day and status."""
+    tk = store.ticket(t)
+    from . import store as S
+    return {"ticket": t, "title": S.display_title(tk) or tk.get("title_hint") or "", "day": day,
+            "items": _batch(tk, set(sent or ()))}
 
 
 def _chain_reaches(items, start, target):
@@ -253,20 +288,28 @@ def run_day(store, cfg, health, day, tickets=None):
     from . import extract, modelbudget
     cost, done = 0.0, {}
     for t in tickets if tickets is not None else tickets_with_new_items(store, day):
-        data = supersede_input(store, t, day)
-        if len(data["items"]) < 2:
-            continue  # nothing to compare
-        if modelbudget.over_budget(health, cfg, "supersede"):
-            break  # logged and counted under model_usage.<day>.skipped; the rest wait for tomorrow
-        try:
-            out, c = extract.call_claude("supersede", json.dumps(data, ensure_ascii=False), cfg)
-        except extract.ExtractError as e:
-            common.log("agent", "supersession failed for %s: %s" % (t, e))
-            continue
-        cost += c
-        tk = store.ticket(t)
-        done[t] = apply(tk, out)
-        if done[t]:
-            store.touch_ticket(t)
-        common.log("agent", "supersession %s day %s: %d item(s) changed, cost=$%.4f" % (t, day, done[t], c))
+        sent, batch = set(), 0
+        while True:  # one call per batch, until every current candidate was sent once
+            data = supersede_input(store, t, day, sent)
+            ids = {r["id"] for r in data["items"]}
+            if len(ids) < 2 or (batch and not ids - sent):
+                break  # nothing (more) to compare
+            if modelbudget.over_budget(health, cfg, "supersede"):
+                if batch:
+                    common.log("agent", "supersession %s: the budget stopped it after %d batch(es)" % (t, batch))
+                return cost, done  # logged and counted under model_usage.<day>.skipped; the rest wait for tomorrow
+            try:
+                out, c = extract.call_claude("supersede", json.dumps(data, ensure_ascii=False), cfg)
+            except extract.ExtractError as e:
+                common.log("agent", "supersession failed for %s: %s" % (t, e))
+                break
+            batch += 1
+            sent |= ids
+            cost += c
+            n = apply(store.ticket(t), out)
+            done[t] = done.get(t, 0) + n
+            if n:
+                store.touch_ticket(t)
+            common.log("agent", "supersession %s day %s batch %d: %d item(s) changed, cost=$%.4f" % (
+                t, day, batch, n, c))
     return cost, done
