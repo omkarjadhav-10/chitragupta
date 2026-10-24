@@ -55,7 +55,7 @@ flowchart LR
 
 `hooks/hooks.json` registers seven events and points them at `hooks/run.py` inside the plugin. The PreToolUse entry is the branch guard: it starts only for branch and PR creation commands (the hooks' `if` filter), reads a few small files, records nothing and finishes in well under 200 ms (see [branch-tracking.md](branch-tracking.md#the-guard)). The UserPromptExpansion entry (`hook cg-expand`) starts only for the `/cg:` command names: it records that prompt's `prompt_id` in `.worklog/cache/cg-active/<session>` for the session guard, records nothing else, prints nothing and finishes in under 100 ms (see [safety.md](safety.md#how-it-is-enforced)). Three rules apply to the others:
 
-- **SessionStart runs synchronously.** It uses `py -3` with a 10 s budget; the measured p95 is well under 100 ms. It registers the session and prints context for the active ticket: a short summary from `cache/context/<KEY>.md`, a warning line if something is broken, and at most a weekly reminder. Then it spawns a detached maintenance process.
+- **SessionStart runs synchronously.** It uses `py -3` with a 10 s budget; the measured p95 is well under 100 ms. It registers the session and prints context for the active ticket: a short summary from `cache/context/<KEY>.md` (at most 4000 characters: the delivery stage, then the brief's root cause, fixes made and possible cons with their evidence ids, open TODOs and questions, the TL;DR, saved requests, DB flow, artifacts and branches; the newest current findings fill what is left, whole lines only), a warning line if something is broken, and at most a weekly reminder. Then it spawns a detached maintenance process.
 - **The other four events run asynchronously** with windowless `pyw -3`.
 - **Every hook fails open.** Any error is logged and the hook exits 0, so a hook can never break a session.
 
@@ -128,7 +128,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
   inbox.md                                   one line per note / directive (worklog, branch, review keep / move)
   _drop\                                     files dropped here are filed into tickets
   tickets\INDEX.md
-  tickets\<KEY>\README.md                    ticket hub: status, scenarios, findings, timeline, My notes
+  tickets\<KEY>\README.md                    ticket hub: status, the brief, scenarios, findings, timeline, My notes
   tickets\<KEY>\queries.md  requests.md  replay.sh  db-flow.md  payloads\  artifacts\
   knowledge\apis.md  db-tables.md  db-map.md  integrations.md  branches.md
   bruno\                                     one Bruno collection, a folder per ticket; .env never read
@@ -213,6 +213,10 @@ The Jira card (`data/jira/<KEY>.json` → `card`) keeps the issue's description 
 - **Shape.** `{v, kind (bug | story), generated_at, model, tokens {in, out}, cost_usd, source_hash, sections {root_cause {confidence, claims}, findings {claims}, before {steps}, proposed {claims, rejected}, fixes_made {summary}, after {steps, verified {state, text, cites}}, cons {claims}}, overrides, dropped}`; each claim is `{text, cites[], label?}`. An empty section shows "Not recorded yet". Surfaces render only `brief.view(tk)`, which adds the header (title, Jira type and status, inferred status, delivery stage, repos, branches, PRs), the Fixes made list, the staleness marker and, before the first brief, a fallback (the current root cause, the stage and the TL;DR).
 - **Staleness.** `source_hash` covers the current items and the facts. When it no longer matches, the brief is shown with "New findings since <time>" (`brief.stale`) until it is regenerated.
 - **When it is written.** Never per tick. When a day closes, for that day's tickets whose `source_hash` changed (and any ticket a cap skipped earlier, kept in `state.json` `brief_pending`); health records what was made and what was skipped and why (`briefs`). On demand with `/cg:ticket <KEY> --brief` or the dashboard's Refresh brief (action `brief-refresh`), both under the agent lock and re-rendering the ticket's hub. Every call stays within `brief.daily_cap` and `budget.model_daily_usd`; unchanged inputs never make a call. A rebuild calls `brief.generate(key)` after re-extracting.
+
+### The brief in the hub
+
+The hub `README.md` starts with `## Brief`, rendered from `brief.view(tk)` like every other surface: the root cause with its confidence, helpful findings, how it works today and after the fix, the proposed fix, fixes made (from git and PRs) and possible cons (*Recorded* or *Suggested*). Each claim's evidence is a Markdown footnote (`[^1]`) that links to the item's anchor further down the same file (every item line starts with `<a id="i-<id>"></a>`, plus one per alias), to `queries.md#q-<id>` or to `requests.md`; commits, PRs and tables are named in the footnote. Until a ticket has a brief, the section says so and shows the current root cause. Everything after it is unchanged.
 
 ## Outside the data home
 

@@ -85,7 +85,7 @@ def item_line(it, with_date=False):
 
 
 def hub_item(it):
-    return '- <a id="i-%s"></a>%s' % (it.get("id"), item_line(it, True))
+    return "- " + item_anchor(it) + item_line(it, True)
 
 
 def item_block(items, kinds):
@@ -602,6 +602,7 @@ def render_ticket(store, t):
     st = delivery_stage(tk)
     if st:
         L += ["**%s:** %s" % (stage_label(st), st["text"]), ""]
+    L += render_brief(brief_view(tk, t), tk["items"])
     L += hub_sections(t, tk)
 
     sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
@@ -662,6 +663,169 @@ def render_ticket(store, t):
     sec("Timeline", tl)
     L += ["## My notes", NOTES_BLOCK, ""]
     return "\n".join(L)
+
+
+# --------------------------------------------------------------------------- the brief (FX-20), from brief.view(tk)
+
+BRIEF_ORDER = ("root_cause", "findings", "before", "after", "proposed", "fixes_made", "cons")
+BRIEF_HEAD = {"root_cause": "Root cause", "findings": "Helpful findings", "before": "How it works today",
+              "after": "How it works after the fix", "proposed": "Proposed fix", "fixes_made": "Fixes made",
+              "cons": "Possible cons"}
+CONFIDENCE = {"confirmed": "Confirmed", "likely": "Likely", "hypothesis": "Hypothesis", "none": "Not known"}
+CLAIM_LABEL = {"recorded": "Recorded", "suggested": "Suggested", "ruled-out": "Ruled out"}
+CITE_KINDS = ("commit", "pr", "jira", "query", "table", "replay", "test", "raw", "note")
+NOT_YET = "Not recorded yet"
+
+
+def brief_view(tk, t=None):
+    from . import brief
+    return brief.view(tk, t)
+
+
+def brief_sections(v):
+    """The view's sections in order, each a dict with "id" (the view may give a list or a dict by id)."""
+    s = (v or {}).get("sections") or []
+    if isinstance(s, dict):
+        keys = [k for k in BRIEF_ORDER if s.get(k)] + [k for k in s if k not in BRIEF_ORDER]
+        return [dict(s[k], id=k) for k in keys if isinstance(s[k], dict)]
+    return [x for x in s if isinstance(x, dict) and x.get("id")]
+
+
+def brief_heading(s):
+    return s.get("heading") or BRIEF_HEAD.get(s["id"]) or s["id"].replace("_", " ").capitalize()
+
+
+def brief_empty(s):
+    return not (s.get("claims") or s.get("steps") or s.get("list") or (s.get("summary") or {}).get("text")
+                or (s.get("rejected") or {}).get("text") or (s.get("verified") or {}).get("text"))
+
+
+def cite_parts(c):
+    """(id, kind, rest, label) of one cite: an evidence id ("c607fa7d13", "commit:a1b2c3d", …) or {id, label, kind}."""
+    cid = str((c.get("id") if isinstance(c, dict) else c) or "")
+    pre, _, tail = cid.partition(":")
+    rest = tail if pre in CITE_KINDS else cid
+    kind = (c.get("kind") if isinstance(c, dict) else None) or (pre if pre in CITE_KINDS else "item")
+    label = (c.get("label") if isinstance(c, dict) else None) or {
+        "commit": "commit %s" % rest[:7], "pr": "PR #%s" % rest, "jira": rest, "query": "query", "table": rest,
+        "replay": "replay step %s" % rest, "test": "test", "raw": "session log", "note": "your note"}.get(kind) or "item %s" % rest[:10]
+    return cid, kind, rest, label
+
+
+def cite_target(kind, rest):
+    """Where a cite points from the hub README, or None (shown as text)."""
+    if kind in ("item", "note", "test"):
+        return "#i-" + rest
+    if kind == "query":
+        return "queries.md#q-" + rest
+    if kind == "replay":
+        return "requests.md"
+    return None
+
+
+def claim_texts(s):
+    """[(label or None, text, cites)] of a section's claims, steps and list rows, in order (for the plain surfaces)."""
+    out = []
+    for key in ("claims", "steps", "list"):
+        for c in s.get(key) or []:
+            if isinstance(c, dict) and c.get("text"):
+                out.append((CLAIM_LABEL.get(c.get("label")), c["text"].strip(), c.get("cites") or []))
+    for key in ("rejected", "summary", "verified"):
+        c = s.get(key)
+        if isinstance(c, dict) and c.get("text"):
+            label = {"rejected": "Rejected", "summary": None}.get(key)
+            if key == "verified":
+                label = "Verified" if c.get("state") == "verified" else "Not verified"
+            out.append((label, c["text"].strip(), c.get("cites") or []))
+    return out
+
+
+def render_brief(v, items=None):
+    """`## Brief` for the hub README: each section with its claims, evidence as footnotes ([^n]) that point at the
+    items' anchors (#i-<id>), queries.md or requests.md. `items`: the ticket's items, to label bare item ids."""
+    v = v or {}
+    items = items or {}
+    notes, order = {}, []
+
+    def refs(cites):
+        out = ""
+        for c in cites or []:
+            cid, kind, rest, label = cite_parts(c)
+            it = items.get(rest) if kind in ("item", "note", "test") and not isinstance(c, dict) else None
+            if it:
+                label = ", ".join(x for x in (TAG.get(it.get("kind"), it.get("kind") or "item"), it.get("date") or "") if x)
+            if not cid:
+                continue
+            if cid not in notes:
+                order.append(cid)
+                notes[cid] = (len(order), kind, rest, label)
+            out += "[^%d]" % notes[cid][0]
+        return out
+
+    def line(label, text, cites):
+        return ("**%s:** " % label if label else "") + (text or "").strip() + refs(cites)
+
+    h = v.get("header") or {}
+    key = v.get("key") or h.get("key") or ""
+    L = ["## Brief", ""]
+    meta = [x for x in ("Generated %s" % h["updated"][:16].replace("T", " ") if h.get("updated") else "",
+                        "Jira: %s" % h["jira_status"] if h.get("jira_status") else "",
+                        "Inferred: %s" % h["status_inferred"] if h.get("status_inferred") else "") if x]
+    if meta and v.get("has_brief"):
+        L += ["_%s_" % " · ".join(meta), ""]
+    if v.get("stale") and v.get("has_brief"):
+        L += ["> **New findings since %s.** Refresh the brief with `/cg:ticket %s --brief` or *Refresh brief* in the "
+              "dashboard." % (str(v["stale"].get("since") or "")[:16].replace("T", " "), key), ""]
+    if v.get("epic"):
+        L += ["### Child tickets", ""]
+        L += ["- [%s](../%s/README.md)%s%s%s" % (c.get("key"), c.get("key"), " — " + c["title"] if c.get("title") else "",
+                                                 " _(%s)_" % c["status"] if c.get("status") else "",
+                                                 ": " + c["line"] if c.get("line") else "")
+              for c in v.get("children") or []] or ["_No child tickets recorded yet._"]
+        L.append("")
+    elif not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        conf = CONFIDENCE.get(rc.get("confidence"), rc.get("confidence"))
+        L += ["_No brief yet: it is written at day close, or now with `/cg:ticket %s --brief`. Until then, the current "
+              "root cause:_" % key, "", "### Root cause" + (" (%s)" % conf if conf else ""), "",
+              line(None, rc["text"], rc.get("cites")) if rc.get("text") else "_%s._" % NOT_YET, ""]
+    else:
+        for s in brief_sections(v):
+            head = "### " + brief_heading(s)
+            if s["id"] == "root_cause" and s.get("confidence") and not brief_empty(s):
+                head += " (%s)" % CONFIDENCE.get(s["confidence"], s["confidence"])
+            if s["id"] == "fixes_made":
+                head += " _(%s)_" % (s.get("source") or "from git and PRs")
+            if s.get("override"):
+                head += " _(your correction)_"
+            L += [head, ""]
+            if brief_empty(s):
+                L += ["_%s._" % (s.get("empty") or NOT_YET), ""]
+                continue
+            L += ["%d. %s" % (n, line(None, x.get("text"), x.get("cites"))) for n, x in enumerate(s.get("steps") or [], 1)]
+            L += [("" if s["id"] == "root_cause" else "- ") + line(CLAIM_LABEL.get(c.get("label")), c.get("text"), c.get("cites"))
+                  for c in s.get("claims") or []]
+            L += ["- " + line(None, f.get("text"), f.get("cites")) for f in s.get("list") or []]
+            for key_, label in (("rejected", "Rejected"), ("summary", None), ("verified", None)):
+                c = s.get(key_)
+                if isinstance(c, dict) and c.get("text"):
+                    if key_ == "verified":
+                        label = "Verified" if c.get("state") == "verified" else "Not verified"
+                    L += ["", line(label, c["text"], c.get("cites"))]
+            L.append("")
+    for cid in order:
+        n, kind, rest, label = notes[cid]
+        target = cite_target(kind, rest)
+        L.append("[^%d]: %s" % (n, "[%s](%s)" % (label.replace("]", ")"), target) if target
+                                else "%s (`%s`)" % (label, cid) if label != cid else "`%s`" % cid))
+    if order:
+        L.append("")
+    return L
+
+
+def item_anchor(i):
+    """`<a id="i-<id>"></a>` (and one per alias) so the brief's footnotes and the dashboard can point at an item."""
+    return "".join('<a id="i-%s"></a>' % x for x in [i.get("id")] + list(i.get("aliases") or []) if x)
 
 
 def code_map(tk):
@@ -897,6 +1061,13 @@ def render_context(store, t):
     st = delivery_stage(tk)
     if st:
         L.append("%s: %s." % (stage_label(st), st["text"]))
+    v = brief_view(tk, t)
+    L += brief_context_lines(v)
+    cur = [i for i in current_items(tk) if isinstance(i, dict)]
+    opens = sort_items([i for i in cur if i.get("kind") in OPEN_KINDS])[:6]
+    if opens:
+        L.append("Open TODOs / questions:")
+        L += ["- %s" % common.truncate(i["title"], 200) for i in opens]
     if tk.get("tldr"):
         L.append("TL;DR: " + tldr_text(tk, st, md=False))
     final = (tk.get("replay") or {}).get("final") or []
@@ -920,20 +1091,78 @@ def render_context(store, t):
                 continue
             L.append("- %s (%s): from %s, %s%s" % (b["branch"], name, b.get("parent") or "?", b["status"],
                                                  "; PR " + ", ".join("#%s" % n for n in b["prs"]) if b.get("prs") else ""))
-    live = [i for i in tk["items"].values() if supersede.is_current(i) and i.get("status") != "done"]  # K3/K8
-    finds = sort_items([i for i in live if i.get("kind") not in OPEN_KINDS])[:8]
-    if finds:
-        L.append("Recent findings:")
+    # the newest findings fill what is left of the 4000 characters, whole lines only
+    txt = common.truncate("\n".join(L), CONTEXT_MAX)
+    finds = sort_items([i for i in cur if i.get("kind") not in OPEN_KINDS])[:40]
+    if finds and len(txt) + 20 < CONTEXT_MAX:
+        rows = []
         for i in finds:
             ev = "; ".join((i.get("evidence") or [])[:2])
-            L.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
-                                        " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
-    opens = sort_items([i for i in live if i.get("kind") in OPEN_KINDS])[:6]
-    if opens:
-        L.append("Open TODOs / questions:")
-        L += ["- %s" % i["title"] for i in opens]
-    txt = "\n".join(L)
-    return redact(common.truncate(txt, 4000))
+            rows.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
+                                           " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
+        add = "\nRecent findings:"
+        for r in rows:
+            if len(txt) + len(add) + 1 + len(r) > CONTEXT_MAX:
+                break
+            add += "\n" + r
+        if add != "\nRecent findings:":
+            txt += add
+    return redact(common.truncate(txt, CONTEXT_MAX))
+
+
+CONTEXT_MAX = 4000
+CONTEXT_CLAIM = 300
+
+
+def current_items(tk):
+    """The ticket's current items: the brief engine's definition when it has one, else not archived, not superseded,
+    not flagged for review, and (files) not unverified / (queries) not unsent."""
+    from . import brief
+    fn = getattr(brief, "current_items", None)
+    if fn:
+        return fn(tk)
+    return [i for i in (tk.get("items") or {}).values() if isinstance(i, dict) and not i.get("archived")
+            and (i.get("status") or "current") != "superseded" and not i.get("review")
+            and i.get("verified") is not False and i.get("sent") is not False]
+
+
+def _cite_ids(cites, n=3):
+    ids = [cite_parts(c)[0] for c in cites or []]
+    ids = [x for x in ids if x][:n]
+    return " [%s]" % ", ".join(ids) if ids else ""
+
+
+def brief_context_lines(v):
+    """The brief for the SessionStart context: root cause, fixes made and possible cons, each claim with its first
+    evidence ids; the fallback's root cause until there is a brief; an Epic's children."""
+    v = v or {}
+    if v.get("epic"):
+        ch = v.get("children") or []
+        return ["Epic. Child tickets: %s." % "; ".join("%s %s%s" % (c.get("key"), common.truncate(c.get("title"), 80) or "",
+                                                                     " (%s)" % c["status"] if c.get("status") else "") for c in ch[:12])] if ch else []
+    if not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        if not rc.get("text"):
+            return []
+        return ["Root cause (%s; no brief yet): %s%s" % (rc.get("confidence") or "unknown", common.truncate(rc["text"], CONTEXT_CLAIM),
+                                                         _cite_ids(rc.get("cites")))]
+    by = {s["id"]: s for s in brief_sections(v)}
+    out = ["Brief (generated %s%s; evidence ids in brackets, get_ticket section=brief has them all):" % (
+        ((v.get("header") or {}).get("updated") or "?")[:16].replace("T", " "),
+        "; new findings since %s" % str(v["stale"].get("since") or "")[:16].replace("T", " ") if v.get("stale") else "")]
+    rc = by.get("root_cause")
+    if rc and not brief_empty(rc):
+        out.append("Root cause (%s): %s" % (rc.get("confidence") or "unknown", " ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(rc))))
+    fm = by.get("fixes_made")
+    if fm and not brief_empty(fm):
+        out.append("Fixes made (%s): %s" % (fm.get("source") or "from git and PRs", "; ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(fm))))
+    cons = by.get("cons")
+    if cons and not brief_empty(cons):
+        out.append("Possible cons: %s" % "; ".join(("%s: " % lab if lab else "") + common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites)
+                                                   for lab, text, cites in claim_texts(cons)))
+    return out if len(out) > 1 else []
 
 
 def example_ticket(cfg):

@@ -6,6 +6,7 @@ import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT,
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { ShareButton } from '../lib/share.js';
+import { Brief, BriefMeta } from './brief.js';
 
 // ------------------------------------------------------------------ list
 const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days']];
@@ -169,8 +170,9 @@ const KIND_ICON = { root_cause: 'warn', blocker: 'bad', fix: 'ok', decision: 'ch
 function Finding({ i, byId }) {
   const rep = i.status === 'superseded' && byId ? byId[i.superseded_by] : null;
   const conf = i.status === 'hypothesis' ? 'hypothesis' : i.status === 'confirmed' ? 'confirmed' : i.confidence;
-  return html`<li id=${'i-' + i.id}><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+  return html`<li id=${'i-' + i.id} tabindex="-1"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
     <div class="m">${[i.date, i.time].filter(Boolean).join(' ')}${conf ? ' · ' + conf + ' confidence' : ''}${i.evidence && i.evidence.length ? ' · ' + [].concat(i.evidence).slice(0, 2).join('; ') : ''}${i.closed_by ? ' · done: ' + i.closed_by : ''}</div>
+    ${i.review ? html`<div class="m"><strong>Needs review:</strong> ${i.review.why || 'maybe not this ticket'}${i.review.suggest ? ' (suggested: ' + i.review.suggest + ')' : ''}</div>` : null}
     ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) el.scrollIntoView({ block: 'center' }); }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</li>`;
 }
 // Current items per kind; done TODOs and items a newer one replaced are collapsed under each kind (K3).
@@ -181,23 +183,33 @@ function KindItems({ list, byId }) {
     ${done.length ? html`<details class="more"><summary>Done (${done.length})</summary><ul class="findings">${done.map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></details>` : null}
     ${sup.length ? html`<details class="more"><summary>Superseded (${sup.length})</summary><ul class="findings">${sup.map((i) => html`<${Finding} key=${i.id} i=${i} byId=${byId} />`)}</ul></details>` : null}`;
 }
-function Overview({ t }) {
+// Items out of the current view stay one click away (archived ones: copied to another ticket or kept from a rebuild).
+function Collapsed({ title, list, byId }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>${title} (${list.length})</summary>
+    <ul class="findings">${list.map((i) => html`<${Finding} key=${i.id} i=${i} byId=${byId} />`)}</ul></details>`;
+}
+// Everything extracted, one click away from the brief: current items per kind, done and superseded collapsed under
+// each kind (K3), items that may be another ticket's under Needs review (K8), archived ones last.
+function AllFindings({ t }) {
   const groups = {}, byId = {};
-  const live = t.findings.filter((i) => !i.archived);
-  live.forEach((i) => { byId[i.id] = i; });
+  t.findings.forEach((i) => { byId[i.id] = i; });
+  const live = t.findings.filter((i) => !i.archived), archived = t.findings.filter((i) => i.archived);
   live.filter((i) => !i.review).forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
   const order = Object.keys(KIND).filter((k) => groups[k]).concat(Object.keys(groups).filter((k) => !KIND[k]));
   const count = (k) => groups[k].filter((i) => i.status !== 'superseded' && i.status !== 'done').length;
-  return html`<${GitAlerts} g=${t.git} />
-    ${t.delivery ? html`<p class="lede"><strong>Delivery:</strong> ${t.delivery.text} <span class="muted small">(computed from git and PRs${t.delivery.checked_at ? ', checked ' + fmtTs(t.delivery.checked_at) : ''})</span></p>` : null}
-    ${t.tldr ? html`<p class="lede"><strong>In short:</strong> ${(t.tldr_check && t.tldr_check.length ? t.tldr_check : [{ text: t.tldr }]).map((x, i) => x.outdated
-      ? html`<span key=${i}><span class="muted small">${x.outdated}:</span> <s>${x.text}</s> </span>` : x.text + ' ')}</p>` : null}
-    ${t.problem ? html`<p class="lede">${t.problem}</p>` : null}
+  return html`<details class="more allfind" id="all-findings"><summary>All findings (${t.findings.length})</summary>
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
       <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${count(k)}</span></h2>
       <${KindItems} list=${groups[k]} byId=${byId} /></section>`)
       : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
-    <${NeedsReview} t=${t} list=${live.filter((i) => i.review)} />`;
+    <${NeedsReview} t=${t} list=${live.filter((i) => i.review)} />
+    <${Collapsed} title="Archived" list=${archived} byId=${byId} /></details>`;
+}
+function Overview({ t, jump, tabHref }) {
+  return html`<${GitAlerts} g=${t.git} />
+    <${Brief} t=${t} jump=${jump} tabHref=${tabHref} />
+    <${AllFindings} t=${t} />`;
 }
 // Items recorded under this ticket that may be another ticket's (K8): never moved, resolved with an inbox line.
 function NeedsReview({ t, list }) {
@@ -211,14 +223,14 @@ function NeedsReview({ t, list }) {
 function Requests({ rq }) {
   if (!rq.steps.length) return html`<${Empty} title=${'No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '')} icon="api">Ask Claude to save the essential requests for this ticket to the worklog.</${Empty}>`;
   return html`${rq.setup ? html`<p class="muted small">Run these in Git Bash from the data home; the first block loads base URLs and secrets from bruno/.env.</p><${CodeBlock} code=${rq.setup} label="Setup" what="the setup block" />` : null}
-    ${rq.steps.map((s) => html`<div class="step" key=${s.n}><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
+    ${rq.steps.map((s) => html`<div class="step" key=${s.n} id=${'rq-' + s.n} tabindex="-1"><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
       ${s.url ? html`<span class="url">${s.url}</span>` : null}<span class="grow"></span>${s.curl ? html`<${CopyButton} text=${s.curl} label="Copy as curl" what=${'for step ' + s.n} />` : null}</div>
       <div class="small muted">Expected: ${s.expected || '2xx'}${s.owner === 'user' ? ' · yours' : ''}${s.executed === false ? ' · not yet executed' : ''}${s.critical_fields && s.critical_fields.length ? ' · critical: ' + s.critical_fields.join(', ') : ''}</div>
       ${s.curl ? html`<details class="more"><summary>Show the curl command</summary><pre tabindex="0"><code>${s.curl}</code></pre></details>` : null}</div>`)}
     <p class="small muted">${rq.dropped ? rq.dropped + ' other captured calls left out. ' : ''}${rq.bruno_folder ? html`Bruno folder: <span class="mono">${rq.bruno_folder}</span> <${CopyButton} text=${rq.bruno_folder} label="Copy path" what="Bruno folder path" />` : null}</p>`;
 }
 function Query({ q }) {
-  return html`<div class="step"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
+  return html`<div class="step" id=${'q-' + q.id} tabindex="-1"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
     ${q.tables && q.tables.length ? html`<div class="small muted">Tables: ${q.tables.map((x, i) => html`<code key=${i}>${x}</code> `)}</div>` : null}
     ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}
     ${q.ref ? html`<div class="small muted">Sent: <span class="mono">${q.ref}</span></div>` : q.sent === null && q.evidence && q.evidence.length ? html`<div class="small muted">Saved in: <span class="mono">${q.evidence[0]}</span></div>` : null}
@@ -298,6 +310,22 @@ export function TicketPage({ route }) {
   const tab = EXPORT ? expTab : TABS.indexOf(route.params.tab) >= 0 ? route.params.tab : 'overview';
   const setTab = EXPORT ? setExpTab : (id) => setParams({ tab: id === 'overview' ? '' : id });
   useEffect(() => { document.title = key + ' · Chitragupta'; }, [key]);
+  // An evidence chip or an "All details" link: switch tab, then show the element (opening the details around it).
+  const tabHref = (id) => (EXPORT ? '#' : href('tickets', key, Object.assign({}, route.params, { tab: id === 'overview' ? '' : id })));
+  const jump = (id, el) => {
+    setTab(id);
+    let n = 0;
+    const show = () => {
+      const e = el ? document.getElementById(el) : document.getElementById('tk-panel');
+      if (!e) { if (++n < 30) requestAnimationFrame(show); return; }
+      for (let d = e.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+      if (e.tagName === 'DETAILS') e.open = true;
+      e.scrollIntoView({ block: el ? 'center' : 'start' });
+      if (el) { e.classList.add('hit'); setTimeout(() => e.classList.remove('hit'), 2000); }
+      e.focus({ preventScroll: true });
+    };
+    requestAnimationFrame(show);
+  };
   useEffect(() => {
     const k = {};
     TABS.forEach((id, i) => { k[String(i + 1)] = { label: 'Ticket tab ' + (i + 1), run: () => setTab(id) }; });
@@ -328,14 +356,13 @@ export function TicketPage({ route }) {
   return html`<${Wrap} rail=${rail} railLabel="Tickets">
     <${Load} res=${res} lines=${10}>${(t) => html`
       <div class="tkhead"><div class="tkhead-row"><div>
-        ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a href="#/tickets">Tickets</a></p>`}
+        ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a class="crumb" href="#/tickets">Tickets</a></p>`}
         <h1 id="page-title" tabindex="-1">${t.key}${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
         ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
+        <${BriefMeta} t=${t} />
         <div class="chips">
-          <${StatusChips} t=${t} />
-          ${(t.repos || []).map((r) => html`<${Chip} key=${'r' + r} icon="branch" title="Repo">${r}</${Chip}>`)}
-          ${(t.branches || []).slice(0, 2).map((b) => html`<${Chip} key=${'b' + b} title=${'Branch ' + b}><span class="mono">${b}</span></${Chip}>`)}
-          ${(t.branches || []).length > 2 ? html`<${Chip} title=${t.branches.slice(2).join(', ')}>+${t.branches.length - 2} branches</${Chip}>` : null}
+          ${(t.repos || []).length > 1 ? html`<${Chip} icon="branch" title=${'Repos ' + t.repos.join(', ')}>+${plural(t.repos.length - 1, 'repo')}</${Chip}>` : null}
+          ${(t.branches || []).length > 1 ? html`<${Chip} title=${t.branches.slice(1).join(', ')}>+${plural(t.branches.length - 1, 'branch', 'branches')}</${Chip}>` : null}
           <${Chip} icon="today" title="Time recorded">${fmtMin(t.minutes)}</${Chip}>
           <${Chip} title="Active">${(t.first || '—') + ' to ' + (t.last || '—')}</${Chip}>
           ${(g.alerts || []).length ? html`<${Status} kind="warn">${plural(g.alerts.length, 'delivery alert')}</${Status}>` : null}
@@ -347,7 +374,7 @@ export function TicketPage({ route }) {
         </div></div>
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
-        ${tab === 'overview' ? html`<${Overview} t=${t} />` : null}
+        ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
         ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
         ${tab === 'dbflow' ? html`<${DbFlow} df=${t.dbflow} />` : null}
         ${tab === 'requests' ? html`<${Requests} rq=${t.requests} />` : null}
