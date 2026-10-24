@@ -11,26 +11,26 @@ then documents it here. Everything here also renders inside a ticket export (the
 | Surfaces | `--canvas` (page), `--surface` (panes, cards), `--sunk` (wells, chips, code) | |
 | Ink | `--ink`, `--ink-2` (secondary), `--ink-3` (muted, still AA on every surface) | |
 | Rules | `--rule`, `--rule-strong` | 1 px lines and hover borders |
-| Accent | `--accent`, `--accent-ink` (links, the selected item), `--accent-soft` (highlights), `--on-accent` | graphite plus plum |
+| Accent | `--accent`, `--accent-ink` (links, the selected item), `--accent-soft` (highlights), `--on-accent` | neutral paper and ink blue; Night ink in dark mode |
 | Status | `--ok`, `--warn`, `--bad`, `--info`, each with a `-soft` background | never the only signal (see below) |
 | Ticket hues | `--t1` … `--t6`, `--to` (other) | timelines and lanes |
 | Heat | `--heat-0` … `--heat-4` | the timesheet calendar |
 | Focus | `--focus` | the 2 px focus ring |
-| Type | `--serif` (headings), `--sans` (text), `--mono` (code, keys, paths); scale `--fs-xs` 12 · `--fs-s` 13 · `--fs-m` 14.5 · `--fs-l` 17 · `--fs-xl` 22 · `--fs-2xl` 28 · `--fs-3xl` 40 | numbers are tabular |
+| Type | `--serif` (headings), `--sans` (text), `--mono` (code, keys, paths); scale `--fs-xs` 12 · `--fs-s` 14 · `--fs-m` 16 · `--fs-l` 21 · `--fs-xl` 28 · `--fs-2xl` 40 · `--fs-3xl` 56 | numbers are tabular |
 | Space | `--s1` 4 · `--s2` 8 · `--s3` 12 · `--s4` 16 · `--s5` 20 · `--s6` 28 · `--s7` 40 | |
 | Radius | `--r-row` < `--r-control` < `--r-card` < `--r-pane` < `--r-dialog` | by hierarchy |
 | Motion | `--dur-1`, `--dur-2`, `--ease` | 0 under reduced motion |
 
-**Dark mode** redefines the same tokens twice: under `@media (prefers-color-scheme: dark)` guarded by
-`:root:not([data-theme="light"])` (follow the system) and under `:root[data-theme="dark"]` (chosen in the page). Pages
-never hard-code a colour; they use tokens, so both themes come free. `data-density="compact"` tightens spacing and
-`data-motion="reduce"` stops transitions; both are per-browser choices.
+**Dark mode** is the default when no browser preference is saved (`:root:not([data-theme])`). Explicit light,
+dark and system preferences remain respected; system uses `prefers-color-scheme`. The local Source Serif 4 and
+IBM Plex Sans files supply headings and text, including standalone exports with their license notices. Pages use
+tokens for both themes. `data-density="compact"` tightens spacing and `data-motion="reduce"` stops transitions.
 
 ## Components
 
 | Class / component | Use |
 |---|---|
-| `.pane`, `.rail`, `nav.nav`, `.desk` | the shell: navigation, the side list, the page |
+| `.pane`, `.rail`, `.top-nav`, `.desk` | the shell: top navigation, the side list, the page |
 | `PageHead`, `.pagehead`, `.pagehead-act` | a page's `h1` (focused on navigation) and its actions |
 | `.tkhead`, `.tkbar` | the ticket header and the slim bar with its tabs that stays in view |
 | `Tabs` / `TabPanel` | WAI-ARIA tabs: arrow keys, Home and End move; automatic activation |
@@ -41,7 +41,7 @@ never hard-code a colour; they use tokens, so both themes come free. `data-densi
 | `.lede` | a lead paragraph (at most 80ch) |
 | `.alert` (`.bad`) | a banner with an icon and text; `role="alert"` only when it needs attention now |
 | `.findings` (`.t`, `.d`, `.m`) | a list of items: title, detail, meta line |
-| `.kindgroup` | a heading with an icon and a count over a `.findings` list |
+| `.kindgroup`, `.finding-row` | a heading and count over findings; each finding has its evidence in an aside that stacks on narrow screens |
 | `.step` | a card for one request or query |
 | `details.more` | anything kept one click away |
 | `.two` | a 1.25fr / 1fr two-column layout that stacks below 1040 px |

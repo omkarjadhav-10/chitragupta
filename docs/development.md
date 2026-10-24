@@ -76,7 +76,7 @@ Browser checks for the dashboard, on the same synthetic home the unit tests use 
 
 ```
 cd scripts/ui; npm ci; cd ../..                  # once: playwright-core, which drives your installed Chrome or Edge
-python scripts/ui/run.py [--shots <folder>]      # every page, both themes, 1440/1280/900 px
+python scripts/ui/run.py [--shots <folder>]      # every page, explicit light/dark themes, 1440/1280/900 px
 ```
 
 It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.

@@ -314,6 +314,9 @@ class TestExport(Base):
         self.assertNotRegex(html, r"(?i)<(?:img|iframe)[^>]+src\s*=\s*[\"']?(?:https?:|//)")
         self.assertEqual(html.count('<script id="cg-export"'), 1)
         self.assertNotIn("<!-- cg:export-data -->", html)
+        self.assertNotIn("url('/app/fonts/", html)
+        self.assertEqual(html.count("data:font/woff2;base64,"), 2)
+        self.assertIn('class="font-licenses"', html)
         data = html[html.index('<script id="cg-export"'):]
         data = data[:data.index("</script>")]
         self.assertNotIn("<", data[len('<script id="cg-export" type="application/json">'):])
@@ -322,7 +325,8 @@ class TestExport(Base):
         from chitragupta import export
         name, html = export.export_ticket("ABC-1002", "full")
         self.assertNotIn("__esbuild_esm_mermaid_nm", html)
-        self.assertLess(len(html), 300000)
+        # Includes two local WOFF2 fonts and their license notices, still far smaller than Mermaid.
+        self.assertLess(len(html), 450000)
         self.assertIsNone(export.export_ticket("ABC-4242", "full"))
         with self.assertRaises(ValueError):
             export.export_ticket(TICKET, "everything")

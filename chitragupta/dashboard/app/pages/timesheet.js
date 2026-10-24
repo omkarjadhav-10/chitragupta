@@ -148,13 +148,18 @@ export function TimesheetPage({ route }) {
     ${tot.off.length ? html`<ul class="rlist">${tot.off.map((d) => html`<li key=${d.date}><a href=${'#/timesheet?month=' + ym + '&day=' + d.date} aria-current=${sel === d.date ? 'true' : null}
       onClick=${(e) => { e.preventDefault(); setParams({ day: d.date }); }}><span class="sw"></span><span><span class="k">${fmtDay(d.date, true)}</span><span class="t">${KINDW[d.kind]}${d.note ? ' · ' + d.note : ''}</span></span><span class="m"></span></a></li>`)}</ul>`
       : html`<p class="muted small">None this month.</p>`}
-    <p class="muted small" style="margin-top:16px">To mark leave, a half day or a holiday, tell Claude (“I was on leave on …”) or use /cg:log. Marking from this page comes with the Settings update.</p>`;
-  return html`<${Desk} rail=${rail} railLabel="Month">
-    <${PageHead} title="Timesheet" sub=${monthName(ym) + ' · ' + fmtMin(tot.m) + ' recorded of ' + fmtMin(tot.target) + ' target'} />
-    <${Load} res=${res} lines=${8}>${() => html`<div class="two">
+    <p class="muted small" style="margin-top:16px">Select a day to mark leave, a half day or a holiday.</p>`;
+  return html`<${Desk} className="timesheet-desk">
+    <${PageHead} title=${monthName(ym)} sub="Timesheet">
+      <div class="month-actions"><button type="button" class="btn quiet" onClick=${() => setParams({ month: shiftMonth(ym, -1), day: '' })} aria-label="Previous month"><${Icon} name="left" />${monthName(shiftMonth(ym, -1))}</button>
+      <button type="button" class="btn quiet" onClick=${() => setParams({ month: shiftMonth(ym, 1), day: '' })} aria-label="Next month">${monthName(shiftMonth(ym, 1))}<${Icon} name="right" /></button></div>
+    </${PageHead}>
+    <div class="day-total"><div><span class="tracked-total">${fmtMin(tot.m)}</span><span class="total-target">of ${fmtMin(tot.target)}</span></div><p>${tot.worked} days with recorded work</p></div>
+    <${Load} res=${res} lines=${8}>${() => html`<div class="two month-layout">
       <section class="sec" aria-labelledby="sec-heat"><div class="sec-head"><h2 id="sec-heat">Month</h2><p class="sub">Darker means closer to the day's target</p></div><${Heatmap} ym=${ym} days=${days} sel=${sel} /></section>
       <div><section class="sec" aria-labelledby="sec-sel"><h2 id="sec-sel" class="sr">Selected day</h2><${DayPanel} d=${days.find((d) => d.date === sel)} /></section>
         <section class="sec" aria-labelledby="sec-wk"><div class="sec-head"><h2 id="sec-wk">Weeks</h2><p class="sub">Bar is recorded time; the line is the target</p></div><${WeekBars} days=${days} /></section></div></div>`}</${Load}>
+    <details class="more month-notes"><summary>Month totals and days off</summary>${rail}</details>
     <${PerTicket} period=${route.params.period === 'month' ? 'month' : 'week'} />
   </${Desk}>`;
 }

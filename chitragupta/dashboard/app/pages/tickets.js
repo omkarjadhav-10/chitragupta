@@ -24,28 +24,20 @@ function counts(list, f) {
   list.forEach((t) => [].concat(f(t)).forEach((v) => { m[v] = (m[v] || 0) + 1; }));
   return Object.keys(m).sort((a, b) => m[b] - m[a] || a.localeCompare(b)).map((k) => [k, m[k]]);
 }
-function Facet({ title, name, items, value }) {
-  if (!items.length) return null;
-  return html`<div class="facet-t" id=${'f-' + name}>${title}</div>
-    <ul class="rlist" aria-labelledby=${'f-' + name}>${items.slice(0, 8).map(([k, n]) => html`<li key=${k}>
-      <a href=${href('tickets', '', Object.assign({}, window.__tkParams, { [name]: value === k ? '' : k }))} aria-current=${value === k ? 'true' : null}
-        onClick=${(e) => { e.preventDefault(); setParams({ [name]: value === k ? '' : k }); }}><span class="sw" style=${{ background: value === k ? 'var(--accent)' : 'var(--rule)' }}></span>
-        <span class="k" style="font-weight:500">${k}</span><span class="m">${n}</span></a></li>`)}</ul>`;
-}
-function TicketRail({ list, p, current }) {
+function TicketFilters({ list, p }) {
   const statuses = counts(list, (t) => t.status || 'No status');
   const repos = counts(list, (t) => t.repos || []);
-  window.__tkParams = p;
   const active = p.q || p.status || p.repo || p.alerts || p.since;
-  return html`<div class="rail-tools">
+  return html`<div class="ticket-filters">
       <label class="sr" for="tk-q">Filter tickets</label>
       <input id="tk-q" type="search" placeholder="Filter by key, title or summary" value=${p.q || ''} autocomplete="off"
         onInput=${(e) => setParams({ q: e.currentTarget.value })} />
-      <label class="check"><input type="checkbox" checked=${!!p.alerts} onChange=${(e) => setParams({ alerts: e.currentTarget.checked ? '1' : '' })} />Only tickets with delivery alerts</label>
-      <div class="seg" role="group" aria-label="Last active">${SINCE.map(([v, l]) => html`<button key=${v} type="button" aria-pressed=${(p.since || '') === v ? 'true' : 'false'} onClick=${() => setParams({ since: v })}>${l}</button>`)}</div>
+      <label>Last active<select value=${p.since || ''} onChange=${(e) => setParams({ since: e.currentTarget.value })}>${SINCE.map(([v, l]) => html`<option key=${v} value=${v}>${l}</option>`)}</select></label>
+      <label>Status<select value=${p.status || ''} onChange=${(e) => setParams({ status: e.currentTarget.value })}><option value="">Any status</option>${statuses.map(([v, n]) => html`<option key=${v} value=${v}>${v} (${n})</option>`)}</select></label>
+      <label>Repo<select value=${p.repo || ''} onChange=${(e) => setParams({ repo: e.currentTarget.value })}><option value="">Any repo</option>${repos.map(([v, n]) => html`<option key=${v} value=${v}>${v} (${n})</option>`)}</select></label>
+      <label class="check"><input type="checkbox" checked=${!!p.alerts} onChange=${(e) => setParams({ alerts: e.currentTarget.checked ? '1' : '' })} />Only those that need you</label>
       ${active ? html`<button type="button" class="btn quiet" onClick=${() => setParams({ q: '', status: '', repo: '', alerts: '', since: '' })}><${Icon} name="close" size=${15} />Clear filters</button>` : null}
-    </div>
-    ${current ? null : html`<${Facet} title="Status" name="status" items=${statuses} value=${p.status} /><${Facet} title="Repo" name="repo" items=${repos} value=${p.repo} />`}`;
+    </div>`;
 }
 
 export function TicketsPage({ route }) {
@@ -64,12 +56,13 @@ export function TicketsPage({ route }) {
     { id: 'findings', label: 'Findings', num: true, hideSm: true, value: (t) => (t.counts || {}).findings || 0, render: (t) => (t.counts || {}).findings || 0 },
     { id: 'requests', label: 'Requests', num: true, hideSm: true, value: (t) => (t.counts || {}).requests || 0, render: (t) => (t.counts || {}).requests || 0 },
   ];
-  return html`<${Desk} rail=${html`<${TicketRail} list=${all} p=${p} />`} railLabel="Filters">
+  return html`<${Desk} className="tickets-desk">
     <${PageHead} title="Tickets" sub=${res.data ? (shown.length === all.length ? plural(all.length, 'ticket') : shown.length + ' of ' + plural(all.length, 'ticket')) + ', newest activity first' : ''} />
+    <${TicketFilters} list=${all} p=${p} />
     <${Load} res=${res} lines=${10}>${() => (all.length
       ? html`<p class="sr" aria-live="polite">${shown.length} tickets shown</p>
         <${DataTable} columns=${cols} rows=${shown} rowKey=${(t) => t.key} caption="Tickets" virtual sort=${{ id: 'last', dir: 'desc' }}
-          empty=${html`<${Empty} title="No ticket matches these filters">Clear the filters in the side list, or search everything with Ctrl K.</${Empty}>`} />`
+          empty=${html`<${Empty} title="No ticket matches these filters">Clear the filters above, or search everything with Ctrl K.</${Empty}>`} />`
       : html`<${Empty} title="No tickets recorded yet" icon="tickets">Work on a branch or mention a ticket key in Claude Code, and the ticket appears here.</${Empty}>`)}</${Load}>
   </${Desk}>`;
 }
@@ -170,10 +163,12 @@ const KIND_ICON = { root_cause: 'warn', blocker: 'bad', fix: 'ok', decision: 'ch
 function Finding({ i, byId }) {
   const rep = i.status === 'superseded' && byId ? byId[i.superseded_by] : null;
   const conf = i.status === 'hypothesis' ? 'hypothesis' : i.status === 'confirmed' ? 'confirmed' : i.confidence;
-  return html`<li id=${'i-' + i.id} tabindex="-1"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
-    <div class="m">${[i.date, i.time].filter(Boolean).join(' ')}${conf ? ' · ' + conf + ' confidence' : ''}${i.evidence && i.evidence.length ? ' · ' + [].concat(i.evidence).slice(0, 2).join('; ') : ''}${i.closed_by ? ' · done: ' + i.closed_by : ''}</div>
+  return html`<li class="finding-row" id=${'i-' + i.id} tabindex="-1"><div class="finding-copy"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
     ${i.review ? html`<div class="m"><strong>Needs review:</strong> ${i.review.why || 'maybe not this ticket'}${i.review.suggest ? ' (suggested: ' + i.review.suggest + ')' : ''}</div>` : null}
-    ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) el.scrollIntoView({ block: 'center' }); }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</li>`;
+    ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) { for (let d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true; el.scrollIntoView({ block: 'center' }); el.focus({ preventScroll: true }); } }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</div>
+    <aside class="finding-evidence" aria-label="Recorded evidence"><div>${[i.date, i.time].filter(Boolean).join(' ')}</div>
+      ${conf ? html`<div>${conf} confidence</div>` : null}${i.closed_by ? html`<div>Done: ${i.closed_by}</div>` : null}
+      ${[].concat(i.evidence || []).map((e, n) => html`<p key=${n}>${e}</p>`)}${i.ref ? html`<p class="mono">${i.ref}</p>` : null}</aside></li>`;
 }
 // Current items per kind; done TODOs and items a newer one replaced are collapsed under each kind (K3).
 function KindItems({ list, byId }) {
@@ -353,11 +348,11 @@ export function TicketPage({ route }) {
       <a href=${'#/tickets/' + encodeURIComponent(x.key)} aria-current=${x.key === key ? 'page' : null}><span class="sw" style=${{ background: x.key === key ? 'var(--accent)' : 'var(--rule)' }}></span>
         <span><span class="k">${x.key}${(x.alerts || []).length ? html`<${Icon} name="warn" size=${14} label="has delivery alerts" />` : null}</span><span class="t">${x.title || (x.title_hint ? 'hint: ' + x.title_hint : '')}</span></span><span class="m">${fmtMin(x.minutes)}</span></a></li>`)}</ul>`;
   const Wrap = EXPORT ? Plain : Desk;
-  return html`<${Wrap} rail=${rail} railLabel="Tickets">
+  return html`<${Wrap} className="ticket-desk">
     <${Load} res=${res} lines=${10}>${(t) => html`
       <div class="tkhead"><div class="tkhead-row"><div>
-        ${EXPORT ? null : html`<p class="small" style="margin:0 0 4px"><a class="crumb" href="#/tickets">Tickets</a></p>`}
-        <h1 id="page-title" tabindex="-1">${t.key}${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
+        ${EXPORT ? null : html`<details class="ticket-switcher"><summary>Tickets / switch ticket</summary>${rail}</details>`}
+        <h1 id="page-title" tabindex="-1"><span class="tk-key">${t.key}</span>${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
         ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
         <${BriefMeta} t=${t} />
         <div class="chips">
@@ -372,6 +367,8 @@ export function TicketPage({ route }) {
             <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a>
             <${ShareButton} k=${t.key} /></div>`}
         </div></div>
+      ${t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
+      ${tab === 'branches' ? null : html`<${GitAlerts} g=${t.git} />`}
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
         ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
