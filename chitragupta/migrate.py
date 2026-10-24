@@ -305,6 +305,7 @@ KB_STEPS = [
     ("kb5-paths-verified", "kb5:paths_verified"),
     ("kb5-queries-sent", "kb5:queries_sent"),
     ("kb5-todo-objects", "kb5:todo_objects"),
+    ("kb5-review-recheck", "kb5:review_recheck"),
     ("kb5-schema-version", "kb5:schema_v5"),  # last: the data now has the 0.5.0 shape
 ]
 

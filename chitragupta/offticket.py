@@ -1,7 +1,9 @@
 """K8: an item that may not belong to its ticket is flagged for review, never moved and never deleted.
 
 At merge time a new item gets `review = {why, suggest, at}` when
-  (a) it names another ticket key and not its own, unless its turn's prompt (or pasted Jira title) named this ticket;
+  (a) it names another ticket key and not its own, unless its turn's prompt (or pasted Jira title) named this ticket
+      or it shares a file, table, endpoint or title word with this ticket (then it says how the two relate, e.g.
+      "ABC-1002's commit is the fix", and stays);
   (b) its ticket came from the branch, an earlier turn (carry) or the model, and it shares no file, table, endpoint or
       title word (4+ letters, common words left out) with the ticket's current items or its Jira title;
   (c) it is about the worklog tool itself (.worklog, /cg:, Chitragupta) while the ticket is work.
@@ -73,18 +75,35 @@ def check(tk, t, rec, prefixes):
             keys.append(k)
     others = [k for k in keys if k != t]
     src = rec.get("src")
-    why, suggest = None, None
+    why, suggest, prof = None, None, None
     if others and t not in keys and src not in SPECIFIC_SRC:
-        why, suggest = "names %s, not %s" % (", ".join(others[:3]), t), others[0]
-    elif _SELF.search(text) and _work_ticket(tk):
-        why = "about the worklog tool itself, not the ticket's work"
-    elif src in WEAK_SRC:
         prof = profile(tk)
+        if not (words(text) & prof):
+            why, suggest = "names %s, not %s" % (", ".join(others[:3]), t), others[0]
+    if not why and _SELF.search(text) and _work_ticket(tk):
+        why = "about the worklog tool itself, not the ticket's work"
+    elif not why and src in WEAK_SRC:
+        prof = profile(tk) if prof is None else prof
         if prof and not (words(text) & prof):
             why = "shares no file, table, endpoint or title word with %s (ticket from %s)" % (t, src)
     if not why:
         return None
     return {"why": why, "suggest": suggest, "at": common.now_iso()}
+
+
+def recheck(tk, t, prefixes, at=None):
+    """Clear the review flag of items that check() would no longer flag (kb5-review-recheck). Never touches an item
+    you resolved (kept, or archived by a move). Returns the ids cleared."""
+    out = []
+    for iid, it in sorted((tk.get("items") or {}).items()):
+        if not isinstance(it, dict) or not it.get("review") or it.get("review_kept") or it.get("archived"):
+            continue
+        if check(tk, t, it, prefixes) is None:
+            it["review"] = None
+            it["review_cleared"] = {"at": at or common.now_iso(),
+                                    "reason": "recheck: shares a file, table, endpoint or title word with %s" % t}
+            out.append(iid)
+    return out
 
 
 _DIRECTIVE = re.compile(r"(?i)^\s*(keep|move)\s+([0-9a-f]{10})(?:\s+(?:to\s+)?([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}))?\s*\.?\s*$")

@@ -363,6 +363,35 @@ def todo_objects(dry_run, notes, backup):
     request_rerender(dry_run)
 
 
+# --------------------------------------------------------------------------- kb5-review-recheck (K8, Gate 2)
+
+def review_recheck(dry_run, notes, backup):
+    """Gate 2: "names another ticket" now also needs no shared file, table, endpoint or title word. Items flagged by
+    the older rule that share one with their ticket get their review cleared (review_cleared says when and why); items
+    you kept or moved are never touched. Backs up the ticket files first."""
+    from . import offticket
+    cfg = common.read_json(common.wl("config.json"), {}) or {}
+    prefixes = cfg.get("ticket_prefixes") or []
+    changed = {}
+    for t in S.Store.all_ticket_ids():
+        tk = common.read_json(S.ticket_path(t), None)
+        if not isinstance(tk, dict) or not tk:
+            continue
+        ids = offticket.recheck(tk, t, prefixes)
+        if ids:
+            changed[t] = tk
+            notes.append("%s: review cleared on %d item(s) that share a file, table, endpoint or title word with it"
+                         % (t, len(ids)))
+    if not changed:
+        return
+    backup([S.ticket_path(t) for t in changed])
+    if dry_run:
+        return
+    for t, tk in changed.items():
+        common.write_json(S.ticket_path(t), tk)
+    request_rerender(dry_run)
+
+
 SCHEMA_VERSION = 5
 
 

@@ -182,12 +182,14 @@ A ticket keeps every item it ever recorded; what changes is which ones are curre
 
 ### Items that may belong elsewhere
 
-When an extraction is merged, a new item is checked against its ticket (`chitragupta/offticket.py`) and flagged with `review: {why, suggest, at}`, never moved or deleted, when (a) it names another ticket key and not its own, unless the prompt of its turn (or a pasted Jira title) named this ticket (`suggest` is that other key); (b) its ticket came from the branch, an earlier turn or the model, and it shares no file, table, endpoint or title word (four letters or more, common words left out) with the ticket's current items or its Jira title; or (c) it is about the worklog tool itself (`.worklog`, `/cg:`, Chitragupta) while the ticket is work. Flagged items stay out of the hub's sections, the day-close input and the dashboard's kind groups, and sit under a collapsed "Needs review (n)" with their reason and the two inbox lines that resolve them:
+When an extraction is merged, a new item is checked against its ticket (`chitragupta/offticket.py`) and flagged with `review: {why, suggest, at}`, never moved or deleted, when (a) it names another ticket key and not its own and shares no file, table, endpoint or title word with this ticket, unless the prompt of its turn (or a pasted Jira title) named this ticket (`suggest` is that other key; an item that says how the two relate, such as "ABC-1002's commit is the fix", shares a word and stays); (b) its ticket came from the branch, an earlier turn or the model, and it shares no file, table, endpoint or title word (four letters or more, common words left out) with the ticket's current items or its Jira title; or (c) it is about the worklog tool itself (`.worklog`, `/cg:`, Chitragupta) while the ticket is work. Flagged items stay out of the hub's sections, the day-close input and the dashboard's kind groups, and sit under a collapsed "Needs review (n)" with their reason and the two inbox lines that resolve them:
 
 | `inbox.md` line | Effect |
 |---|---|
 | `ABC-1001: keep <id>` | Clears the flag (`review: null`, `review_kept`); the item is current again and is not flagged again when updated |
 | `ABC-1001: move <id> ABC-1002` | Copies the item to ABC-1002 (`src: "user"`, `moved_from`) and archives the original (`archived: {at, reason: "moved to ABC-1002"}`); nothing is deleted |
+
+The migration `kb5-review-recheck` (backs up the ticket files first) re-checks items flagged before rule (a) looked for shared words: one that would no longer be flagged gets `review: null` and `review_cleared: {at, reason}`. Items you kept or moved are never touched.
 
 ### Title and status
 
