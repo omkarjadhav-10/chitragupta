@@ -32,6 +32,25 @@ class BackupTreeTests(Isolated, unittest.TestCase):
         self.assertEqual(read("data", "days", "2026", "ABC-1001.json"), "day")
         self.assertEqual(read("tickets", "ABC-1001", "README.md"), "hub")
 
+    def test_a_path_too_long_for_windows_is_kept_under_a_short_name_with_a_manifest(self):
+        import json
+        from chitragupta import migrate
+        deep = self.write("data", "db-schema", "qa-shop", "shop_audit.orders_audit_with_a_long_name.json", text="card")
+        short = self.write("data", "meta.json", text="meta")
+        old = migrate.BACKUP_MAX_PATH
+        migrate.BACKUP_MAX_PATH = len(os.path.join(self.home, ".worklog", "backups")) + 70  # what a long home would hit
+        self.addCleanup(setattr, migrate, "BACKUP_MAX_PATH", old)
+        dest = migrate._backup_tree([deep, short], "kb")
+        with open(os.path.join(dest, "manifest.json"), encoding="utf-8") as f:
+            man = json.load(f)
+        stored = man[os.path.join("data", "db-schema", "qa-shop", "shop_audit.orders_audit_with_a_long_name.json")]
+        self.assertTrue(stored.startswith("_long"))
+        with open(os.path.join(dest, stored), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "card")
+        self.assertEqual(man[os.path.join("data", "meta.json")], os.path.join("data", "meta.json"))
+        for p in man.values():
+            self.assertLessEqual(len(os.path.join(dest, p)), migrate.BACKUP_MAX_PATH)
+
     def test_two_backups_in_the_same_second_get_their_own_folder(self):
         from chitragupta import migrate
         a = self.write("data", "meta.json")
