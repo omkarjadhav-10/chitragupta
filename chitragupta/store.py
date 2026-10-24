@@ -3,6 +3,7 @@
 Markdown is always rendered from here and never parsed back. Every write is atomic.
 IDs are stable hashes, so merging the same extraction twice is a no-op.
 """
+import json
 import os
 import re
 
@@ -569,7 +570,6 @@ ALREADY_BUDGET = 20000  # chars of ALREADY_RECORDED in an extraction header (ext
 
 
 def _jlen(x):
-    import json
     return len(json.dumps(x, ensure_ascii=False))
 
 
