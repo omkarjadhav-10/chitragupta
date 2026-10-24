@@ -194,6 +194,13 @@ async function launch() {
   check(!exportErrors.length && await exportPage.locator('.font-licenses a').count() === 2, 'standalone export renders with embedded fonts and licenses and no network requests');
   await exportPage.close();
 
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.goto(base + '#/tickets/ABC-1002');
+  await page.locator('#page-title').waitFor();
+  const headingWidth = await page.locator('#page-title').evaluate((e) => e.getBoundingClientRect().width);
+  check(headingWidth >= 390 * .7, 'ticket heading keeps reading width on a phone');
+  await page.setViewportSize({ width: 900, height: 1000 });
+
   let dayVariant;
   await page.route('**/api/today', (r) => r.fulfill({ json: dayVariant }));
   const emptyDay = { ...recorded, total_minutes: 0, tickets: [], other: [], lanes: [], worklog_saved: null };

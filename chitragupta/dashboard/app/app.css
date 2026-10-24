@@ -589,7 +589,7 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .month-layout .dcell .dh { font: 12px var(--sans); }
   .dcell .dk { font-size: 10px; flex-wrap: wrap; }
   .settings-save { padding: 12px; flex-wrap: wrap; }
-  .tkhead-row { flex-wrap: wrap; }
+  .tkhead-row { flex-direction: column; align-items: stretch; }
 }
 @media print { .day-tools, .ticket-switcher, .settings-save { display: none !important; } .day-bottom, .finding-row { display: block; } .finding-evidence { margin-top: 12px; } }
 

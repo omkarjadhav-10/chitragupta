@@ -91,3 +91,5 @@ pages, and *All findings* starts on a new page, so the brief is page one.
 - **Checks.** `scripts/ui/run.py` runs axe (WCAG 2.0–2.2 A/AA) on every page in light and dark at 1440, 1280 and
   900 px and fails on any serious or critical finding, horizontal scroll at 900 px or a failed keyboard check; see
   [development.md](development.md).
+
+At phone widths (600 px and below), ticket header actions sit below the title and brief metadata so the heading retains the full reading width. The browser checks cover this at 390 px.
