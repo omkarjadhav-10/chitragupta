@@ -175,3 +175,7 @@ The same file comes from `/cg:ticket <KEY> --export [--mode shareable]`, which s
 - **MCP response times are per check, not per server.** `claude mcp list` reports one time for the whole check, so Health and Settings show that.
 - **The Today preview is exact only when its data is.** Until the Jira data is refreshed and the marked lines are condensed (by the buttons, or by the sender at 20:00), it says which parts may still change.
 - **The Markdown renderer is basic.** Links show as text.
+
+### Focused ticket knowledge
+
+Migrated tickets show a small set of queries, tables and APIs on Overview. Lists awaiting brief choices say “Recorded (not yet ranked)”; chosen queries explain the cause, fix design or verification. Expand All recorded to inspect supporting evidence, noise and review flags. Needs review gives copyable inbox keep/move commands. Archived findings load when All findings opens, and Notes loads the hub when selected. Exports contain the summary and core lists. The generated ticket folder retains full evidence in `all-recorded.md` and `queries-recorded.md`.

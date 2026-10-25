@@ -497,7 +497,10 @@ class Handler(BaseHTTPRequestHandler):
             key = m.group(1).upper()
             if not api.TICKET_RE.match(key):
                 return self.send_json({"error": "bad ticket key"}, 400)
-            data = api.ticket(key)
+            section = q("section")
+            if section and section not in api.DETAIL_SECTIONS:
+                return self.send_json({"error": "unknown ticket section"}, 400)
+            data = api.ticket_detail(key, section) if section else api.ticket(key)
             return self.send_json(data) if data else self.send_json({"error": "unknown ticket", "key": key}, 404)
         m = EXPORT_PATH.match(path)
         if m:

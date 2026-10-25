@@ -615,7 +615,7 @@ def render_epic(t, tk):
     return "\n".join(L)
 
 
-def render_ticket(store, t):
+def _render_ticket_all(store, t):
     tk = store.ticket(t)
     if is_epic(tk):
         return render_epic(t, tk)
@@ -695,6 +695,56 @@ def render_ticket(store, t):
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     sec("Timeline", tl)
     L += ["## My notes", NOTES_BLOCK, ""]
+    return "\n".join(L)
+
+
+def render_ticket(store, t):
+    from . import offticket, relevance, dbflow
+    tk = store.ticket(t)
+    if not relevance.focused(tk) or is_epic(tk):
+        return _render_ticket_all(store, t)
+    L = [heading(t, tk), "", quick_links(t, tk), "", "Status: " + status_text(tk), ""]
+    # Long findings live in the recorded companion; summary evidence links remain reachable.
+    L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_brief(brief_view(tk, t), tk.get("items"))]
+    L += ["## " + relevance.heading(tk, "queries"), ""]
+    for q in relevance.core(tk, "queries", 5):
+        L.append("- [%s](queries.md#q-%s)%s — %s" % (cell(q.get("purpose") or "Query"), q["id"],
+            " (" + q["role"] + ")" if q.get("role") else "", cell(common.truncate(q.get("revealed") or "", 220))))
+    for kind, title, cap in (("tables", "Core tables", 6), ("apis", "Core APIs", 5)):
+        L += ["", "## " + relevance.heading(tk, kind), ""]
+        for r in relevance.core(tk, kind, cap):
+            name = r.get("name") if kind == "tables" else "%s %s" % (r.get("method") or "", r.get("path") or "")
+            L.append("- %s — %s" % (code(name or ""), cell(common.truncate(r.get("purpose") or "", 220))))
+    flows = dbflow.entries(tk)
+    if flows:
+        L += ["", "## Core DB flow", "", "| Scenario | Component | Operation | Table |", "|---|---|---|---|"]
+        L += ["| %s | %s | %s | %s |" % tuple(cell(e.get(f)) for f in ("scenario", "component", "operation", "table")) for e in flows[:12]]
+        L += ["", "[Flow and evidence](db-flow.md)"]
+    files = {k: f for k, f in (tk.get("files") or {}).items() if relevance.eligible(f) and f.get("changed")
+             and f.get("verified") is True and committed(tk, f) is True and f.get("relevance", "core") == "core"}
+    L += ["", "## Code map", ""] + (code_map(dict(tk, files=files)) or ["_No committed changed files recorded yet._"])
+    for kind in ("items", "queries", "tables", "apis", "files"):
+        records = tk.get(kind) or {}
+        target = "queries-recorded.md" if kind == "queries" else "all-recorded.md"
+        L += ["", "<details><summary>All recorded %s (%d)</summary>" % (kind, len(records)), "",
+              "[Open all recorded %s and evidence](%s)." % (kind, target), "", "</details>"]
+    review = needs_review(t, list((tk.get("items") or {}).values()) + offticket.record_reviews(tk))
+    if review:
+        L += ["", "## Needs review", ""] + review
+    L += ["", "## My notes", NOTES_BLOCK, ""]
+    return "\n".join(L)
+
+
+def render_recorded_ticket(store, t):
+    tk = store.ticket(t)
+    L = [_render_ticket_all(store, t)]
+    archived = [r for r in (tk.get("items") or {}).values() if r.get("archived")]
+    if archived:
+        L += ["## Archived findings", ""] + [hub_item(r) for r in archived]
+    rows = list((tk.get("data_flow") or {}).values()) + list((tk.get("dbflow_view") or {}).get("data_flow") or [])
+    if rows:
+        L += ["", "## Recorded DB flow", "", "| Scenario | Component | Operation | Table | Relevance | Evidence |", "|---|---|---|---|---|---|"]
+        L += ["| %s | %s | %s | %s | %s | %s |" % tuple(cell(e.get(f) or "") for f in ("scenario", "component", "operation", "table", "relevance", "evidence")) for e in rows]
     return "\n".join(L)
 
 
@@ -1047,7 +1097,7 @@ def hub_sections(t, tk):
     return L
 
 
-def render_queries(store, t):
+def _render_queries_all(store, t):
     tk = store.ticket(t)
     L = ["# %s — Queries" % t, ""]
     if is_epic(tk):
@@ -1076,6 +1126,32 @@ def render_queries(store, t):
     return "\n".join(L) + "\n"
 
 
+def render_recorded_queries(store, t):
+    tk = store.ticket(t)
+    L = ["# %s — All recorded queries" % t, ""]
+    for key, q in sorted((tk.get("queries") or {}).items()):
+        L += ['<a id="q-%s"></a>' % key, "", "## " + (q.get("purpose") or "Query"), "",
+              "%s%s" % (q.get("relevance") or "core", " · " + q["hidden_reason"] if q.get("hidden_reason") else ""),
+              "Variant of: " + q["variant_of"] if q.get("variant_of") else "", q.get("revealed") or "",
+              "```sql", fence_safe(q.get("text") or ""), "```", ""]
+    return "\n".join(L)
+
+
+def render_queries(store, t):
+    from . import relevance
+    tk = store.ticket(t)
+    if not relevance.focused(tk):
+        return _render_queries_all(store, t)
+    L = ["# %s — %s" % (t, relevance.heading(tk, "queries")), ""]
+    for q in relevance.core(tk, "queries", 5):
+        L += ['<a id="q-%s"></a>' % q["id"], "", "## " + cell(q.get("purpose") or "Query"), "",
+              "Role: " + (q.get("role") or "not selected yet"), cell(q.get("revealed") or ""),
+              "```sql", fence_safe(q.get("text") or ""), "```", ""]
+    L += ["<details><summary>All recorded (%d)</summary>" % len(tk.get("queries") or {}), "",
+          "[Open every query by relevance, including variants and unrun SQL](queries-recorded.md).", "", "</details>", ""]
+    return "\n".join(L)
+
+
 def shown_queries(tk):
     """The ticket's queries that were sent (or saved by you, or recorded before sending was checked): sent != False."""
     return [q for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False]
@@ -1101,7 +1177,8 @@ def _tlinks(ts):
 
 
 def render_catalogs(store):
-    cat = store.catalog()
+    from . import relevance
+    cat = relevance.catalog_view(store.catalog(), store.ticket)
     tb = ["# Database tables & collections", "", "| Table/collection | DB | Purpose | Key columns | Tickets | Last seen |", "|---|---|---|---|---|---|"]
     tb += ["| %s | %s | %s | %s | %s | %s |" % (code(v["name"]), cell(v.get("db")), cell(v.get("purpose")), cell(", ".join(v.get("key_columns", []))),
                                               _tlinks(v.get("tickets")), v.get("last_seen", "")) for _, v in sorted(cat["tables"].items())]
@@ -1148,6 +1225,12 @@ def render_context(store, t):
         L.append("%s: %s." % (stage_label(st), st["text"]))
     v = brief_view(tk, t)
     L += brief_context_lines(v)
+    from . import relevance
+    if relevance.focused(tk):
+        L += [relevance.heading(tk, "queries") + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in relevance.core(tk, "queries", 5))]
+        L += [relevance.heading(tk, "tables") + ": " + ", ".join(r.get("name") or "" for r in relevance.core(tk, "tables", 6)),
+              relevance.heading(tk, "apis") + ": " + "; ".join("%s %s" % (r.get("method") or "", r.get("path") or "") for r in relevance.core(tk, "apis", 5))]
+        return redact(common.truncate("\n".join(L), CONTEXT_MAX))
     cur = [i for i in current_items(tk) if isinstance(i, dict)]
     opens = sort_items([i for i in cur if i.get("kind") in OPEN_KINDS])[:6]
     if opens:
@@ -1414,6 +1497,13 @@ def render_all(store, cfg, health, days=None, tickets=None, everything=False):
         if common.write_text(q, render_queries(store, t)):
             changed.append(q)
         tk = store.ticket(t)
+        from . import relevance
+        if relevance.focused(tk):
+            for name, body in (("all-recorded.md", render_recorded_ticket(store, t)),
+                               ("queries-recorded.md", render_recorded_queries(store, t))):
+                path = os.path.join(h, "tickets", t, name)
+                if common.write_text(path, redact(body)):
+                    changed.append(path)
         dfp = os.path.join(h, "tickets", t, "db-flow.md")
         if tk.get("data_flow") or os.path.exists(dfp):
             from . import dbflow

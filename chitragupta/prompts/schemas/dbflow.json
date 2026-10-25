@@ -129,7 +129,8 @@
           "confidence"
         ],
         "additionalProperties": false
-      }
+      },
+      "maxItems": 12
     },
     "table_relations": {
       "type": "array",

@@ -194,6 +194,11 @@ def snapshot(key, mode="full", now=None):
     if not t:
         return None
     t = json.loads(json.dumps(t, default=str))  # a private copy: api results may be cached
+    if t.get("focused"):
+        # Exports carry the summary and core lists; they never need a live archived-record API.
+        detail = api.ticket_detail(t["key"], "dbflow") or {}
+        t["dbflow"] = detail.get("dbflow") or t["dbflow"]
+        t["lazy"] = False
     if mode == "shareable":
         t = shareable(t)
     elif mode == "team":

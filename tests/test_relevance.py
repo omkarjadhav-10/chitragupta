@@ -85,3 +85,18 @@ class Relevance(Isolated, unittest.TestCase):
         relevance.classify(tk)
         self.assertEqual(tk, first)
         self.assertEqual(len(tk["queries"]), 1)
+
+    def test_order_is_role_then_cited_sent_and_newest(self):
+        from chitragupta import relevance
+        self.tk["queries"] = {
+            "cited": dict(query("q01", "select a from shop.orders"), id="cited", sent=None, date="2026-08-01"),
+            "sent": dict(query("q02", "select b from shop.orders"), id="sent", date="2026-08-01"),
+            "new": dict(query("q03", "select c from shop.orders"), id="new", sent=None, date="2026-09-02"),
+            "old": dict(query("q04", "select d from shop.orders"), id="old", sent=None, date="2026-09-01")}
+        self.tk["brief"] = {"sections": {"findings": {"claims": [{"cites": ["query:cited"]}]}}}
+        self.assertEqual([q["id"] for q in relevance.core(self.tk,"queries")], ["cited", "sent", "new", "old"])
+        self.assertEqual(relevance.heading(self.tk,"queries"), "Recorded queries (not yet ranked)")
+        for key, role in (("old", "cause"), ("new", "fix-design"), ("sent", "verify")):
+            self.tk["queries"][key].update(role=role, relevance_source="brief")
+        self.assertEqual([q["id"] for q in relevance.core(self.tk,"queries")], ["old", "new", "sent", "cited"])
+        self.assertEqual(relevance.heading(self.tk,"queries"), "Key queries")

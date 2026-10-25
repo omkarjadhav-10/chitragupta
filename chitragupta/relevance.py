@@ -120,8 +120,26 @@ def eligible(rec):
 def core(tk, kind, cap=None):
     rows = [(k, r) for k, r in (tk.get(kind) or {}).items() if eligible(r) and r.get("relevance", "core") == "core"
             and not r.get("variant_of") and (kind != "queries" or r.get("sent") is not False)]
-    rows.sort(key=lambda x: (x[1].get("role") not in ROLES, x[0]))
+    cited = cited_queries(tk) if kind == "queries" else set()
+    rows.sort(key=lambda x: x[0])
+    rows.sort(key=lambda x: (x[1].get("date") or x[1].get("last") or "", x[1].get("time") or ""), reverse=True)
+    def priority(pair):
+        rid, row = pair
+        role = row.get("role")
+        rank = ROLES.index(role) if row.get("relevance_source") == "brief" and role in ROLES else len(ROLES)
+        return rank, rid not in cited, row.get("sent") is not True
+    rows.sort(key=priority)
     return [r for _, r in (rows[:cap] if cap is not None else rows)]
+
+
+def ranked(tk, kind):
+    return any(r.get("relevance_source") == "brief" for r in (tk.get(kind) or {}).values() if isinstance(r, dict))
+
+
+def heading(tk, kind):
+    if not ranked(tk, kind):
+        return "Recorded %s (not yet ranked)" % {"queries": "queries", "tables": "tables", "apis": "APIs"}[kind]
+    return {"queries": "Key queries", "tables": "Core tables", "apis": "Core APIs"}[kind]
 
 
 def candidates(tk):
@@ -175,3 +193,75 @@ def apply_picks(tk, picks):
         tags[name] = {"relevance": level, "hidden_reason": "" if level == "core" else "outside the problem's main flow", "variant_of": ""}
     classify(tk)
     return dropped
+
+
+def focused(tk):
+    """Legacy unmigrated files keep their old view until additive classification runs."""
+    return "scenario_relevance" in tk or any("relevance" in r for kind in ("queries", "tables", "apis", "files")
+                                            for r in (tk.get(kind) or {}).values() if isinstance(r, dict))
+
+
+def catalog_view(cat, lookup):
+    """Project the derived catalog from eligible owning-ticket records without rewriting evidence."""
+    import copy
+    tickets = {t: lookup(t) or {} for kind in ("tables", "apis") for r in (cat.get(kind) or {}).values()
+               for t in r.get("tickets") or []}
+    for w in (cat.get("db_writers") or {}).values():
+        for section in ("reads", "writes"):
+            for r in (w.get(section) or {}).values():
+                for t in r.get("tickets") or []:
+                    if t not in tickets:
+                        tickets[t] = lookup(t) or {}
+    if not any(focused(tk) for tk in tickets.values()):
+        return cat
+    out = copy.deepcopy(cat)
+    def allowed(t, kind, key):
+        tk = tickets.get(t) or {}
+        if not focused(tk):
+            return True
+        rows = tk.get(kind) or {}
+        r = next((r for k, r in rows.items() if k.casefold() == key.casefold()), None)
+        if r is not None:
+            return eligible(r) and r.get("relevance", "core") in ("core", "supporting")
+        if kind == "tables":
+            from . import dbflow
+            return any((e.get("table") or "").casefold() == key.casefold() for e in dbflow.entries(tk, ("core", "supporting")))
+        return False
+    for kind in ("tables", "apis"):
+        rows = {}
+        for key, r in (out.get(kind) or {}).items():
+            owners = [t for t in r.get("tickets") or [] if allowed(t, kind, key)]
+            if owners:
+                r["tickets"] = owners
+                rows[key] = r
+        out[kind] = rows
+    from . import dbflow
+    for t, tk in tickets.items():
+        if focused(tk):
+            for e in dbflow.entries(tk, ("core", "supporting")):
+                name = e.get("table") or ""
+                if name and allowed(t, "tables", name):
+                    out.setdefault("tables", {}).setdefault(name, {"name": name, "tickets": [t]})
+    good_tables = set(k.casefold() for k in out.get("tables") or {})
+    def good_ref(ref):
+        return any(str(ref).casefold() == t or str(ref).casefold().startswith(t + ".") for t in good_tables)
+    out["db_relations"] = {k: r for k, r in (out.get("db_relations") or {}).items()
+                            if good_ref(r.get("from")) and good_ref(r.get("to"))}
+    writers = {}
+    for key, w in (out.get("db_writers") or {}).items():
+        table = w.get("table") or key
+        if table.casefold() not in good_tables:
+            continue
+        for section in ("reads", "writes"):
+            rows = {}
+            for rid, row in (w.get(section) or {}).items():
+                owners = [t for t in row.get("tickets") or [] if allowed(t, "tables", table)]
+                if owners:
+                    row["tickets"] = owners
+                    rows[rid] = row
+            w[section] = rows
+        if w["reads"] or w["writes"]:
+            writers[key] = w
+    out["db_writers"] = writers
+    out["relevance_filtered"] = True
+    return out

@@ -290,6 +290,12 @@ def _summary_lines(t):
     bl = brief_context_lines(t.get("brief"))
     if bl:
         L += [""] + bl
+    if t.get("focused"):
+        L += ["Key queries:" if (t.get("core_ranked") or {}).get("queries") else "Recorded queries (not yet ranked):"] + ["- %s [%s]" % (_one(q.get("purpose") or "Query", 180), q["id"]) for q in t.get("queries") or []]
+        for kind, label in (("tables", "Core tables"), ("apis", "Core APIs")):
+            label = label if (t.get("core_ranked") or {}).get(kind) else "Recorded %s (not yet ranked)" % kind
+            L += [label + ": " + "; ".join(r.get("name") or (r.get("method") or "") + " " + (r.get("path") or "") for r in (t.get("core") or {}).get(kind) or [])]
+        return L
     if t.get("tldr"):
         L += ["", "TL;DR: " + _one(t["tldr"], 600)]
     if t.get("problem"):
@@ -446,6 +452,8 @@ def tool_get_ticket(args, cfg):
         raise ToolError("No ticket %s in the worklog (list_tickets shows the known ones)." % key)
     L = _summary_lines(t)
     if section:
+        if t.get("focused") and section in api.DETAIL_SECTIONS:
+            t.update(api.ticket_detail(key, section) or {})
         L += _section(key, t, _ticket_record(key) or {}, section)
     else:
         L += ["", "Sections (get_ticket section=…): " + ", ".join(SECTIONS),

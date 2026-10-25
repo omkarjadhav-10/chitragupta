@@ -258,8 +258,10 @@ def _cols_text(e, n=3):
 
 def scenarios(tk):
     out = {}
-    for e in entries(tk):
-        out.setdefault(e["scenario"], []).append(e)
+    from . import relevance
+    rows = entries(tk)
+    for e in rows[:12] if relevance.focused(tk) else rows:
+        out.setdefault(e.get("scenario") or "main", []).append(e)
     for k in out:
         out[k].sort(key=lambda e: (e.get("step") if e.get("step") is not None else 999, e.get("date", ""), e["component"]))
     return out
@@ -428,6 +430,9 @@ def render_ticket(t, tk, notes_block, cfg=None):
         return "\n".join(L)
     allent = [e for es in scs.values() for e in es]
     main = max(scs, key=lambda k: len(scs[k]))
+    from . import relevance
+    if relevance.focused(tk):
+        L += ["<details><summary>All recorded flow evidence</summary>", "", "[Raw and consolidated flow entries](all-recorded.md#recorded-db-flow).", "", "</details>", ""]
     L += ["## Overview", overview(t, tk, scs), ""]
     L += ["## Flow", "```mermaid", flowchart(allent), "```", ""]
     L += ["## Sequence — %s" % main, "```mermaid", sequence(scs[main]), "```", ""]
@@ -504,7 +509,8 @@ def summary_line(tk):
 
 
 def render_db_map(store):
-    cat = store.catalog()
+    from . import relevance
+    cat = relevance.catalog_view(store.catalog(), store.ticket)
     writers = cat.get("db_writers") or {}
     rels = list((cat.get("db_relations") or {}).values())
     L = ["# DB map", "", "Every table seen in ticket DB flows, how they relate, and which components write which columns.",

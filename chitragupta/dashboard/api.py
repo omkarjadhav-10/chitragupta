@@ -172,7 +172,8 @@ def _queries(tk):
                 reverse=True)
     return [{"id": k, "dialect": v.get("dialect"), "kind": v.get("kind"), "purpose": v.get("purpose"), "text": v.get("text") or "",
              "tables": v.get("tables") or [], "revealed": v.get("revealed"), "date": v.get("date"), "time": v.get("time"),
-             "sent": v.get("sent"), "ref": v.get("ref") or "", "evidence": v.get("evidence") or []}
+             "sent": v.get("sent"), "ref": v.get("ref") or "", "evidence": v.get("evidence") or [],
+             **{f: v.get(f) for f in ("review", "review_kept", "archived", "relevance", "hidden_reason", "variant_of", "role")}}
             for k, v in qs]
 
 
@@ -342,23 +343,38 @@ def ticket(key):
         return None
     tk = tk or {}
     out = ticket_summary(key, tk)
+    from .. import relevance
+    focus = relevance.focused(tk)
     from ..render import change_label
     out.update({
         "problem": tk.get("problem") or "", "title_source": tk.get("title_source") or "",
         "branches": _linked_branches(tk), "jira": tk.get("jira") or {},
-        "findings": _items(tk), "queries": _queries(tk), "requests": _requests(key, tk, paths),
-        "dbflow": _dbflow(key, paths), "artifacts": _artifacts(key, tk),
+        "findings": [dict(i, detail="", evidence=[]) for i in _items(tk) if not i.get("archived") and i.get("status") not in ("done", "superseded")] if focus else _items(tk),
+        "queries": _queries(dict(tk, queries={q["id"]: q for q in relevance.core(tk, "queries", 5)})) if focus else _queries(tk),
+        "requests": {"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0} if focus else _requests(key, tk, paths),
+        "dbflow": {"markdown": "", "qa_trace": None} if focus else _dbflow(key, paths),
+        "artifacts": [] if focus else _artifacts(key, tk),
         "timeline": [{"day": d, "minutes": int((v or {}).get("minutes") or 0), "line": (v or {}).get("line") or ""}
                      for d, v in sorted((tk.get("timeline") or {}).items(), reverse=True)],
         "files": [dict(f, change=change_label(tk, f)) for f in sorted(
             (f for f in (tk.get("files") or {}).values() if isinstance(f, dict)),
             key=lambda f: f.get("last") or "", reverse=True)[:60]],
-        "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
+        "paths": paths, "git": {"repos": {}, "alerts": _alerts(tk)} if focus else _git(tk),
+        "readme": "" if focus else _read_capped(paths.get("readme")),
     })
     from .. import brief, delivery
     out["brief"] = brief.view(tk, key)
     from .. import offticket
-    out["record_reviews"] = offticket.record_reviews(tk)
+    out["record_reviews"] = [{k: r.get(k) for k in ("id", "kind", "title", "review", "date")} for r in offticket.record_reviews(tk)]
+    out["focused"], out["lazy"] = focus, focus
+    out["core"] = {kind: [dict(r, id=next(k for k, v in (tk.get(kind) or {}).items() if v is r))
+                             for r in relevance.core(tk, kind, cap)] for kind, cap in (("tables", 6), ("apis", 5))}
+    if focus:
+        queries = {q["id"]: q for q in out["queries"]}
+        out["queries"] = [queries[q["id"]] for q in relevance.core(tk, "queries", 5)]
+    out["core_ranked"] = {kind: relevance.ranked(tk, kind) for kind in ("queries", "tables", "apis")}
+    out["record_counts"] = {kind: len(tk.get(kind) or {}) for kind in ("items", "queries", "tables", "apis", "files")}
+    out["record_counts"]["branches"] = sum(len(x.get("branches") or []) for x in ((tk.get("git") or {}).get("repos") or {}).values())
     if out["brief"].get("epic"):  # an Epic's knowledge is its children's: the tabs say so instead of showing it
         from ..render import EPIC_NOTE
         out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[],
@@ -367,6 +383,37 @@ def ticket(key):
                    dbflow={"markdown": "", "qa_trace": None})
     out["delivery"] = delivery.stage(tk.get("git") or {})
     out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
+    return out
+
+
+DETAIL_SECTIONS = ("findings", "queries", "tables", "apis", "files", "notes", "requests", "dbflow", "artifacts", "branches")
+
+
+def ticket_detail(key, section):
+    """Heavy evidence is fetched only after the relevant tab or recorded list opens."""
+    if not TICKET_RE.fullmatch(key or "") or section not in DETAIL_SECTIONS:
+        return None
+    tk = read_json_cached(common.hp("data", "tickets", key + ".json"))
+    if not isinstance(tk, dict):
+        return None
+    paths = ticket_paths(key)
+    out = {"key": key, "section": section}
+    if section == "findings":
+        out["findings"] = _items(tk)
+    elif section == "queries":
+        out["queries"] = _queries(tk)
+    elif section in ("tables", "apis", "files"):
+        out["records"] = [dict(r, id=k) for k, r in (tk.get(section) or {}).items()]
+    elif section == "notes":
+        out["readme"] = _read_capped(paths.get("readme"))
+    elif section == "requests":
+        out["requests"] = _requests(key, tk, paths)
+    elif section == "dbflow":
+        out["dbflow"] = _dbflow(key, paths)
+    elif section == "artifacts":
+        out["artifacts"] = _artifacts(key, tk)
+    elif section == "branches":
+        out["git"] = _git(tk)
     return out
 
 
@@ -790,7 +837,9 @@ def _link_matches(a, b, links):
 def knowledge():
     """The knowledge base the tick builds from sessions: tables (with columns from the QA schema cards), relations
     (verified = confirmed by the QA link map), the code that writes each table, APIs and integrations."""
-    cat = read_json_cached(common.hp("data", "catalog.json")) or {}
+    from .. import relevance
+    cat = relevance.catalog_view(read_json_cached(common.hp("data", "catalog.json")) or {},
+        lambda t: read_json_cached(common.hp("data", "tickets", t + ".json")))
     lm = read_json_cached(common.hp("data", "db-schema", "_linkmap.json")) or {}
     full, bare = _schema_columns()
     tables = []
