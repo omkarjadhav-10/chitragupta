@@ -202,9 +202,12 @@ class SchemaVersionTests(Isolated, unittest.TestCase):
         kb5.schema_v5(False, [], backed.extend)
         self.assertEqual(common.read_json(common.hp("data", "meta.json")), {"schema_version": 6})
 
-    def test_it_is_the_last_step(self):
+    def test_schema_step_finishes_the_v5_family_before_later_migrations(self):
         from chitragupta import migrate
-        self.assertEqual(migrate.KB_STEPS[-1], ("kb5-schema-version", "kb5:schema_v5"))
+        v5 = [step for step in migrate.KB_STEPS if step[0].startswith("kb5-")]
+        self.assertEqual(v5[-1], ("kb5-schema-version", "kb5:schema_v5"))
+        position = migrate.KB_STEPS.index(v5[-1])
+        self.assertTrue(all(step[0].startswith("kb51-") for step in migrate.KB_STEPS[position + 1:]))
 
 
 if __name__ == "__main__":
