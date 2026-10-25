@@ -870,9 +870,10 @@ class Agent:
                 continue  # time: / leave: / half-day: / holiday: / workday: / resend: lines (jira worklog)
             rd = offticket.parse_directive(n["text"]) if n.get("ticket") else None
             if rd:  # K8: "<KEY>: keep <id>" / "<KEY>: move <id> <OTHER>" resolve a "Needs review" item
-                common.log("agent", "inbox review: " + offticket.apply_directive(self.store, n["ticket"], rd, n.get("ts"),
-                                                                               self.prefixes))
-                continue
+                ok, msg = offticket.apply_directive(self.store, n["ticket"], rd, n.get("ts"), self.prefixes)
+                common.log("agent", "inbox review: " + msg)
+                if ok:
+                    continue
             day = common.workday(n["ts"], cfg)
             dd = self.store.day(day)
             dd["outside"]["inbox"].append(n)

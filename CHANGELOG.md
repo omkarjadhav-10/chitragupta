@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Ordinary owner notes beginning with keep/move and unresolved review commands remain inbox notes; only successfully resolved commands are consumed.
 - Record review flags appear in Needs review with copyable inbox keep/move commands for query ids, table keys and API keys; moves copy additively and archive the original.
 - K8 reviews queries, tables and APIs as well as findings, preserving records and owner decisions; existing tickets receive flags through a backed-up migration.
 - Multi-ticket prompts prefer a named work-branch key, retaining first-own-words and last-breadcrumb behavior otherwise. Configured shared hotfix bases remain excluded from branch attribution.

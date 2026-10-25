@@ -134,6 +134,7 @@ def recheck(tk, t, prefixes, at=None):
     return out
 
 
+_RECORD_KEY = re.compile(r"(?:[^\s]+|(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY) /[^\s]*)", re.I)
 _DIRECTIVE = re.compile(r"(?i)^\s*(keep|move)\s+(.+?)\s*$")
 
 
@@ -144,9 +145,12 @@ def parse_directive(text):
         return None
     verb, key = m.group(1).lower(), m.group(2).strip()
     if verb == "keep":
-        return verb, key.rstrip("."), None
+        key = key.rstrip(".")
+        return (verb, key, None) if _RECORD_KEY.fullmatch(key) else None
     dest = re.fullmatch(r"(.+?)\s+(?:to\s+)?([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})\s*\.?", key, re.I)
-    return (verb, dest.group(1).strip(), dest.group(2).upper()) if dest else None
+    if not dest or not _RECORD_KEY.fullmatch(dest.group(1).strip()):
+        return None
+    return verb, dest.group(1).strip(), dest.group(2).upper()
 
 
 def record_reviews(tk):
@@ -166,12 +170,12 @@ def _resolve_record(st, t, kind, iid, rec, verb, key, ts, prefixes):
     if verb == "keep":
         rec.update(review=None, review_kept=ts)
         st.touch_ticket(t)
-        return "kept %s in %s" % (iid, t)
+        return True, "kept %s in %s" % (iid, t)
     dest = S.valid_ticket(key, {p.upper() for p in prefixes} if prefixes else None)
     if not dest or dest == t:
-        return "not a ticket to move to: %s" % key
+        return False, "not a ticket to move to: %s" % key
     if rec.get("archived"):
-        return "%s in %s was already archived" % (iid, t)
+        return False, "%s in %s was already archived" % (iid, t)
     row = copy.deepcopy({k: v for k, v in rec.items() if k not in ("review", "review_kept", "archived", "relevance", "hidden_reason", "variant_of")})
     nid = S.query_id(dest, row.get("text")) if kind == "queries" else iid
     if kind == "queries":
@@ -187,12 +191,12 @@ def _resolve_record(st, t, kind, iid, rec, verb, key, ts, prefixes):
         st.catalog_dirty = True
     st.touch_ticket(t)
     st.touch_ticket(dest)
-    return "moved %s from %s to %s as %s" % (iid, t, dest, nid)
+    return True, "moved %s from %s to %s as %s" % (iid, t, dest, nid)
 
 
 def apply_directive(store, t, d, ts, prefixes):
     """Resolve one review: keep clears the flag; move copies the item to the other ticket and archives the original.
-    Returns a short message (logged)."""
+    Returns (ok, message); failed directives fall through to normal inbox notes."""
     verb, iid, key = d
     tk = store.ticket(t)
     it = (tk.get("items") or {}).get(iid)
@@ -202,17 +206,17 @@ def apply_directive(store, t, d, ts, prefixes):
         if len(matches) == 1:
             kind, actual, row = matches[0]
             return _resolve_record(store, t, kind, actual, row, verb, key, ts, prefixes)
-        return "no unambiguous item or record %s in %s" % (iid, t)
+        return False, "no unambiguous item or record %s in %s" % (iid, t)
     if verb == "keep":
         it["review"], it["review_kept"] = None, ts
         store.touch_ticket(t)
-        return "kept %s in %s" % (iid, t)
+        return True, "kept %s in %s" % (iid, t)
     from . import store as S
     dest = S.valid_ticket(key, {p.upper() for p in prefixes} if prefixes else None)
     if not dest or dest == t:
-        return "not a ticket to move to: %s" % key
+        return False, "not a ticket to move to: %s" % key
     if it.get("archived"):
-        return "%s in %s was already archived" % (iid, t)
+        return False, "%s in %s was already archived" % (iid, t)
     copy = {k: v for k, v in it.items() if k not in ("review", "review_kept", "status", "superseded_by", "subject",
                                                      "closed_by", "history", "archived")}
     nid = common.stable_id(dest, copy.get("kind"), copy.get("title"))
@@ -226,4 +230,4 @@ def apply_directive(store, t, d, ts, prefixes):
     it["archived"] = {"at": ts, "reason": "moved to %s" % dest}
     store.touch_ticket(t)
     store.touch_ticket(dest)
-    return "moved %s from %s to %s as %s" % (iid, t, dest, nid)
+    return True, "moved %s from %s to %s as %s" % (iid, t, dest, nid)
