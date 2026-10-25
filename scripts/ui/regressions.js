@@ -1,5 +1,22 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async print(browser, base, check) {
+    const ctx = await browser.newContext({ colorScheme: 'dark' });
+    try {
+      const page = await ctx.newPage();
+      await page.goto(base + '?theme=dark#/tickets/ABC-1001');
+      await page.locator('#page-title').waitFor();
+      await page.emulateMedia({ media: 'print' });
+      check(await page.evaluate(() => getComputedStyle(document.body).color) === 'rgb(21, 25, 46)', 'dark ticket prints with light-theme ink');
+      check(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === 'light', 'printing forces light color scheme');
+      const response = await page.request.get(base + 'api/tickets/ABC-1001/export?mode=full');
+      const exported = await response.text();
+      await page.goto('about:blank');
+      await page.setContent(exported, { waitUntil: 'domcontentloaded' });
+      await page.locator('#page-title').waitFor();
+      check(await page.evaluate(() => getComputedStyle(document.body).color) === 'rgb(21, 25, 46)', 'standalone export prints dark text');
+    } finally { await ctx.close(); }
+  },
   async alerts(browser, base, check) {
     const ctx = await browser.newContext();
     try {

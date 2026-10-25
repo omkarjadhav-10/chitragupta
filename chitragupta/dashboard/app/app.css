@@ -474,6 +474,16 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
   .pagehead > div:first-child { flex-basis: 200px; }
 }
 @media print {
+  :root, :root[data-theme] {
+  --canvas: #FAFAF8; --surface: #FAFAF8; --sunk: #F0F0EB; --ink: #15192E; --ink-2: #41495B; --ink-3: #596074;
+  --rule: #E2E2DD; --rule-strong: #9296A0;
+  --accent: #1F4FA3; --accent-ink: #1F4FA3; --accent-soft: #E8EEF8; --on-accent: #FFFFFF;
+  --ok: #1F7346; --ok-soft: #E3F2E8; --warn: #855800; --warn-soft: #FCEFD3; --bad: #B12A1F; --bad-soft: #FBE4E1; --info: #2F5F8A; --info-soft: #E5EEF6;
+  --t1: #1F4FA3; --t2: #427B88; --t3: #8A6D1F; --t4: #3F7A4F; --t5: #5B4AA8; --t6: #A04A2C; --to: #9296A0;
+  --heat-0: #F0F0EB; --heat-1: #DEE7F4; --heat-2: #A9C0E2; --heat-3: #3C64A1; --heat-4: #1F4FA3; --heat-ink: #FFFFFF;
+  --focus: #2F5F8A;
+    --focus: #2F5F8A; color-scheme: light;
+  }
   .top, nav.nav, .rail, .diagram-tools, .btn { display: none !important; }
   .desk { display: block; } .pane { padding: 0; }
   /* a ticket prints its brief on page one; the details start on a new page */
