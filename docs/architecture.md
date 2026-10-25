@@ -278,3 +278,8 @@ The final supersession batch adds already-seen current comparison context when i
 ## Per-record turn provenance
 
 Queries, tables, APIs and files follow their own turn when no explicit ticket is given. A trusted raw-line time takes precedence over model time; a sent SQL event supplies its actual time and raw reference. Agent extraction and rebuild pass the same raw-line time map. The model returns a raw line reference rather than a redundant time field for these records; code stores the derived time and attribution source. Older cached outputs with time remain supported. The backed-up `kb51-record-provenance` migration marks unknown older sources as `legacy` and leaves unknown times empty; it never moves historical records.
+
+
+## Turn routing
+
+Within the highest-priority prompt source (own words before pasted Jira text), a multi-ticket prompt prefers the work branch's ticket when named. Otherwise own words retain the first named ticket; breadcrumbs keep their last child. Configured base patterns, including ticket-bearing shared hotfix targets, do not provide a work-branch ticket. Explicit release and detached branches stay excluded.

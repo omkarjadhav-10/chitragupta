@@ -257,7 +257,8 @@ def _capture(event, common):
     elif event == "user-prompt":
         prompt = inp.get("user_prompt") or inp.get("prompt") or ""
         payload = {"prompt": redact(common.truncate(str(prompt), LIMITS["prompt"]))}
-        pt, ps = common.prompt_ticket(str(prompt), prefixes, cfg)
+        pt, ps = common.prompt_ticket(str(prompt), prefixes, cfg,
+                                      branch_ticket=common.work_branch_ticket(branch, cfg, repo_root))
     elif event == "post-tool":
         tool = str(inp.get("tool_name") or "")
         env = _qa_env(tool, inp.get("tool_input"), cfg, common)

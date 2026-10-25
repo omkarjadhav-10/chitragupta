@@ -226,7 +226,8 @@ def attribute(events, prefixes, cfg=None):
             if ev.get("_time"):  # time-only: the ticket its prompt named, no text
                 t, src = (ev.get("ticket"), "prompt") if ev.get("ticket") else (None, None)
             else:
-                t, src = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg)
+                bt = common.work_branch_ticket(own_branch.get(sid), cfg, own.get(sid))
+                t, src = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg, branch_ticket=bt)
             turn[sid] = (t, src)
             if t:
                 carry[sid] = t

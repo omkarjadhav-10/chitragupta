@@ -443,10 +443,11 @@ def is_parent_ticket(key, cfg, others=()):
     return False
 
 
-def prompt_ticket(text, prefixes, cfg=None):
+def prompt_ticket(text, prefixes, cfg=None, branch_ticket=None):
     """(ticket, src) a prompt is about, or (None, None). An id typed in your own words wins (src "prompt") over one in
     pasted text (`<pasted_content>` blocks and Jira header / breadcrumb lines; src "jira-title"). A breadcrumb gives its
-    LAST id (the issue itself; the ones before it are its parents). Parent issue types never win (is_parent_ticket):
+    LAST id (the issue itself; the ones before it are its parents). Within the highest-priority source, prefer the
+    work-branch ticket when named, otherwise the first own-words key (breadcrumbs keep their last child). Parent issue types never win (is_parent_ticket):
     the next candidate does, or nobody, so the branch or the carried ticket decides."""
     if not text or not prefixes:
         return None, None
@@ -483,10 +484,12 @@ def prompt_ticket(text, prefixes, cfg=None):
         if k not in [c[0] for c in cands]:
             cands.append((k, src))
     keys = [c[0] for c in cands]
-    for k, src in cands:
-        if cfg is not None and is_parent_ticket(k, cfg, keys):
-            continue
-        return k, src
+    for group, src, last in ((own, "prompt", False), (crumbs, "jira-title", True),
+                             (pasted, "jira-title", False), (parents, "jira-title", False)):
+        eligible = [k for k in group if cfg is None or not is_parent_ticket(k, cfg, keys)]
+        if eligible:
+            default = eligible[-1] if last else eligible[0]
+            return (branch_ticket if branch_ticket in eligible else default), src
     return None, None
 
 

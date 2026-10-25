@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Multi-ticket prompts prefer a named work-branch key, retaining first-own-words and last-breadcrumb behavior otherwise. Configured shared hotfix bases remain excluded from branch attribution.
 - Queries, tables, APIs and files follow their own turn and carry their own timestamp, with trusted raw/SQL times preferred over model or chunk times.
 - Parallel tickets use separate Day Line tracks; Jira entries without a start time remain in the ledger with an explanation.
 - Older media-query APIs keep appearance setup working, including saved density and motion choices.
