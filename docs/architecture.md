@@ -309,3 +309,7 @@ After relevance migration, the hub and dashboard lead with the brief and up to f
 The initial ticket API skips archived bodies, hub text and heavy tab content. A validated `section` query loads findings, queries, tables, APIs, files, notes, requests, DB flow, artifacts or branches when opened. Exports and default MCP/SessionStart context carry core lists; SessionStart remains bounded to 4,000 characters. Global catalogs and DB maps project eligible core/supporting owning-ticket records without rewriting canonical evidence, including schema/link-map filtering. Legacy unmigrated files keep their former view until classification runs.
 
 Focused views retain labelled title hints when Jira has not supplied a title. Core scenario effects and query links connect the flow to verification; query companions explicitly show sent status and raw references, including SQL without a recorded result. My-notes blocks remain preserved in the hub and recorded companion.
+
+## Logical changes in ticket summaries
+
+Change facts use delivery patch-id groups, with cherry-picked SHA citations retained as aliases of the same logical change. Commits without group evidence remain separate. Commit capture excludes `refs/stash` and stash snapshot subjects; old snapshots stay stored but do not appear as delivered changes.

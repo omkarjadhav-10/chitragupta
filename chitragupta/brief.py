@@ -119,19 +119,35 @@ def _prs(tk):
 
 
 def _commits(tk):
-    """[{sha7, subject, date, repo, ref}] from the ticket's commits and its branch rows, oldest first."""
-    out = {}
-    for c in (tk.get("commits") or {}).values():
-        if isinstance(c, dict) and c.get("sha"):
-            out[_sha7(c["sha"])] = {"sha7": _sha7(c["sha"]), "subject": c.get("subject") or "",
-                                    "date": str(c.get("date") or "")[:10], "repo": c.get("repo_name") or "",
-                                    "ref": c.get("ref") or ""}
-    for name, x in ((tk.get("git") or {}).get("repos") or {}).items():
-        for row in x.get("rows") or []:
-            for sha in row.get("shas") or []:
-                out.setdefault(_sha7(sha), {"sha7": _sha7(sha), "subject": row.get("subject") or "",
-                                            "date": str(row.get("date") or "")[:10], "repo": name, "ref": ""})
-    return sorted(out.values(), key=lambda c: (c["date"], c["sha7"]))
+    """One row per delivery patch group; old SHA citations remain valid aliases. No stash snapshots."""
+    from . import sources
+    raw = {str(c["sha"])[:7]: c for c in (tk.get("commits") or {}).values()
+           if isinstance(c, dict) and c.get("sha") and not sources.stash_commit(c.get("ref"), c.get("subject"))}
+    out, covered = [], set()
+    for name, repo in ((tk.get("git") or {}).get("repos") or {}).items():
+        for row in repo.get("rows") or []:
+            shas = list(dict.fromkeys(_sha7(s) for s in list(row.get("shas") or []) + list(row.get("loose") or []) if s))
+            if not shas or sources.stash_commit("", row.get("subject")):
+                continue
+            primary = shas[0]
+            c = raw.get(primary) or {}
+            out.append({"sha7": primary, "aliases": shas[1:], "subject": row.get("subject") or c.get("subject") or "",
+                        "date": str(row.get("date") or c.get("date") or "")[:10], "repo": name, "ref": c.get("ref") or "",
+                        "patch_id": row.get("pid") or row.get("id") or primary, "branches": list(row.get("branches") or []),
+                        "reached": [target for target, cell in (row.get("cells") or {}).items() if cell.get("s") in ("in", "same", "squash")]})
+            covered.update(shas)
+    for sha, c in raw.items():
+        if sha in covered:
+            continue
+        pid = c.get("patch_id") or c.get("pid")
+        group = next((r for r in out if pid and r["patch_id"] == pid and r["repo"] == c.get("repo_name")), None)
+        if group:
+            group["aliases"].append(sha)
+            continue
+        out.append({"sha7": sha, "aliases": [], "subject": c.get("subject") or "", "date": str(c.get("date") or "")[:10],
+                    "repo": c.get("repo_name") or "", "ref": c.get("ref") or "", "patch_id": pid or sha,
+                    "branches": [c["ref"]] if c.get("ref") else [], "reached": []})
+    return sorted(out, key=lambda c: (c["date"], c["sha7"]))
 
 
 def _stage(tk):
@@ -165,7 +181,8 @@ def facts(key, tk, card=None):
     st = _stage(tk)
     if st:
         f["delivery_stage"] = st.get("text") or st.get("kind")
-    f["commits"] = [{"id": "commit:" + c["sha7"], "subject": c["subject"], "date": c["date"], "repo": c["repo"]}
+    f["commits"] = [{"id": "commit:" + c["sha7"], "aliases": ["commit:" + s for s in c["aliases"]],
+                     "subject": c["subject"], "date": c["date"], "repo": c["repo"]}
                     for c in reversed(_commits(tk))][:40]
     f["prs"] = [{"id": "pr:%s" % p["number"], "source": p.get("source"), "target": p.get("target"),
                  "state": p.get("state"), "merged": str(p.get("merged_at") or "")[:10]} for p in _prs(tk)]
@@ -193,6 +210,7 @@ def _fact_ids(f):
         ids.add(f["jira"]["id"])
     for k in ("commits", "prs", "tests", "replay", "queries", "tables"):
         ids |= {x["id"] for x in f.get(k) or []}
+        ids |= {alias for x in f.get(k) or [] for alias in x.get("aliases") or []}
     return ids
 
 

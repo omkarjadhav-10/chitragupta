@@ -15,6 +15,10 @@ from .redact import redact
 _SEP_REC, _SEP_FLD = "\x1e", "\x1f"
 
 
+def stash_commit(ref, subject):
+    return str(ref or "").strip() in ("refs/stash", "stash") or bool(re.match(r"(?i)^(?:index|untracked files|wip) on ", subject or ""))
+
+
 def scan_commits(cfg, state, since_dt):
     """My commits in all watched repos since `since_dt`. Dedupe by sha via state['commits_seen']."""
     seen = state.setdefault("commits_seen", {})
@@ -26,7 +30,7 @@ def scan_commits(cfg, state, since_dt):
     for repo in cfg.get("watched_repos") or []:
         if not os.path.isdir(os.path.join(repo, ".git")) and not os.path.isfile(os.path.join(repo, ".git")):
             continue
-        args = ["log", "--all", "--source", "--no-merges",
+        args = ["log", "--exclude=refs/stash", "--all", "--source", "--no-merges",
                 "--since=" + since_dt.isoformat(timespec="seconds"), "--name-status",
                 "--format=" + _SEP_REC + "%H" + _SEP_FLD + "%aI" + _SEP_FLD + "%S" + _SEP_FLD + "%s" + _SEP_FLD + "%b" + _SEP_FLD]
         args += ["--author=" + re.escape(e) for e in emails]
@@ -41,7 +45,7 @@ def scan_commits(cfg, state, since_dt):
             if len(parts) < 6:
                 continue
             sha, adate, ref, subject, body, files_blob = parts[0].strip(), parts[1], parts[2], parts[3], parts[4], parts[5]
-            if sha in seen:
+            if sha in seen or stash_commit(ref, subject):
                 continue
             ref = re.sub(r"^refs/(heads|remotes/[^/]+)/", "", ref.strip())
             files = []

@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Ticket change facts group cherry-picked copies by delivery patch id and preserve old SHA citation aliases; stash snapshots are excluded from commit capture and summary changes.
 - Focused hubs retain labelled title hints and core scenario effects; SessionStart retains the core DB summary and recorded query companions show sent/raw provenance.
 - Ordinary owner notes beginning with keep/move and unresolved review commands remain inbox notes; only successfully resolved commands are consumed.
 - Record review flags appear in Needs review with copyable inbox keep/move commands for query ids, table keys and API keys; moves copy additively and archive the original.
