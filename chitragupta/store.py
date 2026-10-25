@@ -489,7 +489,9 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         if did and p not in slot["files_changed"]:
             slot["files_changed"].append(p)
 
+    from . import relevance
     for t in sorted(touched):
+        relevance.classify(store.ticket(t))
         mark_applied_fixes(store.ticket(t), day)
     store.touch_day(day)
 

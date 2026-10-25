@@ -68,3 +68,20 @@ def record_review(dry_run, notes, backup):
             notes.append("%s: off-ticket record review flags; no records moved" % t)
             if not dry_run:
                 common.write_json(S.ticket_path(t), tk)
+
+
+def record_relevance(dry_run, notes, backup):
+    from . import relevance
+    keys = S.Store.all_ticket_ids()
+    paths = [S.ticket_path(t) for t in keys]
+    backup(paths)
+    tickets = {t: common.read_json(S.ticket_path(t), {}) for t in keys}
+    tables = {t: relevance.problem_tables(tk) for t, tk in tickets.items()}
+    for t, tk in tickets.items():
+        before = __import__("json").dumps(tk, sort_keys=True)
+        others = set().union(*(v for key, v in tables.items() if key != t))
+        relevance.classify(tk, others)
+        if __import__("json").dumps(tk, sort_keys=True) != before:
+            notes.append("%s: additive relevance and literal variants" % t)
+            if not dry_run:
+                common.write_json(S.ticket_path(t), tk)

@@ -310,6 +310,7 @@ KB_STEPS = [
     ("kb51-history-compact", "kb51:history_compact"),
     ("kb51-record-provenance", "kb51:record_provenance"),
     ("kb51-record-review", "kb51:record_review"),
+    ("kb51-relevance", "kb51:record_relevance"),
 ]
 
 

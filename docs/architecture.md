@@ -295,3 +295,7 @@ K8 checks query SQL, table and endpoint names, and their purposes at merge time,
 Record review rows appear alongside findings in Needs review. Inbox keep/move accepts the exact query id, qualified table key or API key (including its method). Keep records the owner decision; move copies content to the destination with user provenance and archives the source. Query ids are recomputed for their new owner. Repeated moves do not duplicate records.
 
 Review commands accept one token or an HTTP method followed by a slash-prefixed path. An unresolved command is logged and preserved as a normal inbox note; it never consumes owner text.
+
+## Record relevance
+
+Queries, tables, APIs and files carry additive `relevance` (core/supporting/noise), `hidden_reason` and `variant_of` fields. DB-flow scenarios have the same tags, shared by raw and consolidated entries. The backed `kb51-relevance` migration preserves every record. Unresolved review and archived records never enter core lists. SQL metadata/catalog, shell wrappers, unrecorded results and test-data hunting are noise; current brief citations protect useful results. Literal-only variants point to the newest query of each absent/present outcome; distinct projections remain distinct evidence. Until the brief selects core records, eligible candidates stay visible rather than being lost to a word-overlap ranker. Brief picks validate ids, query roles and caps before changing relevance.
