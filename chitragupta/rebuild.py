@@ -209,8 +209,9 @@ class Rebuild:
             firsts = [x for x in (old.get("first_date") or old.get("date"), new.get("first_date")) if x]
             if firsts:
                 new["first_date"] = min(firsts)
-            if old.get("history") and not new.get("history"):
-                new["history"] = old["history"]
+            if old.get("history") or new.get("history"):
+                new["history"] = S.union_history(old.get("history"), new.get("history"))
+                S.compact_history(new, t)
             self.store.touch_ticket(t)
             n += 1
         return n

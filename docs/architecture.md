@@ -275,3 +275,5 @@ Item merges preserve owner wording only for inbox or explicit user provenance. E
 Item history deduplicates title/detail/confidence and omits evidence from snapshots. Inline history keeps the first version and newest four, ordered by date/time; overflow is appended to `data/history/<KEY>.jsonl`. The `kb51-history-compact` migration backs up canonical tickets and existing archives before compacting them.
 
 Stable-id re-mentions retain the longer detail and never raise confidence on recency alone. Explicit `updates` corrections may replace shorter text and confidence. Case/whitespace changes do not invalidate the brief; status, confidence, substantive text and deterministic facts still do.
+
+Rebuild restoration unions prior and re-extracted histories by content before applying the inline cap and additive archive.
