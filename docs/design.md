@@ -97,3 +97,5 @@ At phone widths (600 px and below), ticket header actions sit below the title an
 When a generated brief exists, it supplies the ticket summary; the legacy model TL;DR is shown in the header only as a fallback before a brief exists. This prevents stale prose competing with current cited claims.
 
 Brief text wraps long method names and owner corrections inside its reading width, including at 390 px.
+
+Ticket delivery alerts render once in the shared header (or once inside the Branches tab), including when the Overview is open. The browser regression supplies a ticket with delivery alerts.

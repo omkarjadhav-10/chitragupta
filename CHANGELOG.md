@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Fixed
+- Ticket Overview renders delivery alerts and their accessible alert region once.
 - Supersession skips a final singleton when no comparison context fits, avoiding a model call that cannot supersede anything.
 - Rebuild and interrupted migration retries do not duplicate archived history versions.
 - Brief rendering reads passing evidence directly and retains older passing-test citations beyond the recent-facts window.

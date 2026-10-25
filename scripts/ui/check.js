@@ -17,6 +17,7 @@ let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 
 async function launch() {
+  if (process.env.CG_UI_BROWSER) return chromium.launch({ executablePath: process.env.CG_UI_BROWSER });
   for (const channel of ['chrome', 'msedge']) {
     try { return await chromium.launch({ channel }); } catch (e) { /* try the next browser */ }
   }
@@ -25,6 +26,8 @@ async function launch() {
 
 (async () => {
   const browser = await launch();
+  await require('./regressions.js').run(browser, base, check, process.env.CG_UI_FOCUS);
+  if (process.env.CG_UI_FOCUS) { await browser.close(); process.exit(failed ? 1 : 0); }
   for (const theme of ['light', 'dark']) {
     for (const width of [1440, 1280, 900]) {
       console.log(theme + ' · ' + width + ' px');

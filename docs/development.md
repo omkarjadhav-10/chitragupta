@@ -154,3 +154,5 @@ Users get the update through Claude Code's plugin update. Their next session's m
 `--dry-run` shows the plan without changing anything. `scripts/cutover.py rollback` restores everything from the manifest. Data is never deleted.
 
 Dashboard unit and browser fixtures freeze their clock at local noon. This keeps their activity samples nonempty even when checks start in the first minute after midnight.
+
+For isolated browser runs, `CG_UI_BROWSER` can select an explicit installed browser or a disposable Playwright headless-shell executable. `CG_UI_FOCUS=alerts` runs the delivery-alert regression alone; it is also included in a full browser run. Keep browser profiles and caches in disposable folders; short paths avoid Windows cache path limits.

@@ -202,8 +202,7 @@ function AllFindings({ t }) {
     <${Collapsed} title="Archived" list=${archived} byId=${byId} /></details>`;
 }
 function Overview({ t, jump, tabHref }) {
-  return html`<${GitAlerts} g=${t.git} />
-    <${Brief} t=${t} jump=${jump} tabHref=${tabHref} />
+  return html`<${Brief} t=${t} jump=${jump} tabHref=${tabHref} />
     <${AllFindings} t=${t} />`;
 }
 // Items recorded under this ticket that may be another ticket's (K8): never moved, resolved with an inbox line.
