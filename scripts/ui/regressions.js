@@ -1,5 +1,25 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async dayline(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await page.route('**/api/today', async route => {
+        const response = await route.fetch(), day = await response.json();
+        day.lanes = [{ ticket: 'ABC-1001', minutes: 60, spans: [['09:00', '10:00']] },
+                     { ticket: 'ABC-1002', minutes: 60, spans: [['09:00', '10:00']] }];
+        day.worklog_saved = null;
+        day.worklog_preview = { ...day.worklog_preview, entries: [{ ticket: 'ABC-1001', start: '', minutes: 60, duration: '1h' }] };
+        await route.fulfill({ json: day });
+      });
+      await page.goto(base + '#/today');
+      await page.locator('.dayline-span').first().waitFor();
+      const boxes = await page.locator('.dayline-span').evaluateAll(elements => elements.map(e => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; }));
+      check(boxes.length === 2 && (boxes[0].bottom <= boxes[1].top || boxes[1].bottom <= boxes[0].top), 'parallel ticket stretches occupy separate Day Line tracks');
+      check(await page.locator('.jira-span').count() === 0, 'Jira entries without a start are not placed at an invented time');
+      check((await page.locator('.dayline').innerText()).includes('no recorded start'), 'unplaced Jira entries have an explanation');
+    } finally { await ctx.close(); }
+  },
   async media(browser, base, check) {
     const ctx = await browser.newContext();
     try {

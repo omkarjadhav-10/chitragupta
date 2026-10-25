@@ -27,25 +27,31 @@ function Lanes({ lanes, commits, slots, entries, isToday }) {
   let lo = Math.min(...all.map((s) => mins(hhmm(s[0])))), hi = Math.max(...all.map((s) => mins(hhmm(s[1]))));
   lo = Math.min(8 * 60, Math.floor(lo / 60) * 60); hi = Math.max(18 * 60, Math.ceil(hi / 60) * 60);
   const span = Math.max(60, hi - lo);
-  const x = (t) => Math.max(0, Math.min(100, ((mins(hhmm(t)) - lo) / span) * 100));
+  const validTime = (t) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(hhmm(t));
+  const placed = (entries || []).filter((e) => validTime(e.start));
+  const unplaced = (entries || []).length - placed.length;
+  const x = (t) => validTime(t) ? Math.max(0, Math.min(100, ((mins(hhmm(t)) - lo) / span) * 100)) : 0;
   const ticks = [];
   for (let m = lo; m <= hi; m += Math.max(60, Math.round(span / 6 / 60) * 60)) ticks.push(html`<span key=${m} style=${{ left: ((m - lo) / span) * 100 + '%' }}>${pad(Math.floor(m / 60))}:00</span>`);
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   return html`<div class="dayline">
     <div class="dayline-axis" aria-hidden="true">${ticks}</div>
-    <div class="dayline-row"><span class="dayline-label">Worked</span><div class="dayline-track">
-      ${lanes.map((l) => (l.spans || []).map((s, i) => html`<button type="button" key=${(l.ticket || 'other') + i} class=${'dayline-span ' + slots[l.ticket || '']}
+    ${lanes.map((l) => html`<div class="dayline-row" key=${l.ticket || 'other'}><span class="dayline-label">${l.ticket || 'Other'}</span><div class="dayline-track">
+      ${(l.spans || []).map((s, i) => html`<button type="button" key=${i} class=${'dayline-span ' + slots[l.ticket || '']}
         style=${{ left: x(s[0]) + '%', width: Math.max(0.4, x(s[1]) - x(s[0])) + '%' }}
         aria-label=${(l.ticket || 'Other work') + ', ' + hhmm(s[0]) + ' to ' + hhmm(s[1])}
         onClick=${() => setSelected({ ticket: l.ticket, title: l.title, from: hhmm(s[0]), to: hhmm(s[1]) })}>
-        <span>${l.ticket || 'Other'}</span></button>`))}
+        <span>${l.ticket || 'Other'}</span></button>`)}
+    </div></div>`)}
+    ${commits.length || (isToday && nowMinutes >= lo && nowMinutes <= hi) ? html`<div class="dayline-row"><span class="dayline-label">Events</span><div class="dayline-track">
       ${commits.map((c, i) => html`<span key=${i} class="dayline-commit" style=${{ left: x(c.time) + '%' }} title=${'Commit ' + c.time + ': ' + (c.subject || '')}></span>`)}
       ${isToday && nowMinutes >= lo && nowMinutes <= hi ? html`<span class="dayline-now" style=${{ left: ((nowMinutes - lo) / span) * 100 + '%' }}><span>now</span></span>` : null}
-    </div></div>
+    </div></div>` : null}
     <div class="dayline-row"><span class="dayline-label">Jira</span><div class="dayline-track jira-track">
-      ${(entries || []).map((e, i) => html`<span key=${i} class="jira-span" style=${{ left: x(e.start) + '%', width: Math.max(0.4, Math.min(100 - x(e.start), (e.minutes || 0) / span * 100)) + '%' }}
+      ${placed.map((e, i) => html`<span key=${i} class="jira-span" style=${{ left: x(e.start) + '%', width: Math.max(0.4, Math.min(100 - x(e.start), (e.minutes || 0) / span * 100)) + '%' }}
         title=${e.ticket + ': ' + e.start + ', ' + e.duration}><span>${e.ticket}</span></span>`)}
     </div></div>
+    ${unplaced ? html`<p class="muted small">${unplaced} Jira ${unplaced === 1 ? 'entry has' : 'entries have'} no recorded start time; see the worklog below.</p>` : null}
   </div>
   ${selected ? html`<div class="dayline-detail" role="status"><span>${selected.from}–${selected.to}</span>
     <span>${selected.ticket ? html`<${TicketLink} k=${selected.ticket} />` : 'Other work'} ${selected.title || ''}</span>

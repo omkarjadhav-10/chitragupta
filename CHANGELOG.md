@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Fixed
+- Parallel tickets use separate Day Line tracks; Jira entries without a start time remain in the ledger with an explanation.
 - Older media-query APIs keep appearance setup working, including saved density and motion choices.
 - Finding evidence no longer creates repeated landmarks, More references an existing menu, and j/k opens the ticket switcher before moving visible focus.
 - Printed dashboard pages and standalone exports force light colors so ink stays visible when backgrounds are omitted.
