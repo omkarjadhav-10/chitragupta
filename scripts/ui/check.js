@@ -211,6 +211,15 @@ async function launch() {
   await page.locator('article.brief').waitFor();
   check(await page.locator('.ticket-summary').count() === 0 && (await page.locator('article.brief').innerText()).includes('The reservation was never released.'),
     'generated brief leads without the legacy model summary');
+  briefTicket.brief.sections.push({ id: 'proposed', heading: 'Proposed fix', claims: [{
+    text: 'OrderDocumentServiceImpl.scheduleReservationReleaseAfterTransactionCommit'.repeat(3),
+    cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] });
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.reload();
+  await page.locator('#b-proposed').waitFor();
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+    'long method names in an owner correction wrap on phones');
+  await page.setViewportSize({ width: 900, height: 1000 });
   await page.unroute('**/api/tickets/ABC-1002');
 
   let dayVariant;

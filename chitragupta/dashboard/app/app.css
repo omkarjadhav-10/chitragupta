@@ -346,7 +346,7 @@ details.more > summary { cursor: pointer; color: var(--ink-2); font-size: var(--
 .bmeta { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; margin: var(--s2) 0 0; color: var(--ink-2); }
 .bmeta .grow { flex: 1; }
 .bmeta .status { white-space: normal; }
-.brief { container-type: inline-size; max-width: 1080px; }
+.brief { container-type: inline-size; max-width: 1080px; overflow-wrap: anywhere; }
 .brief .alert p { margin: 0; }
 .alert.quietalert { background: var(--sunk); } .alert.quietalert > .ic { color: var(--ink-3); }
 .alert.stale { align-items: center; flex-wrap: wrap; }
