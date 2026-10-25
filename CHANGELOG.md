@@ -100,6 +100,9 @@ the next tick or `migrate`: `raw-relative-keys`, `kb5-db-schema-writers`, `kb5-d
 `kb5-paths-verified`, `kb5-queries-sent`, `kb5-todo-objects`, `kb5-schema-version` (`data/meta.json` 4 → 5). Nothing
 is deleted. Existing hubs keep their old content until you run `agent rebuild`.
 
+### Added
+- Add a learning guide mapping the project's technologies and architecture to a practical software engineering and AI/ML study path.
+
 ## [0.4.1] - 2026-10-20
 
 Fixes from the end-to-end audit of 19 Oct: the `/cg:` guard's scope, read-only gaps in the query and command guards,

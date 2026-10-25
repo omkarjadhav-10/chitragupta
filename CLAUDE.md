@@ -2,6 +2,8 @@
 
 Chitragupta (`cg`) is a Claude Code plugin that keeps a worklog of your Claude Code sessions: hooks capture events, a background tick (Windows scheduled task) turns them into daily files, ticket notes, a knowledge base and an evening Jira-worklog summary, and a read-only local dashboard shows it all. Python, standard library only.
 
+For every development task, use [Development context](docs/development-context.md) for the project's purpose, architecture, and design priorities. Keep that context current as the implementation evolves; verify version-specific details against the code and changelog.
+
 ## Fixed names (never rename)
 | What | Name |
 |---|---|
