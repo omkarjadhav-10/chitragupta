@@ -58,6 +58,15 @@ class History(MergeOrder):
         self.assertTrue(migrate._run(False)["already"])
         self.assertEqual(common.read_text(common.hp("data", "history", "ABC-1001.jsonl")), archive)
 
+    def test_recompacting_same_versions_does_not_duplicate_archive_rows(self):
+        from chitragupta import common, store
+        versions = [dict(item("Version %d" % n), date="2026-09-%02d" % n) for n in range(1, 9)]
+        for attempt in range(2):
+            value = dict(id="sample", history=versions)
+            store.compact_history(value, "ABC-1001")
+        lines = common.read_text(common.hp("data", "history", "ABC-1001.jsonl")).splitlines()
+        self.assertEqual(len(lines), 3)
+
     def test_replacing_a_version_keeps_its_full_detail(self):
         self.merge("2026-09-01", item("First cause", detail="Initial reasoning.", line=1))
         iid = self.only()["id"]

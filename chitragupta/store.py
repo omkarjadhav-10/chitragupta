@@ -652,9 +652,26 @@ def compact_history(it, owner):
     if len(hist) > 5:
         name = owner if valid_ticket(owner, None) else common.stable_id(owner)
         path = common.hp("data", "history", name + ".jsonl")
-        rows = [{"item": it.get("id"), "version": h} for h in hist[1:-4]]
-        sp.makedirs(os.path.dirname(path))
-        sp.append_text(path, "".join(json.dumps(redact_obj(r), ensure_ascii=False) + "\n" for r in rows))
+        existing = common.read_text(path)
+        seen = set()
+        for line in existing.splitlines():
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict) and isinstance(row.get("version"), dict):
+                    seen.add((row.get("item"), history_key(row["version"])))
+            except (ValueError, TypeError):
+                continue  # retain a partial old row; later complete rows remain independently readable
+        rows = []
+        for version in hist[1:-4]:
+            row = redact_obj({"item": it.get("id"), "version": version})
+            key = (row["item"], history_key(row["version"]))
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+        if rows:
+            sp.makedirs(os.path.dirname(path))
+            prefix = "\n" if existing and not existing.endswith("\n") else ""
+            sp.append_text(path, prefix + "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
         hist = hist[:1] + hist[-4:]
     it["history"] = hist
 

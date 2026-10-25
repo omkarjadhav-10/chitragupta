@@ -279,3 +279,5 @@ Stable-id re-mentions retain the longer detail and never raise confidence on rec
 Rebuild restoration unions prior and re-extracted histories by content before applying the inline cap and additive archive.
 
 Brief view verification reads tests and replay directly rather than building model context; passing tests remain evidence beyond the fifteen-test generation window.
+
+Archive appends deduplicate by item and content against the existing JSONL in one linear read. Rebuilds and interrupted migration retries append only unseen versions and never rewrite the archive.
