@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 - Redesign the local dashboard with the quiet Mix layout: top navigation, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Dark Night ink is the default; saved theme choices remain respected. Fonts are bundled locally and embedded with their licenses in standalone ticket exports.
 
+### Added
+- Add a learning guide mapping the project's technologies and architecture to a practical software engineering and AI/ML study path.
+
 ## [0.4.1] - 2026-10-20
 
 Fixes from the end-to-end audit of 19 Oct: the `/cg:` guard's scope, read-only gaps in the query and command guards,
