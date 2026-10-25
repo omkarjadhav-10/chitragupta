@@ -45,3 +45,26 @@ def record_provenance(dry_run, notes, backup):
             notes.append("%s: explicit legacy provenance for older records" % path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
             if not dry_run:
                 common.write_json(path, data)
+
+
+def record_review(dry_run, notes, backup):
+    """Flag suspected record routing additively; owner decisions and previous flags survive."""
+    from . import offticket
+    keys = S.Store.all_ticket_ids()
+    backup([S.ticket_path(t) for t in keys])
+    prefixes = common.load_config().get("ticket_prefixes") or []
+    for t in keys:
+        tk = common.read_json(S.ticket_path(t), {})
+        changed = False
+        for kind in ("queries", "tables", "apis"):
+            for key, rec in (tk.get(kind) or {}).items():
+                if not isinstance(rec, dict) or rec.get("review"):
+                    continue
+                rv = offticket.record_check(tk, t, kind, key, rec, prefixes)
+                if rv:
+                    rec["review"] = rv
+                    changed = True
+        if changed:
+            notes.append("%s: off-ticket record review flags; no records moved" % t)
+            if not dry_run:
+                common.write_json(S.ticket_path(t), tk)

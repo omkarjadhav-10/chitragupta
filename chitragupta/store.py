@@ -353,6 +353,10 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
                "text": text, "purpose": q.get("purpose") or "", "tables": q.get("tables") or [],
                "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
         rec.update(provenance)
+        if t:
+            rv = offticket.record_check(store.ticket(t), t, "queries", qid, rec, prefixes)
+            if rv:
+                rec["review"] = rv
         slot = tslot(t)
         qs = store.ticket(t)["queries"] if t else slot["queries"]
         if "sent" in ctx:  # K6b: only SQL a database MCP call or a SQL command line sent counts as run
@@ -364,6 +368,8 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             store.bump(t or gkey, "queries")
         else:
             add_query_sighting(qs[qid], rec)
+            if rec.get("review") and not qs[qid].get("review_kept"):
+                qs[qid].setdefault("review", rec["review"])
         if t and qid not in slot["query_ids"]:
             slot["query_ids"].append(qid)
 
@@ -386,6 +392,10 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         _merge_catalog(cat["tables"], key, rec, t, day)
         fold_bare(cat["tables"], ".", table_name)
         store.catalog_dirty = True
+        if t:
+            rv = offticket.record_check(store.ticket(t), t, "tables", key, rec, prefixes)
+            if rv:
+                rec["review"] = rv
         own[key] = _merge_rec(own.get(key), rec)
         folded = fold_bare(own, ".", table_name)
         if t:
@@ -413,6 +423,9 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             tk = store.ticket(t)
             if key not in tk["apis"]:
                 store.bump(t, "APIs")
+            rv = offticket.record_check(tk, t, "apis", key, rec, prefixes)
+            if rv:
+                rec["review"] = rv
             tk["apis"][key] = _merge_rec(tk["apis"].get(key), rec)
             if key not in slot["api_keys"]:
                 slot["api_keys"].append(key)

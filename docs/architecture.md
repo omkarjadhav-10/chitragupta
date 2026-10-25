@@ -287,3 +287,7 @@ Within the highest-priority prompt source (own words before pasted Jira text), a
 A follow-up continues the immediately previous session turn within thirty minutes of that turn's start. System task notifications can inherit its ticket from any source, including earlier notifications. A typed prompt of at most twelve words naming no ticket inherits only if the previous ticket came from own words (`prompt`), or a `carry-recent` chain rooted in own words. Notifications preserve that origin flag; a notification rooted in pasted or branch evidence does not start an own-words chain.
 
 All other unnamed prompts use branch, then general carry. A longer question decided by the branch ends a recent-carry chain. Each new eligible turn starts a new thirty-minute window; tools and stop events do not renew it and retain the turn's original ticket. The engine derives these decisions from raw events; capture hooks stay stateless.
+
+## Record routing review
+
+K8 checks query SQL, table and endpoint names, and their purposes at merge time, using the same ticket overlap rules as findings. Suspect records carry a review flag and remain stored in place. A record cannot establish its own overlap; flagged and explicitly other-ticket records do not establish overlap for one another. Owner-kept records remain kept. The forward-only `kb51-record-review` migration backs up tickets before adding these flags to existing records.

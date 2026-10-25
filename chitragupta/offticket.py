@@ -50,7 +50,8 @@ def profile(tk):
             out |= words(it.get("title")) | words(" ".join(str(e) for e in it.get("evidence") or []))
     for k in ("files", "tables"):
         for key in tk.get(k) or {}:
-            out |= words(str(key).replace("/", " ").replace(".", " "))
+            name = str(key).rsplit(".", 1)[-1] if k == "tables" else str(key)
+            out |= words(name.replace("/", " ").replace(".", " "))
     for a in (tk.get("apis") or {}).values():
         if isinstance(a, dict):
             out |= words(" ".join(a.get("paths") or [a.get("path") or ""]).replace("/", " "))
@@ -89,6 +90,33 @@ def check(tk, t, rec, prefixes):
     if not why:
         return None
     return {"why": why, "suggest": suggest, "at": common.now_iso()}
+
+
+def record_text(rec):
+    return " ".join(str(rec.get(k) or "") for k in
+                    ("text", "purpose", "revealed", "name", "path", "host_or_service", "tables"))
+
+
+def record_check(tk, t, kind, key, rec, prefixes):
+    """K8 for records. Neither a record itself nor other suspect records establish overlap."""
+    old = (tk.get(kind) or {}).get(key) or {}
+    if old.get("review_kept") or old.get("archived"):
+        return None
+    view = dict(tk)
+    for family in ("queries", "tables", "apis"):
+        good = {}
+        for rid, row in (tk.get(family) or {}).items():
+            if not isinstance(row, dict) or (family == kind and rid == key) or row.get("review"):
+                continue
+            keys = set(_KEY.findall(record_text(row)))
+            suspect = keys and t not in keys and row.get("src") not in SPECIFIC_SRC and not row.get("review_kept")
+            if not suspect:
+                good[rid] = row
+        view[family] = good
+    proxy = dict(rec, title=record_text(rec), detail="")
+    if proxy.get("src") in (None, "legacy", "carry-recent"):
+        proxy["src"] = "carry"
+    return check(view, t, proxy, prefixes)
 
 
 def recheck(tk, t, prefixes, at=None):
