@@ -681,6 +681,12 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
                 _remember(old, rec, t or gkey)
                 store.bump(t or gkey, "updates")
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
+        elif history_key(old) == history_key(rec) and old.get("kind") == rec.get("kind"):
+            old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
+            if not older:
+                for k in ("date", "time", "session", "ref"):
+                    if rec.get(k) is not None:
+                        old[k] = rec[k]
         elif target and older:
             _remember(old, rec, t or gkey)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
@@ -704,14 +710,17 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             for k in ("phase", "ref"):
                 if rec.get(k) and not old.get(k):
                     old[k] = rec[k]
-            if rec["detail"] and not older:
-                if rec["detail"] != old.get("detail"):
-                    _remember(old, old, t or gkey)
-                for k in ("detail", "date", "time", "session", "ref"):
+            if not older:
+                detail = rec.get("detail") or ""
+                if detail and len(detail) > len(old.get("detail") or ""):
+                    if " ".join(detail.lower().split()) != " ".join((old.get("detail") or "").lower().split()):
+                        _remember(old, old, t or gkey)
+                        old["detail"] = detail
+                for k in ("date", "time", "session", "ref"):
                     if rec.get(k) is not None:
                         old[k] = rec[k]
-            if not older and old.get("confidence") != "confirmed" and rec["confidence"] == "confirmed":
-                old["confidence"] = "confirmed"
+                # A re-mention is not new confirmation; an explicit updates correction carries its own confidence.
+
     else:
         items[iid] = dict(rec, id=iid, first_date=rec["date"])
         store.bump(t or gkey, "findings" if rec["kind"] not in ("todo", "question", "blocker") else "todos")

@@ -235,7 +235,9 @@ def build_input(key, tk, cfg=None, card=None):
 def source_hash(key, tk, cfg=None, card=None):
     """sha256 over everything the brief is made from: the current items (id, kind, title, detail, confidence, status,
     phase, state) and the deterministic facts. A brief whose source_hash differs is stale."""
-    items = sorted([i.get("id"), i.get("kind"), i.get("title"), i.get("detail"), i.get("confidence"), i.get("status"),
+    def wording(text):
+        return " ".join(str(text or "").lower().split())
+    items = sorted([i.get("id"), i.get("kind"), wording(i.get("title")), wording(i.get("detail")), i.get("confidence"), i.get("status"),
                     i.get("phase"), i.get("state")] for i in current_items(tk))
     blob = json.dumps({"v": V, "kind": kind_of(tk, cfg), "items": items, "facts": facts(key, tk, card)},
                       sort_keys=True, ensure_ascii=False, default=str)
