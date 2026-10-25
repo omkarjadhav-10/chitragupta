@@ -19,6 +19,7 @@ const cases = {
       }
       check(await page.locator('.full-brief').getAttribute('open') === null, 'Full brief starts collapsed');
       await page.locator('#s-verified').locator('..').locator('a.cite').click();
+      await page.locator('#e-test-proof').waitFor({ state: 'visible' });
       check(await page.getByText('Synthetic proof passed', { exact: true }).isVisible(), 'verification cite opens its actual proof');
       await page.locator('.full-brief > summary').click();
       check(await page.locator('#b-root_cause').isVisible(), 'one click opens the preserved full brief');

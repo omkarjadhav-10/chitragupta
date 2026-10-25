@@ -74,8 +74,10 @@ class Surfaces(Isolated, unittest.TestCase):
         self.assertIn("outdated: PR #7 merged 2026-09-02", md)
         self.assertIn("Fix written for the cancel flow.", md)
         ctx = render.render_context(st, "ABC-1001")
-        self.assertLess(ctx.index("Delivery (computed"), ctx.index("TL;DR"))
-        self.assertIn("outdated: PR #7 merged 2026-09-02", ctx)
+        self.assertLess(ctx.index("Delivery (computed"), ctx.index("What is the problem?"))
+        self.assertIn("Merged to qa (PR #7, 2026-09-02)", ctx)
+        self.assertNotIn("Commit pending", ctx)
+        self.assertNotIn("TL;DR", ctx)
 
     def test_dashboard_and_consolidation_get_the_stage(self):
         from chitragupta import agent, common, store
