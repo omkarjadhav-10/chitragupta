@@ -209,12 +209,19 @@ def time_only_sids():
 
 
 def attribute(events, prefixes, cfg=None):
-    """Ticket per event, decided per turn (a user prompt and every event of that session until its next prompt) by
-    common.ticket_for_turn: the prompt's ticket -> the branch of the session's own repo (its first repo; a work branch
-    only) -> the last ticket named earlier in the session. Sets ev["_t"] and ev["_src"]; returns `events` (same order).
-    A parent issue (an Epic…) is never an event's ticket."""
+    """One ticket per session turn. Notifications continue the previous turn from any source within 30 minutes;
+    short unnamed typed prompts continue only its own-words chain. Otherwise use prompt -> branch -> general carry.
+    Previous-turn time is its start, never its last tool event. Sets _t/_src and returns events in original order."""
     cfg = dict(cfg if cfg is not None else common.load_config(), ticket_prefixes=list(prefixes or []))
-    turn, carry, own, own_branch, memo = {}, {}, {}, {}, {}
+    turn, carry, own, own_branch, previous, memo = {}, {}, {}, {}, {}, {}
+
+    def decide(sid, pt, ps, selected_carry, recent=False):
+        key = (pt, ps, own_branch.get(sid), own.get(sid), selected_carry, recent)
+        if key not in memo:
+            memo[key] = common.ticket_for_turn(cfg, pt, ps, own_branch.get(sid), None, own.get(sid), selected_carry,
+                                             carry_recent=recent)
+        return memo[key]
+
     for ev in sorted(events, key=lambda e: e.get("ts") or ""):
         sid = ev.get("session_id")
         repo = ev.get("repo_root")
@@ -223,19 +230,29 @@ def attribute(events, prefixes, cfg=None):
         if ev.get("branch") and (not repo or common.norm_path(repo) == common.norm_path(own.get(sid))):
             own_branch[sid] = ev["branch"]
         if ev.get("event") == "user-prompt":
-            if ev.get("_time"):  # time-only: the ticket its prompt named, no text
-                t, src = (ev.get("ticket"), "prompt") if ev.get("ticket") else (None, None)
+            prompt = str((ev.get("payload") or {}).get("prompt") or "")
+            if ev.get("_time"):  # no text is available for time-only capture
+                pt, ps = (ev.get("ticket"), ev.get("ticket_src") or "prompt") if ev.get("ticket") else (None, None)
             else:
                 bt = common.work_branch_ticket(own_branch.get(sid), cfg, own.get(sid))
-                t, src = common.prompt_ticket((ev.get("payload") or {}).get("prompt", ""), prefixes, cfg, branch_ticket=bt)
-            turn[sid] = (t, src)
-            if t:
-                carry[sid] = t
-        pt, ps = turn.get(sid) or (None, None)
-        key = (pt, ps, own_branch.get(sid), own.get(sid), carry.get(sid))
-        if key not in memo:
-            memo[key] = common.ticket_for_turn(cfg, pt, ps, own_branch.get(sid), None, own.get(sid), carry.get(sid))
-        ev["_t"], ev["_src"] = memo[key]
+                pt, ps = common.prompt_ticket(prompt, prefixes, cfg, branch_ticket=bt)
+            now = common.parse_ts(ev.get("ts"))
+            prior = previous.get(sid) or {}
+            at = prior.get("at")
+            timely = bool(now and at and 0 <= (now - at).total_seconds() <= 1800)
+            notification = common.is_task_notification(prompt)
+            short = (not ev.get("_time") and len(prompt.split()) <= 12 and not common.find_tickets(prompt, prefixes))
+            recent = bool(not pt and prior.get("ticket") and timely
+                          and (notification or (short and prior.get("own_words"))))
+            if pt:
+                carry[sid] = pt
+            selected_carry = prior["ticket"] if recent else carry.get(sid)
+            result = decide(sid, pt, ps, selected_carry, recent)
+            turn[sid] = result
+            previous[sid] = {"ticket": result[0], "at": now,
+                             "own_words": result[1] == "prompt" or (recent and bool(prior.get("own_words")))}
+        # Tools/stop events keep the decision made at the turn's start, including after the window expires.
+        ev["_t"], ev["_src"] = turn[sid] if sid in turn else decide(sid, None, None, carry.get(sid))
     return events
 
 

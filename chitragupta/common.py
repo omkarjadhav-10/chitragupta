@@ -443,6 +443,11 @@ def is_parent_ticket(key, cfg, others=()):
     return False
 
 
+def is_task_notification(text):
+    """A system-injected background result, rather than a new user ticket selection."""
+    return bool(re.match(r"^\s*<task-notification(?:\s|>)", str(text or "")))
+
+
 def prompt_ticket(text, prefixes, cfg=None, branch_ticket=None):
     """(ticket, src) a prompt is about, or (None, None). An id typed in your own words wins (src "prompt") over one in
     pasted text (`<pasted_content>` blocks and Jira header / breadcrumb lines; src "jira-title"). A breadcrumb gives its
@@ -452,6 +457,8 @@ def prompt_ticket(text, prefixes, cfg=None, branch_ticket=None):
     if not text or not prefixes:
         return None, None
     text = str(text)
+    if is_task_notification(text):
+        return None, None  # a background agent result is not a new user ticket selection
     own, crumbs, pasted, parents = [], [], [], []
 
     def lines_of(block, is_pasted):
@@ -531,13 +538,15 @@ def work_branch_ticket(branch, cfg, repo=None):
     return None if t and is_parent_ticket(t, cfg) else t
 
 
-def ticket_for_turn(cfg, prompt_t=None, prompt_src="prompt", branch=None, repo=None, own_repo=None, carry=None):
+def ticket_for_turn(cfg, prompt_t=None, prompt_src="prompt", branch=None, repo=None, own_repo=None, carry=None, carry_recent=False):
     """(ticket, src) for one turn (a prompt and every event until the next one), the single rule for time and
     knowledge: the ticket the turn's prompt named (src "prompt", or "jira-title" for pasted Jira text; see
-    prompt_ticket) -> the branch's ticket (src "branch"), only when the branch belongs to the session's own repo and
-    is a work branch (work_branch_ticket) -> the last ticket named earlier in the session (src "carry")."""
+    prompt_ticket) -> an eligible continuation of the previous turn (carry_recent, decided by agent.attribute)
+    -> the session's own work branch (src "branch") -> the last named ticket (src "carry")."""
     if prompt_t:
         return prompt_t, prompt_src or "prompt"
+    if carry_recent and carry:
+        return carry, "carry-recent"
     own = not (repo and own_repo) or norm_path(repo) == norm_path(own_repo)
     bt = work_branch_ticket(branch, cfg, own_repo or repo) if own else None
     if bt:

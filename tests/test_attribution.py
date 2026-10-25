@@ -173,7 +173,7 @@ class TurnAttributionTests(AttrCase):
         b = "fix/ABC-1001-x"
         t, src = self.att([ev("user-prompt", 10, 0, branch=b, prompt="look at ABC-1002 login"),
                            ev("post-tool", 10, 2, branch=b), ev("stop", 10, 5, branch=b),
-                           ev("user-prompt", 10, 19, branch=b, prompt="continue"), ev("post-tool", 10, 20, branch=b)])
+                           ev("user-prompt", 10, 31, branch=b, prompt="continue"), ev("post-tool", 10, 32, branch=b)])
         self.assertEqual(t, ["ABC-1002"] * 3 + ["ABC-1001"] * 2)
         self.assertEqual(src, ["prompt"] * 3 + ["branch"] * 2)
 
@@ -182,7 +182,7 @@ class TurnAttributionTests(AttrCase):
         t, src = self.att([ev("user-prompt", 10, 0, branch=b, prompt="RCA of ABC-1002"), ev("post-tool", 10, 2, branch=b),
                            ev("user-prompt", 10, 30, branch=b, prompt="how to reproduce"), ev("post-tool", 10, 31, branch=b)])
         self.assertEqual(t, ["ABC-1002"] * 4)
-        self.assertEqual(src, ["prompt", "prompt", "carry", "carry"])
+        self.assertEqual(src, ["prompt", "prompt", "carry-recent", "carry-recent"])
         t, _ = self.att([ev("user-prompt", 11, 0, sid="s3", branch="qa", prompt="go"), ev("post-tool", 11, 1, sid="s3", branch="qa")])
         self.assertEqual(t, [None, None])
 
@@ -240,7 +240,7 @@ class TurnExtractionTests(AttrCase):
         return [ev("user-prompt", 10, 0, branch=b, repo=r, prompt="look at ABC-1002 orders"),
                 ev("post-tool", 10, 1, branch=b, repo=r, payload={"tool": "Edit", "input": {"file_path": "shop/orders.py"}}),
                 ev("stop", 10, 5, branch=b, repo=r, payload={"message": "Orders lose the link. " + "a" * big}),
-                ev("user-prompt", 10, 20, branch=b, repo=r, prompt="now the login part"),
+                ev("user-prompt", 10, 20, branch=b, repo=r, prompt="now the login part (ABC-1001)"),
                 ev("post-tool", 10, 21, branch=b, repo=r, payload={"tool": "Edit", "input": {"file_path": "shop/login.py"}}),
                 ev("stop", 10, 25, branch=b, repo=r, payload={"message": "Login checks the lock first. " + "b" * big})]
 
@@ -262,11 +262,11 @@ class TurnExtractionTests(AttrCase):
         a.run_extractions(any_size=True)
         self.assertEqual(len(self.calls), 1)
         self.assertIn("TURN ticket=ABC-1002 (prompt)", self.calls[0])
-        self.assertIn("TURN ticket=ABC-1001 (branch)", self.calls[0])
+        self.assertIn("TURN ticket=ABC-1001 (prompt)", self.calls[0])
         i2 = list(a.store.ticket("ABC-1002")["items"].values())
         i1 = list(a.store.ticket("ABC-1001")["items"].values())
         self.assertEqual([(i["title"], i["src"]) for i in i2], [("Orders lose their link", "prompt")])
-        self.assertEqual([(i["title"], i["src"]) for i in i1], [("Login checks the lock first", "branch")])
+        self.assertEqual([(i["title"], i["src"]) for i in i1], [("Login checks the lock first", "prompt")])
         dd = a.store.day(D)
         self.assertGreater(dd["tickets"]["ABC-1002"]["minutes"], 0)
         self.assertGreater(dd["tickets"]["ABC-1001"]["minutes"], 0)

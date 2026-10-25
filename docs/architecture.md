@@ -283,3 +283,7 @@ Queries, tables, APIs and files follow their own turn when no explicit ticket is
 ## Turn routing
 
 Within the highest-priority prompt source (own words before pasted Jira text), a multi-ticket prompt prefers the work branch's ticket when named. Otherwise own words retain the first named ticket; breadcrumbs keep their last child. Configured base patterns, including ticket-bearing shared hotfix targets, do not provide a work-branch ticket. Explicit release and detached branches stay excluded.
+
+A follow-up continues the immediately previous session turn within thirty minutes of that turn's start. System task notifications can inherit its ticket from any source, including earlier notifications. A typed prompt of at most twelve words naming no ticket inherits only if the previous ticket came from own words (`prompt`), or a `carry-recent` chain rooted in own words. Notifications preserve that origin flag; a notification rooted in pasted or branch evidence does not start an own-words chain.
+
+All other unnamed prompts use branch, then general carry. A longer question decided by the branch ends a recent-carry chain. Each new eligible turn starts a new thirty-minute window; tools and stop events do not renew it and retain the turn's original ticket. The engine derives these decisions from raw events; capture hooks stay stateless.
