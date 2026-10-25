@@ -60,6 +60,8 @@ const cases = {
       await page.emulateMedia({ media: 'print' });
       check(await page.evaluate(() => getComputedStyle(document.body).color) === 'rgb(21, 25, 46)', 'dark ticket prints with light-theme ink');
       check(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === 'light', 'printing forces light color scheme');
+      await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+      check(await page.evaluate(() => getComputedStyle(document.body).color) === 'rgb(21, 25, 46)', 'printing without an appearance attribute uses light ink');
       const response = await page.request.get(base + 'api/tickets/ABC-1001/export?mode=full');
       const exported = await response.text();
       await page.goto('about:blank');

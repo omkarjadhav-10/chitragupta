@@ -21,7 +21,7 @@ then documents it here. Everything here also renders inside a ticket export (the
 | Radius | `--r-row` < `--r-control` < `--r-card` < `--r-pane` < `--r-dialog` | by hierarchy |
 | Motion | `--dur-1`, `--dur-2`, `--ease` | 0 under reduced motion |
 
-**Dark mode** is the default when no browser preference is saved (`:root:not([data-theme])`). Explicit light,
+**Dark mode** is the default when no browser preference is saved: `theme.js` sets `data-theme="dark"`; `:root:not([data-theme])` covers the initial paint before that script runs. Explicit light,
 dark and system preferences remain respected; system uses `prefers-color-scheme`. The local Source Serif 4 and
 IBM Plex Sans files supply headings and text, including standalone exports with their license notices. Pages use
 tokens for both themes. `data-density="compact"` tightens spacing and `data-motion="reduce"` stops transitions.
@@ -89,7 +89,7 @@ pages, and *All findings* starts on a new page, so the brief is page one.
 - **Targets** are at least 24 × 24 px. **Live updates** go through the one polite toast region; banners that need
   attention use `role="alert"`, informational bars `role="status"`.
 - **Checks.** `scripts/ui/run.py` runs axe (WCAG 2.0–2.2 A/AA) on every page in light and dark at 1440, 1280 and
-  900 px and fails on any serious or critical finding, horizontal scroll at 900 px or a failed keyboard check; see
+  900 px and fails on any serious or critical finding, horizontal scroll at every tested width or a failed keyboard check; see
   [development.md](development.md).
 
 At phone widths (600 px and below), ticket header actions sit below the title and brief metadata so the heading retains the full reading width. The browser checks cover this at 390 px.
@@ -97,6 +97,8 @@ At phone widths (600 px and below), ticket header actions sit below the title an
 When a generated brief exists, it supplies the ticket summary; the legacy model TL;DR is shown in the header only as a fallback before a brief exists. This prevents stale prose competing with current cited claims.
 
 Brief text wraps long method names and owner corrections inside its reading width, including at 390 px.
+
+## Ticket interaction and print
 
 Ticket delivery alerts render once in the shared header (or once inside the Branches tab), including when the Overview is open. The browser regression supplies a ticket with delivery alerts.
 

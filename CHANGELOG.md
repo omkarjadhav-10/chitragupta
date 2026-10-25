@@ -4,11 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-25
+
+### Added
+- A learning guide maps captured events, ticket knowledge, time, delivery and the interface to the project's code and documentation.
+
+### Changed
+- The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
+
 ### Fixed
 - Parallel tickets use separate Day Line tracks; Jira entries without a start time remain in the ledger with an explanation.
 - Older media-query APIs keep appearance setup working, including saved density and motion choices.
 - Finding evidence no longer creates repeated landmarks, More references an existing menu, and j/k opens the ticket switcher before moving visible focus.
-- Printed dashboard pages and standalone exports force light colors so ink stays visible when backgrounds are omitted.
+- Printed dashboard pages and standalone exports force light colors so ink stays visible when backgrounds are omitted, including before the appearance script runs.
 - Ticket Overview renders delivery alerts and their accessible alert region once.
 - Supersession skips a final singleton when no comparison context fits, avoiding a model call that cannot supersede anything.
 - Rebuild and interrupted migration retries do not duplicate archived history versions.
@@ -17,16 +25,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - Terse re-mentions preserve richer explanations and do not promote confidence. Identical updates are no-ops; brief freshness ignores whitespace and case.
 - Item history uses content deduplication, chronological snapshots without evidence, and a five-version inline bound. Older versions remain in an additive archive; existing data is backed up before migration.
 - Extracted notes accept corrections; only inbox/user provenance protects owner wording. Identical owner-note retries do not count as updates, and evidence is capped at ten.
+- Recompute Jira-only verification in both directions when status or configuration changes.
+- Resolve an exact current-item citation with an item: prefix while rejecting unknown or historical ids.
+- Keep dashboard activity fixtures deterministic around midnight.
+- Wrap long brief method names and owner corrections on phones, keep ticket actions below the heading, and lead with generated content without repeating the legacy summary.
+
+
+### Migration
+- `kb51-history-compact` backs up canonical tickets and existing history archives, then retains the first and newest four snapshots inline. Older versions remain in additive, content-deduplicated `data/history/<KEY>.jsonl` files.
 
 ## [0.5.0] - 2026-10-24
-
-- A final singleton supersession batch is classified too, with an already-seen current item as comparison context when it fits, within the item, character and model-spend limits.
-
-- Item history retains complete prior text, confidence, session, time and raw provenance for explicit updates and older stable-id retries, without discarding versions beyond five. Existing historical entries remain readable; previously lost detail cannot be reconstructed.
-
-- Jira-only brief verification is recomputed in both directions from the current status and brief.verified_statuses; reopening or removing a matching status revokes it unless a current passing test or replay independently supports verification.
-
-- Stable-id item merges keep the newest nonempty detail, even when shorter, and advance its date, time, session and raw reference; older retries cannot replace it.
 
 Knowledge you can trust, and a one-minute brief per ticket. Work is filed under the ticket you name, old conclusions
 are superseded instead of piling up, file paths and queries are checked against what really happened, time is counted
@@ -62,8 +70,6 @@ once, and every ticket page opens on a short, evidenced brief. Includes a data m
 - `jira.parent_issue_types` (Epic, Initiative), `turn_tail_minutes`, `idle_minutes`, `rebuild.*` settings.
 
 ### Changed
-- Document the quiet Mix primary navigation and More pages menu with their actual component selectors.
-- Redesign the local dashboard with the quiet Mix layout: top navigation, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Dark Night ink is the default; saved theme choices remain respected. Fonts are bundled locally and embedded with their licenses in standalone ticket exports.
 - **Ticket attribution (K1, K2).** Each turn's ticket is decided once, for time and knowledge alike: the ticket named
   in the prompt (or a pasted Jira title) → the work branch of the session's own repo (never release/, environment or
   base branches) → the last ticket named in the session. Raw events record `ticket_src`. A pasted breadcrumb gives its
@@ -95,12 +101,6 @@ once, and every ticket page opens on a short, evidenced brief. Includes a data m
 - Raw capture older than `raw_retention_days` is pruned once processed on every install, not only after a push (O7).
 
 ### Fixed
-- Wrap long method names in ticket briefs and owner corrections on phones.
-- Resolve an exact current-item citation when a brief response adds an item: prefix; unknown and historical citations remain rejected.
-- Freeze the dashboard test fixture clock so checks keep their activity samples when run just after midnight.
-- Preserve owner notes and inbox corrections when extraction proposes newer wording; retain the proposed version in history.
-- Let generated ticket briefs lead the page without repeating the legacy model summary in the header.
-- Stack ticket header actions below the title on phones so the brief metadata and heading retain their reading width.
 - The home folder itself is captured time-only (O1); raw events from folders that are now ignored are never
   extracted (O5); extraction state survives copying or moving the data home (O4).
 - A privacy check that returns unknown now pauses the push and says so, as `docs/privacy.md` promised (O6).
@@ -113,9 +113,6 @@ Forward-only steps, each backing up what it changes to `.worklog/backups/chitrag
 the next tick or `migrate`: `raw-relative-keys`, `kb5-db-schema-writers`, `kb5-dedupe-keys`, `kb5-title-status`,
 `kb5-paths-verified`, `kb5-queries-sent`, `kb5-todo-objects`, `kb5-schema-version` (`data/meta.json` 4 → 5). Nothing
 is deleted. Existing hubs keep their old content until you run `agent rebuild`.
-
-### Added
-- Add a learning guide mapping the project's technologies and architecture to a practical software engineering and AI/ML study path.
 
 ## [0.4.1] - 2026-10-20
 

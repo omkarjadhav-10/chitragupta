@@ -101,7 +101,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Learning guide](docs/learning-guide.md) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Learn the codebase](docs/learning-guide.md#follow-a-captured-event) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

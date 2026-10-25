@@ -255,31 +255,21 @@ py -3 <plugin>/hooks/run.py agent rebuild --all --dry-run
 
 `uninstall` removes the recall skill, the CLAUDE.md block (backup first), the scheduled job, the dashboard shortcuts and the data home's pre-commit hook when it calls the runtime, plus the runtime and the pointer. It keeps the share targets' `shares/` folders and the share clones (shared work, like the data home itself) and the backup zips in `storage.local_backup_dir`.
 
-Stable-id item merges keep the newest nonempty detail, even when shorter, and advance its date, time, session and raw reference; older retries cannot replace it.
 
-Jira-only brief verification is recomputed in both directions from the current status and brief.verified_statuses; reopening or removing a matching status revokes it unless a current passing test or replay independently supports verification.
+## Item merges and history
 
-Item history retains complete prior text, confidence, session, time and raw provenance for explicit updates and older stable-id retries, without discarding versions beyond five. Existing historical entries remain readable; previously lost detail cannot be reconstructed.
+Owner wording is authoritative only for inbox or explicit user provenance; extractor note kinds remain updateable. Identical retries do not count as updates, and evidence is capped at ten entries. A stable-id re-mention keeps the richer detail and advances provenance without raising confidence. Explicit `updates` corrections can replace shorter text and confidence; older retries cannot replace newer text.
 
-A final singleton supersession batch is classified too, with an already-seen current item as comparison context when it fits, within the item, character and model-spend limits.
+History snapshots omit evidence and deduplicate title, detail and confidence. Inline history keeps the first version plus the newest four in date/time order, so the last entry is the previous version. Overflow is appended to `data/history/<KEY>.jsonl` through the safety layer. Existing archive content is read once to skip repeated item/content keys; archive files are never rewritten or truncated. Rebuild restoration unions old and re-extracted history before applying the cap.
 
-An extraction update never replaces an existing owner note, including an inbox correction. Its model wording is retained in history and its evidence is merged, while the owner text and provenance stay authoritative.
+The forward-only `kb51-history-compact` migration backs up canonical tickets and existing archives before changing them. Previously lost text cannot be reconstructed.
 
-A model citation `item:<id>` is canonicalized to the bare id only when that exact id is a current item on this ticket. Unknown, historical, other-ticket and differently prefixed ids still fail validation.
+## Brief evidence and verification
 
+Case and whitespace changes do not invalidate brief inputs; substantive text, confidence, status and deterministic facts still do. A model citation `item:<id>` resolves only when that exact id is current on this ticket. Unknown, historical and differently prefixed ids fail validation.
 
-### Owner note authority
+Brief views read passing tests and replay directly rather than building generation context. Older passing-test citations survive beyond the fifteen-test generation window. Jira-only verification is recomputed from the current status and `brief.verified_statuses`; reopening a ticket or removing a matching status revokes it unless current passing evidence independently supports it.
 
-Item merges preserve owner wording only for inbox or explicit user provenance. Extractor note kinds remain updateable; identical retries do not count as updates and retain at most ten evidence entries.
+## Supersession budgets
 
-Item history deduplicates title/detail/confidence and omits evidence from snapshots. Inline history keeps the first version and newest four, ordered by date/time; overflow is appended to `data/history/<KEY>.jsonl`. The `kb51-history-compact` migration backs up canonical tickets and existing archives before compacting them.
-
-Stable-id re-mentions retain the longer detail and never raise confidence on recency alone. Explicit `updates` corrections may replace shorter text and confidence. Case/whitespace changes do not invalidate the brief; status, confidence, substantive text and deterministic facts still do.
-
-Rebuild restoration unions prior and re-extracted histories by content before applying the inline cap and additive archive.
-
-Brief view verification reads tests and replay directly rather than building model context; passing tests remain evidence beyond the fifteen-test generation window.
-
-Archive appends deduplicate by item and content against the existing JSONL in one linear read. Rebuilds and interrupted migration retries append only unseen versions and never rewrite the archive.
-
-Supersession calls require at least two candidate ids after comparison context is selected, including the final batch. A context-free singleton waits rather than spending a call.
+The final supersession batch adds already-seen current comparison context when it fits. Every call needs at least two candidate ids after context selection, including the final batch; a context-free singleton waits rather than spending a model call.

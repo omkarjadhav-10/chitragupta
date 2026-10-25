@@ -1,7 +1,7 @@
 // Browser checks for the dashboard (run through scripts/ui/run.py, which serves a synthetic home).
 // node check.js <base url> <today YYYY-MM-DD> [screenshot dir]
 // Fails (exit 1) on: a serious or critical axe violation, a console or page error, any request that leaves
-// 127.0.0.1, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check that doesn't hold.
+// 127.0.0.1, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check that doesn't hold.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
@@ -191,7 +191,8 @@ async function launch() {
   exportPage.on('pageerror', (e) => exportErrors.push(e.message));
   exportPage.on('console', (m) => { if (m.type() === 'error') exportErrors.push(m.text()); });
   exportPage.on('request', (r) => { if (!/^(data|blob):/.test(r.url())) exportErrors.push(r.url()); });
-  await exportPage.goto('data:text/html;base64,' + Buffer.from(exported).toString('base64'));
+  await exportPage.goto('about:blank');
+  await exportPage.setContent(exported, { waitUntil: 'domcontentloaded' });
   await exportPage.waitForSelector('#page-title');
   await exportPage.evaluate(() => document.fonts.ready);
   check(!exportErrors.length && await exportPage.locator('.font-licenses a').count() === 2, 'standalone export renders with embedded fonts and licenses and no network requests');
@@ -215,7 +216,7 @@ async function launch() {
   check(await page.locator('.ticket-summary').count() === 0 && (await page.locator('article.brief').innerText()).includes('The reservation was never released.'),
     'generated brief leads without the legacy model summary');
   briefTicket.brief.sections.push({ id: 'proposed', heading: 'Proposed fix', claims: [{
-    text: 'OrderDocumentServiceImpl.scheduleReservationReleaseAfterTransactionCommit'.repeat(3),
+    text: 'ShopOrderService.releaseStockAfterCommit'.repeat(6),
     cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] });
   await page.setViewportSize({ width: 390, height: 1000 });
   await page.reload();

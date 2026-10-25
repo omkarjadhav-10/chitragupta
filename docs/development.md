@@ -79,7 +79,7 @@ cd scripts/ui; npm ci; cd ../..                  # once: playwright-core, which 
 python scripts/ui/run.py [--shots <folder>]      # every page, explicit light/dark themes, 1440/1280/900 px
 ```
 
-It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
+It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
 
 The page is plain ES modules with no build step: `chitragupta/dashboard/app/` (`main.js`, `lib/`, `pages/`, `app.css`) and the vendored Preact in `third_party/preact/`. Components use a small tagged-template helper (`lib/html.js`) instead of JSX.
 
