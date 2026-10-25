@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Queries, tables, APIs and files follow their own turn and carry their own timestamp, with trusted raw/SQL times preferred over model or chunk times.
 - Parallel tickets use separate Day Line tracks; Jira entries without a start time remain in the ledger with an explanation.
 - Older media-query APIs keep appearance setup working, including saved density and motion choices.
 - Finding evidence no longer creates repeated landmarks, More references an existing menu, and j/k opens the ticket switcher before moving visible focus.
@@ -32,6 +33,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 
 ### Migration
+- `kb51-record-provenance` backs up tickets/catalog before marking unknown historical origins as legacy, without moving records or inventing times.
 - `kb51-history-compact` backs up canonical tickets and existing history archives, then retains the first and newest four snapshots inline. Older versions remain in additive, content-deduplicated `data/history/<KEY>.jsonl` files.
 
 ## [0.5.0] - 2026-10-24

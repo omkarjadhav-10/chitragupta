@@ -259,6 +259,18 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         t = valid_ticket(t, known) if t else None
         return None if t and common.is_parent_ticket(t, cfg) else t  # a parent issue never gets items
 
+    def origin(row, sent=None):
+        line = row.get("line") if type(row.get("line")) is int else None
+        when = (sent or {}).get("time") or (ctx.get("line_times") or {}).get(line) or hhmm_of(row.get("time")) or ctx.get("time", "")
+        tt, tsrc = turn_of(ctx, when)
+        explicit = resolve(row.get("ticket"))
+        ticket = explicit or tt
+        meta = {"time": when, "src": (tsrc if ticket == tt else "model") or "model"}
+        ref = (sent or {}).get("ref") or raw_ref(day, sid, line) or raw_ref(day, sid, turn_line(ctx, when))
+        if ref:
+            meta["ref"] = ref
+        return ticket, meta
+
     touched = set()
 
     def skip(t):
@@ -332,17 +344,18 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         text = (q.get("text") or "").strip()
         if not text:
             continue
-        t = resolve(q.get("ticket")) or default_t
+        hit = sqlsent.find(text, ctx.get("sent") or [], line=q.get("line"))
+        t, provenance = origin(q, hit)
         if skip(t):
             continue
         qid = query_id(t or gkey, text)
         rec = {"id": qid, "date": day, "time": ctx.get("time", ""), "dialect": q.get("dialect") or "other",
                "text": text, "purpose": q.get("purpose") or "", "tables": q.get("tables") or [],
                "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
+        rec.update(provenance)
         slot = tslot(t)
         qs = store.ticket(t)["queries"] if t else slot["queries"]
         if "sent" in ctx:  # K6b: only SQL a database MCP call or a SQL command line sent counts as run
-            hit = sqlsent.find(text, ctx["sent"])
             rec["sent"] = bool(hit)
             if hit and hit.get("ref"):
                 rec["ref"] = hit["ref"]
@@ -359,7 +372,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         name = (tb.get("name") or "").strip()
         if not name:
             continue
-        t = resolve(tb.get("ticket")) or default_t
+        t, provenance = origin(tb)
         if skip(t):
             continue
         slot = tslot(t)
@@ -369,6 +382,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             key = kbnorm.table_key(name, [k for k in cat["tables"] if "." in k])
         rec = {"name": name, "db": tb.get("db") or "", "purpose": tb.get("purpose") or "",
                "key_columns": tb.get("key_columns") or [], "relations": tb.get("relations") or [], "last": day}
+        rec.update(provenance)
         _merge_catalog(cat["tables"], key, rec, t, day)
         fold_bare(cat["tables"], ".", table_name)
         store.catalog_dirty = True
@@ -382,7 +396,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         if not path:
             continue
         method = (a.get("method") or "").upper().strip() or "ANY"
-        t = resolve(a.get("ticket")) or default_t
+        t, provenance = origin(a)
         if skip(t):
             continue
         key = kbnorm.api_key(method, path)
@@ -391,6 +405,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
                "direction": a.get("direction") or "", "purpose": a.get("purpose") or "",
                "request_fields": a.get("request_fields") or [], "response_fields": a.get("response_fields") or [],
                "auth_type": a.get("auth_type") or "", "hosts": [host] if host else [], "paths": [path], "last": day}
+        rec.update(provenance)
         _merge_catalog(cat["apis"], key, rec, t, day)
         store.catalog_dirty = True
         slot = tslot(t)
@@ -430,7 +445,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         p = (fl.get("path") or "").strip()
         if not p:
             continue
-        t = resolve(fl.get("ticket")) or default_t
+        t, provenance = origin(fl)
         if skip(t):
             continue
         slot = tslot(t)
@@ -442,7 +457,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             did = p in edited
             old = tk["files"].get(p) or {}
             tk["files"][p] = dict(old, path=p, role=fl.get("role") or old.get("role", ""),
-                                  changed=did or old.get("changed", False), last=day)
+                                  changed=did or old.get("changed", False), last=day, **provenance)
             rec = tk["files"][p]
             if did:
                 rec.update(verified=True, verified_by=old.get("verified_by") or "edit")
@@ -508,6 +523,8 @@ def _merge_rec(old, new):
     for k, v in new.items():
         if isinstance(v, list):
             out[k] = _union(old.get(k), v)
+        elif k in ("time", "src", "ref") and (new.get("last", ""), new.get("time", "")) >= (old.get("last", ""), old.get("time", "")):
+            out[k] = v
         elif v and (not old.get(k) or k == "last"):
             out[k] = v
     return out

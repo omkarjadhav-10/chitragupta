@@ -171,6 +171,14 @@
           },
           "revealed": {
             "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -180,7 +188,8 @@
           "purpose",
           "tables",
           "kind",
-          "revealed"
+          "revealed",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -216,6 +225,14 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -224,7 +241,8 @@
           "purpose",
           "key_columns",
           "relations",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -276,6 +294,14 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -287,7 +313,8 @@
           "request_fields",
           "response_fields",
           "auth_type",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -348,13 +375,22 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
           "path",
           "role",
           "changed",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }

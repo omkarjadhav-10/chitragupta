@@ -144,7 +144,8 @@ class Rebuild:
         last = evs[-1]
         ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                "branch": last.get("branch"), "candidates": cands, "edited": kbnorm.edited_files(evs),
-               "sent": sqlsent.sent_statements(evs)}
+               "sent": sqlsent.sent_statements(evs),
+               "line_times": {e["_ln"]: common.hhmm(e.get("ts")) for e in evs if e.get("_ln")}}
         meta = {"session": sid, "day": day, "repo": ctx["repo"], "branch": ctx["branch"],
                 "lines": self.a.jwl.current_lines(day, cands, common.parse_ts(evs[0].get("ts")))}
         return ctx, extract.build_digests(all_evs, meta, cands, S.already_recorded(self.store, cands))

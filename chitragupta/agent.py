@@ -647,6 +647,7 @@ class Agent:
             last = evs[-1]
             ctx = {"day": day, "session": sid, "time": common.hhmm(evs[0].get("ts")), "repo": last.get("repo_root"),
                    "branch": last.get("branch"), "candidates": cands}
+            ctx["line_times"] = {e["_ln"]: common.hhmm(e.get("ts")) for e in evs if e.get("_ln")}
             ctx["edited"] = kbnorm.edited_files(evs)  # K6a: a file is "changed" only when a tool call wrote it
             ctx["sent"] = sqlsent.sent_statements(evs)  # K6b: a query counts as run only when one of these sent it
             already = storemod.already_recorded(self.store, cands)

@@ -273,3 +273,8 @@ Brief views read passing tests and replay directly rather than building generati
 ## Supersession budgets
 
 The final supersession batch adds already-seen current comparison context when it fits. Every call needs at least two candidate ids after context selection, including the final batch; a context-free singleton waits rather than spending a model call.
+
+
+## Per-record turn provenance
+
+Queries, tables, APIs and files follow their own turn when no explicit ticket is given. A trusted raw-line time takes precedence over model time; a sent SQL event supplies its actual time and raw reference. Agent extraction and rebuild pass the same raw-line time map. The model returns a raw line reference rather than a redundant time field for these records; code stores the derived time and attribution source. Older cached outputs with time remain supported. The backed-up `kb51-record-provenance` migration marks unknown older sources as `legacy` and leaves unknown times empty; it never moves historical records.

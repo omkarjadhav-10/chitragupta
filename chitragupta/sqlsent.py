@@ -8,7 +8,7 @@ sqlcmd …) in a Bash / PowerShell call. Both sides are compared as K7's normali
 import json
 import re
 
-from . import kbnorm
+from . import common, kbnorm
 
 _PH = re.compile(r"(?<![:\w]):[A-Za-z_]\w*|\?")
 _ARG = re.compile(r'"(?:sql|query)"\s*:\s*"((?:[^"\\]|\\.)*)', re.S)
@@ -71,9 +71,9 @@ def sent_statements(events):
             sql, cut = mcp_sql(ki["arguments"])
             if sql:
                 out.append({"key": kbnorm.sql_key(sql), "loose": loose(sql), "cli": False, "truncated": cut,
-                            "ref": e.get("_ref")})
+                            "ref": e.get("_ref"), "time": common.hhmm(e.get("ts")), "line": e.get("_ln")})
         elif ki.get("command") and _SQLISH.search(ki["command"]):
-            out.append({"key": "", "loose": loose(ki["command"]), "cli": True, "truncated": False, "ref": e.get("_ref")})
+            out.append({"key": "", "loose": loose(ki["command"]), "cli": True, "truncated": False, "ref": e.get("_ref"), "time": common.hhmm(e.get("ts")), "line": e.get("_ln")})
     return out
 
 
@@ -102,10 +102,13 @@ def matches(text, s):
     return False
 
 
-def find(text, sent, variants=()):
+def find(text, sent, variants=(), line=None):
     """The first sent statement the query (or one of its other written forms) matches, else None."""
+    candidates = list(sent or ())
+    if type(line) is int:
+        candidates.sort(key=lambda s: s.get("line") != line)
     for t in [text] + [v for v in variants or () if v]:
-        for s in sent or ():
+        for s in candidates:
             if matches(t, s):
                 return s
     return None

@@ -308,6 +308,7 @@ KB_STEPS = [
     ("kb5-review-recheck", "kb5:review_recheck"),
     ("kb5-schema-version", "kb5:schema_v5"),  # the data now has the 0.5.0 shape
     ("kb51-history-compact", "kb51:history_compact"),
+    ("kb51-record-provenance", "kb51:record_provenance"),
 ]
 
 
