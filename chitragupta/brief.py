@@ -345,10 +345,12 @@ class _Ctx:
         return None
 
 
-def _norm_cites(cites):
+def _norm_cites(cites, items=None):
     out = []
     for c in cites or []:
         c = str(c or "").strip()
+        if c.startswith("item:") and c[5:] in (items or {}):
+            c = c[5:]  # an exact current item, never a guessed or historical id
         if c.startswith("commit:") and len(c) > 14:
             c = c[:14]  # commit:<sha7>
         if c and c not in out:
@@ -370,7 +372,7 @@ def validate(out, key, tk, kind, card=None):
         text = " ".join(str(c.get("text") or "").split())
         if not text:
             return None
-        cites = _norm_cites(c.get("cites"))
+        cites = _norm_cites(c.get("cites"), ctx.items)
         why = ctx.cite_problem(cites) or ctx.names(text)
         if not why and max_words and _words(text) > max_words:
             why = "too-long"

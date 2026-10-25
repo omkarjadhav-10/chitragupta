@@ -81,6 +81,7 @@ once, and every ticket page opens on a short, evidenced brief. Includes a data m
 - Raw capture older than `raw_retention_days` is pruned once processed on every install, not only after a push (O7).
 
 ### Fixed
+- Resolve an exact current-item citation when a brief response adds an item: prefix; unknown and historical citations remain rejected.
 - Freeze the dashboard test fixture clock so checks keep their activity samples when run just after midnight.
 - Preserve owner notes and inbox corrections when extraction proposes newer wording; retain the proposed version in history.
 - Let generated ticket briefs lead the page without repeating the legacy model summary in the header.
