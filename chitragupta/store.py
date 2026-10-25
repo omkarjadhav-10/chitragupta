@@ -647,11 +647,11 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
     if iid in items:
         old = items[iid]
         older = _when(rec) < _when(old)  # a re-extracted earlier session: its text never replaces a newer one
-        from .supersede import is_user_note
-        if is_user_note(old):
-            _remember(old, rec)
-            old["evidence"] = _union(old.get("evidence"), rec["evidence"])
-            store.bump(t or gkey, "updates")
+        if old.get("session") == "inbox" or old.get("src") == "user":
+            if any(old.get(k) != rec.get(k) for k in ("kind", "title", "detail", "confidence")):
+                _remember(old, rec)
+                store.bump(t or gkey, "updates")
+            old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
         elif target and older:
             _remember(old, rec)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]

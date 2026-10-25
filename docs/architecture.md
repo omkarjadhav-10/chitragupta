@@ -266,3 +266,8 @@ A final singleton supersession batch is classified too, with an already-seen cur
 An extraction update never replaces an existing owner note, including an inbox correction. Its model wording is retained in history and its evidence is merged, while the owner text and provenance stay authoritative.
 
 A model citation `item:<id>` is canonicalized to the bare id only when that exact id is a current item on this ticket. Unknown, historical, other-ticket and differently prefixed ids still fail validation.
+
+
+### Owner note authority
+
+Item merges preserve owner wording only for inbox or explicit user provenance. Extractor note kinds remain updateable; identical retries do not count as updates and retain at most ten evidence entries.

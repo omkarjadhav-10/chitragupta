@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+- Extracted notes accept corrections; only inbox/user provenance protects owner wording. Identical owner-note retries do not count as updates, and evidence is capped at ten.
+
 ## [0.5.0] - 2026-10-24
 
 - A final singleton supersession batch is classified too, with an already-seen current item as comparison context when it fits, within the item, character and model-spend limits.
