@@ -15,11 +15,20 @@
           },
           "summary": {
             "type": "string"
+          },
+          "relevance": {
+            "type": "string",
+            "enum": [
+              "core",
+              "supporting",
+              "noise"
+            ]
           }
         },
         "required": [
           "name",
-          "summary"
+          "summary",
+          "relevance"
         ],
         "additionalProperties": false
       }

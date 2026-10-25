@@ -18,3 +18,5 @@ Sections
 - cons: at most 5 claims, each at most 20 words. label "recorded" for a risk the input records (a risk item, a Jira comment, a note), citing it; label "suggested" for one you infer from the proposed fix, citing that fix item. At most 2 suggested.
 
 Never output secrets or patient data.
+
+Relevance: choose from relevance_candidates only. Return at most 5 key queries (id and role: cause, fix-design or verify), 6 core table ids and 5 core API ids explaining the problem, cause, fix or verification. Tag every listed scenario core, supporting or noise against the problem. Supporting records remain reachable. Copy ids exactly; never invent ids.

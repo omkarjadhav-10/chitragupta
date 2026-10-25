@@ -215,10 +215,13 @@ def build_input(key, tk, cfg=None, card=None):
     """The model's input: current items with ids (newest first, then the most evidenced), the deterministic facts and
     your notes; capped at INPUT_CAP chars. Never raw events."""
     kind = kind_of(tk, cfg)
+    from . import relevance
+    relevance.classify(tk)
     f = facts(key, tk, card)
     data = {"ticket": key, "title": S.display_title(tk) or tk.get("title_hint") or "",
             "kind": kind, "heading_1": WHY if kind == "story" else HEADINGS["root_cause"],
-            "status_inferred": tk.get("status_inferred") or "", "facts": f, "items": []}
+            "status_inferred": tk.get("status_inferred") or "", "problem": tk.get("problem") or "",
+            "facts": f, "relevance_candidates": relevance.candidates(tk), "items": []}
     from .redact import redact
     used = len(json.dumps(data, ensure_ascii=False))
     items = sorted(current_items(tk), key=lambda i: (i.get("date") or "", len(i.get("evidence") or [])), reverse=True)
@@ -577,9 +580,12 @@ def generate(key, store=None, cfg=None, health=None, force=False):
     tin, tout, usd = modelbudget.last_call("brief")
     sec, dropped = validate(out, key, tk, kind, card)
     ov = apply_overrides(sec, tk)
+    from . import relevance
+    relevance.classify(tk)
+    relevance_dropped = relevance.apply_picks(tk, (out or {}).get("relevance"))
     tk["brief"] = {"v": V, "kind": kind, "generated_at": common.now_iso(), "model": extract.model_for("brief", cfg),
                    "tokens": {"in": tin, "out": tout}, "cost_usd": round(float(cost or usd or 0), 4), "source_hash": h,
-                   "sections": sec, "overrides": ov, "dropped": dropped}
+                   "sections": sec, "overrides": ov, "dropped": dropped, "relevance_dropped": relevance_dropped}
     st.touch_ticket(key)
     if dropped:
         common.log("agent", "brief %s: %d claims dropped (%s)" % (

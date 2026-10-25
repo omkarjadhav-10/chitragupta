@@ -100,20 +100,27 @@ def _conflict(conflicts, rec, column, kept, kept_conf, other, other_conf, day):
                       "kept_confidence": kept_conf, "other": other, "other_confidence": other_conf, "date": day})
 
 
-def entries(tk):
+def entries(tk, levels=("core",)):
     """What the views show: the consolidated map when there is one, else the raw entries."""
     v = tk.get("dbflow_view") or {}
-    return v["data_flow"] if v.get("data_flow") else list(tk.get("data_flow", {}).values())
+    rows = v["data_flow"] if v.get("data_flow") else list(tk.get("data_flow", {}).values())
+    return [e for e in rows if not e.get("archived") and not e.get("review") and e.get("relevance", "core") in levels]
 
 
-def relations(tk):
+def relations(tk, levels=("core",)):
     v = tk.get("dbflow_view") or {}
-    return v["table_relations"] if v.get("data_flow") else list(tk.get("table_relations", {}).values())
+    rows = v["table_relations"] if v.get("data_flow") else list(tk.get("table_relations", {}).values())
+    tables = {e["table"].lower() for e in entries(tk, levels)}
+    return [r for r in rows if all(any(str(r.get(side) or "").lower().startswith(t + ".") for t in tables) for side in ("from", "to"))]
 
 
 def consolidation_input(t, tk):
     rp = tk.get("replay") or {}
-    data = {"ticket": t, "title": tk.get("title"),
+    from . import brief
+    current = brief.current_items(tk)
+    data = {"ticket": t, "title": tk.get("title"), "problem": tk.get("problem") or brief.jira_card(t).get("description") or "",
+            "root_cause": [brief._item_view(i) for i in current if i.get("kind") == "root_cause"],
+            "fix": [brief._item_view(i) for i in current if i.get("kind") == "fix"],
             "replay_scenarios": sorted({s.get("scenario") for s in rp.get("final") or [] if s.get("scenario")} |
                                        {sc.get("name") for sc in rp.get("scenarios") or [] if sc.get("name")}),
             "findings": [{"kind": i["kind"], "title": i["title"]} for i in sorted(tk.get("items", {}).values(),
@@ -153,6 +160,12 @@ def consolidate(store, t, cfg, caller=None):
                                                  for r in res.get("table_relations") or [] if r.get("from") and r.get("to")],
                              "conflicts": res.get("conflicts") or [], "unknowns": res.get("unknowns") or [],
                              "at": common.now_iso()}
+        from . import relevance
+        tags = tk.setdefault("scenario_relevance", {})
+        for sc in res.get("scenarios") or []:
+            if sc.get("name") and sc.get("relevance") in relevance.LEVELS:
+                tags[sc["name"]] = {"relevance": sc["relevance"], "hidden_reason": "" if sc["relevance"] == "core" else "supporting or outside the problem", "variant_of": ""}
+        relevance.classify(tk)
         _catalog(store, t, tk)
     tk["dbflow_dirty"] = False
     tk.pop("dbflow_dirty_since", None)
@@ -193,12 +206,12 @@ def _catalog(store, t, tk):
                         del w[sect][k]
     for k in [k for k, w in writers.items() if not w["writes"] and not w["reads"]]:
         del writers[k]
-    for r in relations(tk):
+    for r in relations(tk, ("core", "supporting")):
         k = rel_key(r)
         cur = rels.setdefault(k, dict(r, tickets=[]))
         if t not in cur["tickets"]:
             cur["tickets"].append(t)
-    for e in entries(tk):
+    for e in entries(tk, ("core", "supporting")):
         tbl = e["table"].lower()
         w = writers.setdefault(tbl, {"table": e["table"], "writes": {}, "reads": {}})
         for c in e.get("columns_written") or []:

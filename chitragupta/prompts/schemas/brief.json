@@ -289,6 +289,81 @@
         "claims"
       ],
       "additionalProperties": false
+    },
+    "relevance": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "cause",
+                  "fix-design",
+                  "verify"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "role"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "tables": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "string"
+          }
+        },
+        "apis": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string"
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "relevance": {
+                "type": "string",
+                "enum": [
+                  "core",
+                  "supporting",
+                  "noise"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "relevance"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "queries",
+        "tables",
+        "apis",
+        "scenarios"
+      ],
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,
@@ -299,6 +374,7 @@
     "proposed",
     "fixes_made",
     "after",
-    "cons"
+    "cons",
+    "relevance"
   ]
 }

@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - A learning guide maps captured events, ticket knowledge, time, delivery and the interface to the project's code and documentation.
 
 ### Changed
+- The existing brief call also selects validated core query, table, API and scenario ids. DB-flow consolidation receives the problem and current cause/fix without adding a relevance model call.
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
