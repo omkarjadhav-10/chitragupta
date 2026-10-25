@@ -1,5 +1,29 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async summary(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await page.route('**/api/tickets/ABC-1001', async route => {
+        const response = await route.fetch(), ticket = await response.json();
+        const verified = ticket.brief.summary.sections.find(s => s.id === 'verified');
+        verified.claims = [{ text: 'Synthetic test passed.', cites: ['test:proof'] }];
+        verified.empty = false; verified.text = null;
+        ticket.brief.evidence['test:proof'] = { kind: 'test', title: 'Synthetic proof passed' };
+        await route.fulfill({ json: ticket });
+      });
+      await page.goto(base + '#/tickets/ABC-1001');
+      for (const id of ['problem', 'root_cause', 'changed', 'verified', 'unknowns', 'next_action']) {
+        await page.locator('#s-' + id).waitFor();
+        check(await page.locator('#s-' + id).isVisible(), 'summary question is visible: ' + id);
+      }
+      check(await page.locator('.full-brief').getAttribute('open') === null, 'Full brief starts collapsed');
+      await page.locator('#s-verified').locator('..').locator('a.cite').click();
+      check(await page.getByText('Synthetic proof passed', { exact: true }).isVisible(), 'verification cite opens its actual proof');
+      await page.locator('.full-brief > summary').click();
+      check(await page.locator('#b-root_cause').isVisible(), 'one click opens the preserved full brief');
+    } finally { await ctx.close(); }
+  },
   async relevance(browser, base, check) {
     const ctx = await browser.newContext();
     try {

@@ -1,0 +1,12 @@
+Worklog facts recorded automatically for ABC-1001 — Cancel keeps stock reserved (full file: <HOME>/tickets/ABC-1001/README.md).
+Status: Jira: QA · Inferred: fix_ready. First worked 2026-08-30, last worked 2026-09-01, about 0m in total.
+Delivery (computed from git and PRs, checked 2026-09-01): Merged to qa (PR #7, 2026-09-01).
+What is the problem? Cancel an order: stock stays reserved. [jira:ABC-1001]
+What is the current root cause, and how certain is it? (confirmed) Cancel never releases the reservation. [rc00000002]
+What changed? ABC-1001 release stock on cancel; reached qa; PR #7 merged [commit:a1b2c3d, pr:7]
+What was actually verified? pytest tests/test_cancel.py: passed [test:te00000001]
+What remains blocked or unknown? Partial cancels still need checking. [rk00000001]
+What is the next action? Run the partial cancel check in QA. [rk00000001]
+Recorded queries (not yet ranked): 
+Recorded tables (not yet ranked): shop.reservations
+Recorded APIs (not yet ranked): 

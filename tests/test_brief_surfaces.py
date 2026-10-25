@@ -216,8 +216,12 @@ class TestContext(WithQueryIds):
         from chitragupta import render
         from chitragupta.store import Store
         ctx = render.render_context(Store(), TICKET)
-        self.assertIn("Root cause (confirmed; no brief yet): Discount applied twice", ctx)
-        self.assertIn("TL;DR: Discount applied twice in OrderService.total.", ctx)
+        self.assertIn("What is the current root cause, and how certain is it? (confirmed) Discount applied twice", ctx)
+        self.assertIn("OrderService.total adds it again",ctx)
+        self.assertIn("[i1]",ctx)
+        self.assertIn("Nothing verified yet", ctx)
+        self.assertNotIn("Recent findings:", ctx)
+        self.assertNotIn("TL;DR:",ctx)
         self.assertLessEqual(len(ctx), 4000)
 
 

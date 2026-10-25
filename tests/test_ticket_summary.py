@@ -87,3 +87,34 @@ class TicketSummary(BriefBase, unittest.TestCase):
         problem = next(s for s in v["sections"] if s["id"] == "problem")
         self.assertIn("Cancel an order", problem["claims"][0]["text"])
         self.assertNotIn("Unrelated old model problem", str(v))
+
+    def test_newest_three_changes_and_earlier_count(self):
+        from chitragupta import summary
+        commits = {str(n)*40: {"sha":str(n)*40,"subject":"change%d" % n,"date":"2026-09-0%d" % n,"repo_name":"shop-api"} for n in range(1,5)}
+        v = summary.view({"id":T,"items":{},"commits":commits},T,self.cfg(),card={})
+        changed = next(s for s in v["sections"] if s["id"] == "changed")
+        self.assertEqual(len(changed["claims"]),3)
+        self.assertEqual([c["cites"] for c in changed["claims"]], [["commit:"+str(n)*7] for n in (4,3,2)])
+        self.assertIn("and 1 earlier change",changed["claims"][-1]["text"])
+
+    def test_unknown_fallback_priority_and_current_only(self):
+        from chitragupta import summary
+        items = [it("risk","risk","risk",date="2026-09-09"), it("qnew","question","question",date="2026-09-08"),
+                 it("bold","blocker","older blocker",date="2026-09-01"),it("bnew","blocker","new blocker",date="2026-09-03"),
+                 it("archived","blocker","archived",archived={"reason":"archive"}),
+                 it("superseded","blocker","superseded",status="superseded"),it("review","blocker","review",review={"why":"other"})]
+        tk={"id":T,"items":{i["id"]:i for i in items}}
+        def ids():
+            return [c["cites"][0] for s in summary.view(tk,T,self.cfg(),card={})["sections"] if s["id"] == "unknowns" for c in s["claims"]]
+        self.assertEqual(ids(),["bnew","bold","qnew"])
+        tk["brief"]={"summary":{"sections":{"unknowns":{"claims":[c("Selected current risk","risk")]}}}}
+        self.assertEqual(ids(),["risk","bnew","bold"])
+
+    def test_same_date_changes_prefer_further_delivery_target(self):
+        from chitragupta import summary
+        rows = [{"shas":[str(n)*40],"subject":"change%d" % n,"date":"2026-09-04",
+                 "cells":{target:{"s":"in"}}} for n,target in ((1,"main"),(2,"qa"))]
+        tk = {"id":T,"items":{},"git":{"repos":{"shop-api":{"rows":rows,
+              "targets":[{"name":"qa","role":"qa"},{"name":"main","role":"main"}]}}}}
+        changed = next(s for s in summary.view(tk,T,self.cfg(),card={})["sections"] if s["id"] == "changed")
+        self.assertEqual(changed["claims"][0]["cites"],["commit:1111111"])

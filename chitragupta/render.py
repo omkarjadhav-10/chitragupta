@@ -601,7 +601,7 @@ def render_epic(t, tk):
          "| Status | First worked | Last worked | ≈ Total time |", "|---|---|---|---|",
          "| %s | %s | %s | %s |" % (status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
                                    fmt_time(total_minutes(tk))), "", "_%s_" % EPIC_NOTE, ""]
-    L += render_brief(brief_view(tk, t), tk["items"])
+    L += render_ticket_brief(brief_view(tk, t), tk["items"])
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     if tl:
@@ -634,7 +634,7 @@ def _render_ticket_all(store, t):
     st = delivery_stage(tk)
     if st:
         L += ["**%s:** %s" % (stage_label(st), st["text"]), ""]
-    L += render_brief(brief_view(tk, t), tk["items"])
+    L += render_ticket_brief(brief_view(tk, t), tk["items"])
     L += hub_sections(t, tk)
 
     sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
@@ -707,7 +707,7 @@ def render_ticket(store, t):
     if not display_title(tk) and tk.get("title_hint"):
         L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
     # Long findings live in the recorded companion; summary evidence links remain reachable.
-    L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_brief(brief_view(tk, t), tk.get("items"))]
+    L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_ticket_brief(brief_view(tk, t), tk.get("items"))]
     L += ["## " + relevance.heading(tk, "queries"), ""]
     for q in relevance.core(tk, "queries", 5):
         L.append("- [%s](queries.md#q-%s)%s — %s" % (cell(q.get("purpose") or "Query"), q["id"],
@@ -743,6 +743,10 @@ def render_ticket(store, t):
 def render_recorded_ticket(store, t):
     tk = store.ticket(t)
     L = [_render_ticket_all(store, t)]
+    tests = [r for r in (tk.get("tests") or {}).values() if isinstance(r,dict) and r.get("id")]
+    if tests:
+        L += ["## Recorded tests", ""] + ['- <a id="i-%s"></a>%s: %s%s' % (r["id"],r.get("command") or "Test",r.get("status") or "unknown",
+             " · " + r["ref"] if r.get("ref") else "") for r in tests]
     archived = [r for r in (tk.get("items") or {}).values() if r.get("archived")]
     if archived:
         L += ["## Archived findings", ""] + [hub_item(r) for r in archived]
@@ -853,6 +857,30 @@ def verified_label(c):
     return "Not verified"
 
 
+def render_summary(v):
+    L = ["## Ticket summary", ""]
+    for row in (v.get("summary") or {}).get("sections") or []:
+        confidence = " (%s)" % row["confidence"] if row.get("confidence") not in (None,"none") else ""
+        L += ["### " + row["heading"] + confidence, ""]
+        for c in row.get("claims") or []:
+            refs = []
+            for cid in c.get("cites") or []:
+                _, kind, rest, label = cite_parts(cid)
+                target = cite_target(kind,rest)
+                refs.append("[%s](%s)" % (cid,target) if target else "`%s`" % cid)
+            L.append("- " + c["text"] + (" [" + ", ".join(refs) + "]" if refs else ""))
+        if not row.get("claims"):
+            L.append("_%s._" % (row.get("text") or "Not recorded yet"))
+        L.append("")
+    return L
+
+
+def render_ticket_brief(v, items=None):
+    if not v.get("summary"):
+        return render_brief(v,items)
+    return render_summary(v) + ["<details><summary>Full brief</summary>", ""] + render_brief(v,items) + ["</details>", ""]
+
+
 def render_brief(v, items=None):
     """`## Brief` for the hub README: each section with its claims, evidence as footnotes ([^n]) that point at the
     items' anchors (#i-<id>), queries.md or requests.md. `items`: the ticket's items, to label bare item ids."""
@@ -895,7 +923,7 @@ def render_brief(v, items=None):
         L += ["### Child tickets", ""]
         L += ["- [%s](../%s/README.md)%s%s%s" % (c.get("key"), c.get("key"), " — " + c["title"] if c.get("title") else "",
                                                  " _(%s)_" % c["status"] if c.get("status") else "",
-                                                 ": " + c["line"] if c.get("line") else "")
+                                                 ": " + (c.get("summary_line") or c["line"]) if c.get("summary_line") or c.get("line") else "")
               for c in v.get("children") or []] or ["_No child tickets recorded yet._"]
         L.append("")
     elif not v.get("has_brief"):
@@ -1236,7 +1264,7 @@ def render_context(store, t):
     v = brief_view(tk, t)
     L += brief_context_lines(v)
     from . import relevance
-    if relevance.focused(tk):
+    if relevance.focused(tk) or v.get("summary"):
         L += [relevance.heading(tk, "queries") + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in relevance.core(tk, "queries", 5))]
         L += [relevance.heading(tk, "tables") + ": " + ", ".join(r.get("name") or "" for r in relevance.core(tk, "tables", 6)),
               relevance.heading(tk, "apis") + ": " + "; ".join("%s %s" % (r.get("method") or "", r.get("path") or "") for r in relevance.core(tk, "apis", 5))]
@@ -1319,8 +1347,20 @@ def brief_context_lines(v):
     v = v or {}
     if v.get("epic"):
         ch = v.get("children") or []
+        if any(c.get("summary_line") for c in ch):
+            lines = ["Epic. Child tickets:"]
+            for c in ch:
+                line = "%s: %s" % (c["key"],c.get("summary_line") or c.get("line") or "")
+                if sum(len(s)+1 for s in lines) + len(line) > 2800:
+                    lines.append("More children: open the ticket hub.")
+                    break
+                lines.append(line)
+            return lines
         return ["Epic. Child tickets: %s." % "; ".join("%s %s%s" % (c.get("key"), common.truncate(c.get("title"), 80) or "",
                                                                      " (%s)" % c["status"] if c.get("status") else "") for c in ch[:12])] if ch else []
+    if v.get("summary"):
+        from . import summary
+        return summary.text_lines(v["summary"])
     if not v.get("has_brief"):
         rc = (v.get("fallback") or {}).get("root_cause") or {}
         if not rc.get("text"):

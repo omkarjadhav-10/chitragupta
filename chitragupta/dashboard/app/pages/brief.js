@@ -35,7 +35,8 @@ export function citeOf(c, items) {
 }
 // Where a chip leads: [tab, element id] (null: shown, not a link: a raw log line or a Jira key)
 function citeTarget(ci) {
-  if (ci.kind === 'item' || ci.kind === 'note' || ci.kind === 'test') return ['overview', 'i-' + ci.rest];
+  if (ci.kind === 'test') return ['overview', 'e-test-' + ci.rest];
+  if (ci.kind === 'item' || ci.kind === 'note') return ['overview', 'i-' + ci.rest];
   if (ci.kind === 'query') return ['queries', 'q-' + ci.rest];
   if (ci.kind === 'commit' || ci.kind === 'pr') return ['branches', null];
   if (ci.kind === 'table') return ['dbflow', null];
@@ -44,7 +45,7 @@ function citeTarget(ci) {
 }
 function Cite({ c, ctx }) {
   const ci = citeOf(c, ctx.items);
-  const tg = citeTarget(ci);
+  const tg = EXPORT && (ci.kind === 'commit' || ci.kind === 'pr') ? null : citeTarget(ci);
   if (!tg) return html`<span class="cite static" title=${'Evidence: ' + ci.id}><span class="sr">Evidence: </span>${ci.label}</span>`;
   return html`<a class="cite" href=${ctx.href(tg[0])} title=${'Evidence: ' + ci.id + ' (show it)'}
     onClick=${(e) => { e.preventDefault(); ctx.jump(tg[0], tg[1]); }}><span class="sr">Evidence: </span>${ci.label}</a>`;
@@ -175,7 +176,7 @@ function Children({ b }) {
   const ch = b.children || [];
   return html`<section class="bsec" aria-labelledby="b-children"><h2 id="b-children">Child tickets</h2>
     ${ch.length ? html`<ul class="findings">${ch.map((c) => html`<li key=${c.key}><${TicketLink} k=${c.key} /> ${c.title || ''}
-      ${c.status ? html` <${Chip} title="Status">${c.status}</${Chip}>` : null}${c.line ? html`<div class="d">${c.line}</div>` : null}</li>`)}</ul>`
+      ${c.status ? html` <${Chip} title="Status">${c.status}</${Chip}>` : null}${c.summary_line || c.line ? html`<div class="d">${c.summary_line || c.line}</div>` : null}</li>`)}</ul>`
       : html`<p class="bempty">No child tickets recorded yet</p>`}</section>`;
 }
 function AllDetails({ t, ctx }) {
@@ -184,6 +185,22 @@ function AllDetails({ t, ctx }) {
     ['artifacts', 'Artifacts'], ['branches', 'Branches & PRs'], ['timeline', 'Timeline']];
   return html`<nav class="alld" aria-label="All details"><span>All details:</span>
     ${links.map(([tab, label, id]) => html`<a key=${tab} href=${ctx.href(tab)} onClick=${(e) => { e.preventDefault(); ctx.jump(tab, id || null); }}>${label}</a>`)}</nav>`;
+}
+
+function TicketSummary({ b, ctx, k }) {
+  return html`<div class="ticket-six">
+    ${(b.summary.sections || []).map((s) => html`<section class="bsec" key=${s.id} aria-labelledby=${'s-' + s.id}>
+      <h2 id=${'s-' + s.id}>${s.heading}${s.id === 'root_cause' ? html` <${Status} kind=${(CONF[s.confidence] || CONF.none)[0]}>${s.confidence === 'none' ? 'Not found yet' : (CONF[s.confidence] || CONF.none)[1]}</${Status}>` : null}</h2>
+      ${(s.claims || []).length ? html`<${Claims} list=${s.claims} ctx=${ctx} plain big=${s.id === 'root_cause'} />`
+        : html`<p class="bempty">${s.text || 'Not recorded yet'}</p>`}</section>`)}
+    <${RefreshButton} k=${k} />
+  </div>`;
+}
+function VerificationEvidence({ b }) {
+  const rows = Object.entries(b.evidence || {}).filter(([id, e]) => e.kind === 'test');
+  if (!rows.length) return null;
+  return html`<details class="more"><summary>Verification evidence (${rows.length})</summary><ul class="findings">
+    ${rows.map(([id, e]) => html`<li key=${id} id=${'e-test-' + id.slice(5)} tabindex="-1"><span class="mono">${id}</span><div class="d">${e.title}</div></li>`)}</ul></details>`;
 }
 
 // The brief itself: `jump(tab, elementId)` switches tab and shows the element; `tabHref(tab)` is that tab's URL.
@@ -205,10 +222,11 @@ export function Brief({ t, jump, tabHref }) {
       return html`<${Section} key=${s.id} s=${s} ctx=${ctx} />`;
     });
   }
-  return html`<article class="brief" aria-label=${'Brief for ' + t.key}>
+  return html`<article class="brief" aria-label=${(b.summary ? 'Ticket summary for ' : 'Brief for ') + t.key}>
     ${b.stale && b.has_brief ? html`<div class="alert stale" role="status"><${Icon} name="info" size=${18} />
       <p class="grow">New findings since ${fmtTs(b.stale.since)}${b.stale.new ? ' (' + plural(b.stale.new, 'item') + ')' : ''}.</p>
       <${RefreshButton} k=${t.key} /></div>` : null}
-    ${body}
+    ${b.summary && !b.epic ? html`<${TicketSummary} b=${b} ctx=${ctx} k=${t.key} />
+      <${VerificationEvidence} b=${b} /><details class="more full-brief"><summary>Full brief</summary>${body}</details>` : body}
     <${AllDetails} t=${t} ctx=${ctx} /></article>`;
 }

@@ -15,8 +15,8 @@ def _short(text, words=32):
     return " ".join(parts[:words]) + ("…" if len(parts) > words else "")
 
 
-def _claim(text, cites):
-    return {"text": _short(text), "cites": list(dict.fromkeys(cites))}
+def _claim(text, cites, words=32):
+    return {"text": _short(text,words), "cites": list(dict.fromkeys(cites))}
 
 
 def _known(tk, key, card):
@@ -87,25 +87,33 @@ def _assemble(tk, key, cfg, card, sections, model):
     from . import brief, delivery
     items = brief.current_items(tk)
     known = _known(tk,key,card)
-    def current(rows):
-        return [dict(c, text=_short(c.get("text"))) for c in rows or [] if isinstance(c,dict) and c.get("text") and c.get("cites")
+    def current(rows, words=32):
+        return [dict(c, text=_short(c.get("text"),words)) for c in rows or [] if isinstance(c,dict) and c.get("text") and c.get("cites")
                 and all(cid in known for cid in c["cites"])]
     sec = {s: {"claims": []} for s in ORDER}
     problem = card.get("problem") or card.get("description") or tk.get("problem") or ""
     if problem and "jira:" + key in known:
         sec["problem"]["claims"] = [_claim(problem,["jira:" + key])]
     root = (sections or {}).get("root_cause") or {}
-    sec["root_cause"] = {"claims": current(root.get("claims")), "confidence": root.get("confidence") or "none"}
+    sec["root_cause"] = {"claims": current(root.get("claims"),50), "confidence": root.get("confidence") or "none"}
     ov = brief.overrides(tk).get("root_cause")
     if ov:
-        sec["root_cause"] = {"claims": [_claim(ov[1],[ov[0]["id"]])],"confidence":"confirmed"}
+        sec["root_cause"] = {"claims": [_claim(ov[1],[ov[0]["id"]],50)],"confidence":"confirmed"}
     elif not sec["root_cause"]["claims"]:
         causes = [i for i in items if i.get("kind") == "root_cause"]
         causes.sort(key=lambda i: brief.CONF_RANK.get(i.get("confidence"),0),reverse=True)
         if causes:
             i = causes[0]
-            sec["root_cause"] = {"claims": [_claim(i.get("title"),[i["id"]])],"confidence":i.get("confidence") or "hypothesis"}
-    for group in brief._commits(tk):
+            sec["root_cause"] = {"claims": [_claim((i.get("title") or "") + (" — " + i["detail"] if i.get("detail") else ""),[i["id"]],50)],"confidence":i.get("confidence") or "hypothesis"}
+    groups = brief._commits(tk)
+    def progress(group):
+        repo = ((tk.get("git") or {}).get("repos") or {}).get(group.get("repo")) or {}
+        order = {name:n for n,target in enumerate(repo.get("targets") or []) for name in (target.get("name"),target.get("role")) if name}
+        reached = group.get("reached") or []
+        return max((order.get(name,-1) for name in reached),default=-1),len(reached)
+    groups.sort(key=lambda g:(g.get("date") or "",progress(g),g["sha7"]),reverse=True)
+    earlier = max(0,len(groups)-3)
+    for group in groups[:3]:
         text = group["subject"]
         if group.get("reached"):
             text += "; reached " + ", ".join(group["reached"])
@@ -115,15 +123,27 @@ def _assemble(tk, key, cfg, card, sections, model):
         sec["changed"]["claims"].append(_claim(text,["commit:" + group["sha7"]] + ["pr:%s" % p["number"] for p in prs[:2]]))
     sec["changed"]["claims"] = sec["changed"]["claims"][:3]
     sec["verified"]["claims"] = _verification(tk,key,cfg)
-    sec["unknowns"]["claims"] = current(model.get("unknowns"))
-    for i in items:
-        if i.get("kind") in ("risk","question","blocker") and len(sec["unknowns"]["claims"]) < 3:
-            if not any(i["id"] in c["cites"] for c in sec["unknowns"]["claims"]):
-                sec["unknowns"]["claims"].append(_claim(i.get("title"),[i["id"]]))
+    sec["unknowns"]["claims"] = current(model.get("unknowns"))[:3]
     stage = delivery.stage(tk.get("git") or {})
-    groups = brief._commits(tk)
+    delivery_row = None
     if stage and stage.get("gaps") and groups:
-        sec["unknowns"]["claims"] = [_claim("Missing delivery: " + "; ".join(str(g) for g in stage["gaps"]),["commit:" + groups[0]["sha7"]])] + sec["unknowns"]["claims"][:2]
+        delivery_row = _claim("Missing delivery: " + "; ".join(str(g) for g in stage["gaps"]),["commit:" + groups[0]["sha7"]])
+    elif not groups:
+        prs = brief._prs(tk)
+        alerts = (tk.get("git") or {}).get("alerts") or []
+        if prs and alerts:
+            alert = next((a for a in alerts if isinstance(a,dict) and a.get("text")),None)
+            if alert:
+                delivery_row = _claim(alert["text"],["pr:%s" % prs[0]["number"]])
+    if delivery_row and len(sec["unknowns"]["claims"]) < 3:
+        sec["unknowns"]["claims"].append(delivery_row)
+    priority = {"blocker":0,"question":1,"risk":2}
+    fallback = sorted((i for i in items if i.get("kind") in priority),key=lambda i:priority[i["kind"]])
+    for i in fallback:
+        if len(sec["unknowns"]["claims"]) >= 3:
+            break
+        if not any(i["id"] in c["cites"] for c in sec["unknowns"]["claims"]):
+            sec["unknowns"]["claims"].append(_claim(i.get("title"),[i["id"]]))
     action = current([model.get("next_action")])
     # Owner next-action notes take precedence, then the model's grounded proposal, then an open TODO.
     for i in items:
@@ -141,13 +161,17 @@ def _assemble(tk, key, cfg, card, sections, model):
     budgets = dict(problem=25,root_cause=50,changed=35,verified=30,unknowns=25,next_action=25)
     for sid, section in sec.items():
         budget, rows = budgets[sid], []
-        for c in section["claims"][:3]:
+        chosen = section["claims"][:3]
+        for n,c in enumerate(chosen):
             if budget <= 0:
                 break
-            c = dict(c,text=_short(c["text"],budget))
+            allowance = max(1,budget // (len(chosen)-n)) if sid == "changed" else budget
+            c = dict(c,text=_short(c["text"],allowance))
             budget -= len(c["text"].split())
             rows.append(c)
         section["claims"] = rows
+    if earlier and sec["changed"]["claims"]:
+        sec["changed"]["claims"][-1]["text"] += "; and %d earlier change%s" % (earlier,"" if earlier == 1 else "s")
     return {"v":1,"sections":sec,"next_action":(sec["next_action"]["claims"] or [None])[0]}
 
 
@@ -175,3 +199,26 @@ def view(tk,key=None,cfg=None,card=None,sections=None):
         rows.append(dict(row,id=sid,heading=HEADINGS[sid],empty=not row["claims"],
                          text=None if row["claims"] else "Nothing verified yet" if sid == "verified" else "Not recorded yet"))
     return {"sections":rows,"next_action":data["next_action"]}
+
+
+def text_lines(v):
+    out = []
+    for row in v.get("sections") or []:
+        confidence = " (%s)" % row["confidence"] if row.get("confidence") not in (None,"none") else ""
+        claims = row.get("claims") or []
+        text = "; ".join(c["text"] + " [" + ", ".join(c.get("cites") or []) + "]" for c in claims) if claims else row.get("text") or "Not recorded yet"
+        out.append(row["heading"] + confidence + " " + text)
+    return out
+
+
+def child_line(v):
+    labels = dict(zip(ORDER,("Problem","Cause","Changed","Verified","Unknown","Next")))
+    parts = []
+    for row in v.get("sections") or []:
+        claims = row.get("claims") or []
+        c = claims[0] if claims else None
+        text = _short(c["text"],8) if c else row.get("text") or "Not recorded yet"
+        confidence = " (%s)" % row["confidence"] if row.get("confidence") not in (None,"none") else ""
+        cites = " [" + ", ".join(c["cites"][:2]) + "]" if c else ""
+        parts.append(labels[row["id"]] + confidence + ": " + text + cites)
+    return " | ".join(parts)

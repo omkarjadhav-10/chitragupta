@@ -828,6 +828,8 @@ def view(tk, key=None, cfg=None):
         view_["fallback"] = _fallback(tk)
     from . import summary
     view_["summary"] = summary.view(tk,key,cfg,sections=sec)
+    summary_cites = [cid for s in view_["summary"]["sections"] for c in s["claims"] for cid in c["cites"]]
+    view_["evidence"].update(_evidence(tk,list(dict.fromkeys(summary_cites)),fx))
     return view_
 
 
@@ -873,8 +875,11 @@ def children(key):
         m = _KEY_AT_START.match(par.upper())
         if not ((m and m.group(1) == key) or key in (tk.get("crumb_parents") or [])):
             continue
+        from . import summary
+        sv = summary.view(tk,t)
         out.append({"key": t, "title": S.display_title(tk) or tk.get("title_hint") or "",
-                    "status": S.jira_status(tk) or tk.get("status_inferred") or "", "line": child_line(tk)})
+                    "status": S.jira_status(tk) or tk.get("status_inferred") or "", "line": child_line(tk),
+                    "summary":sv,"summary_line":summary.child_line(sv)})
     return out
 
 
@@ -898,7 +903,7 @@ def text_lines(v):
         L.append(status)
     if v.get("epic"):
         L += ["", "Epic: no brief. Its children:"]
-        L += ["- %s %s · %s · %s" % (c["key"], c.get("title") or "", c.get("status") or "-", c.get("line") or "")
+        L += ["- %s %s · %s · %s" % (c["key"], c.get("title") or "", c.get("status") or "-", c.get("summary_line") or c.get("line") or "")
               for c in v.get("children") or []] or ["- none recorded"]
         return L
     if not v.get("has_brief"):

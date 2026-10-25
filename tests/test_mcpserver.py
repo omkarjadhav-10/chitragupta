@@ -184,7 +184,10 @@ class TestTools(McpBase):
     def test_get_ticket_summary_and_sections(self):
         t = self.text("get_ticket", key="abc-1001")
         self.assertIn("# ABC-1001 — Order total is wrong for discounted items", t)
-        self.assertIn("Counts: 2 findings · 2 requests · 1 queries", t)
+        self.assertNotIn("Counts:",t)
+        for question in ("What is the problem?", "What was actually verified?", "What is the next action?"):
+            self.assertIn(question,t)
+        self.assertIn("Find the order [q1]",t)
         self.assertIn("Sections (get_ticket section=…)", t)
         self.assertIn("The fix is on develop but not on qa", t)
         want = {"findings": "[root_cause] **Discount applied twice**", "requests": "2. Create order — POST {{shopBaseUrl}}/orders",

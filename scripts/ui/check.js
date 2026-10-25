@@ -209,6 +209,7 @@ async function launch() {
   briefTicket.tldr = 'Legacy summary awaiting an earlier fix.';
   briefTicket.brief = { ...briefTicket.brief, has_brief: true, sections: [{ id: 'root_cause', heading: 'Root cause', confidence: 'confirmed',
     claims: [{ text: 'The reservation was never released.', cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] }] };
+  Object.assign(briefTicket.brief.summary.sections.find(s => s.id === 'root_cause'), { confidence: 'confirmed', claims: briefTicket.brief.sections[0].claims, empty: false, text: null });
   await page.route('**/api/tickets/ABC-1002', r => r.fulfill({ json: briefTicket }));
   await page.goto(base + '#/tickets/ABC-1002');
   await page.reload();
@@ -220,6 +221,7 @@ async function launch() {
     cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] });
   await page.setViewportSize({ width: 390, height: 1000 });
   await page.reload();
+  await page.locator('.full-brief > summary').click();
   await page.locator('#b-proposed').waitFor();
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
     'long method names in an owner correction wrap on phones');

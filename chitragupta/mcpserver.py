@@ -290,7 +290,7 @@ def _summary_lines(t):
     bl = brief_context_lines(t.get("brief"))
     if bl:
         L += [""] + bl
-    if t.get("focused"):
+    if t.get("focused") or (t.get("brief") or {}).get("summary"):
         L += ["Key queries:" if (t.get("core_ranked") or {}).get("queries") else "Recorded queries (not yet ranked):"] + ["- %s [%s]" % (_one(q.get("purpose") or "Query", 180), q["id"]) for q in t.get("queries") or []]
         for kind, label in (("tables", "Core tables"), ("apis", "Core APIs")):
             label = label if (t.get("core_ranked") or {}).get(kind) else "Recorded %s (not yet ranked)" % kind
@@ -335,7 +335,7 @@ def _brief_section(t):
     if v.get("epic"):
         L.append("An Epic: its child tickets instead of a brief.")
         L += ["- %s %s%s%s" % (c.get("key"), _one(c.get("title"), 120) if c.get("title") else "", " (%s)" % c["status"] if c.get("status") else "",
-                               " · " + _one(c["line"], 200) if c.get("line") else "") for c in v.get("children") or []] or ["No child tickets recorded yet."]
+                               " · " + _one(c.get("summary_line") or c["line"], 1000) if c.get("summary_line") or c.get("line") else "") for c in v.get("children") or []] or ["No child tickets recorded yet."]
     elif not v.get("has_brief"):
         rc = (v.get("fallback") or {}).get("root_cause") or {}
         L.append("No brief yet (written at day close, or /cg:ticket %s --brief)." % t["key"])

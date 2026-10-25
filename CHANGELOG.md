@@ -12,11 +12,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - A learning guide maps captured events, ticket knowledge, time, delivery and the interface to the project's code and documentation.
 
 ### Changed
+- Ticket pages, hubs, exports and SessionStart lead with six cited answers; Full brief preserves the previous explanation behind one disclosure. Epic child rows answer the same six questions, and verification chips open recorded proof.
 - Migrated tickets show capped core lists with meaningful pre-pick ordering and honest not-yet-ranked labels. Full evidence stays behind All recorded and generated companions; the dashboard loads heavy tabs, archives and hub text on demand. Global DB maps filter noise and unresolved reviews.
 - The existing brief call also selects validated core query, table, API and scenario ids. DB-flow consolidation receives the problem and current cause/fix without adding a relevance model call.
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Six-question summaries show the newest logical changes and count earlier groups; fallback unknowns prioritize current blockers, questions and risks while preserving grounded model choices first.
 - Ticket change facts group cherry-picked copies by delivery patch id and preserve old SHA citation aliases; stash snapshots are excluded from commit capture and summary changes.
 - Focused hubs retain labelled title hints and core scenario effects; SessionStart retains the core DB summary and recorded query companions show sent/raw provenance.
 - Ordinary owner notes beginning with keep/move and unresolved review commands remain inbox notes; only successfully resolved commands are consumed.

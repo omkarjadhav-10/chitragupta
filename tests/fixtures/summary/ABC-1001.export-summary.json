@@ -1,0 +1,96 @@
+{
+  "sections": [
+    {
+      "claims": [
+        {
+          "text": "Cancel an order: stock stays reserved.",
+          "cites": [
+            "jira:ABC-1001"
+          ]
+        }
+      ],
+      "id": "problem",
+      "heading": "What is the problem?",
+      "empty": false,
+      "text": null
+    },
+    {
+      "claims": [
+        {
+          "cites": [
+            "rc00000002"
+          ],
+          "text": "Cancel never releases the reservation."
+        }
+      ],
+      "confidence": "confirmed",
+      "id": "root_cause",
+      "heading": "What is the current root cause, and how certain is it?",
+      "empty": false,
+      "text": null
+    },
+    {
+      "claims": [
+        {
+          "text": "ABC-1001 release stock on cancel; reached qa; PR #7 merged",
+          "cites": [
+            "commit:a1b2c3d",
+            "pr:7"
+          ]
+        }
+      ],
+      "id": "changed",
+      "heading": "What changed?",
+      "empty": false,
+      "text": null
+    },
+    {
+      "claims": [
+        {
+          "text": "pytest tests/test_cancel.py: passed",
+          "cites": [
+            "test:te00000001"
+          ]
+        }
+      ],
+      "id": "verified",
+      "heading": "What was actually verified?",
+      "empty": false,
+      "text": null
+    },
+    {
+      "claims": [
+        {
+          "cites": [
+            "rk00000001"
+          ],
+          "text": "Partial cancels still need checking."
+        }
+      ],
+      "id": "unknowns",
+      "heading": "What remains blocked or unknown?",
+      "empty": false,
+      "text": null
+    },
+    {
+      "claims": [
+        {
+          "cites": [
+            "rk00000001"
+          ],
+          "text": "Run the partial cancel check in QA."
+        }
+      ],
+      "id": "next_action",
+      "heading": "What is the next action?",
+      "empty": false,
+      "text": null
+    }
+  ],
+  "next_action": {
+    "cites": [
+      "rk00000001"
+    ],
+    "text": "Run the partial cancel check in QA."
+  }
+}
