@@ -1,5 +1,24 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async reviews(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await page.route('**/api/tickets/ABC-1001', async route => {
+        const response = await route.fetch(), ticket = await response.json();
+        ticket.record_reviews = [{ id: 'GET /sessions', kind: 'api', title: 'Synthetic session lookup', detail: '/sessions',
+          review: { why: 'names ABC-1002', suggest: 'ABC-1002' } }];
+        await route.fulfill({ json: ticket });
+      });
+      await page.goto(base + '#/tickets/ABC-1001');
+      await page.locator('#all-findings > summary').click();
+      const review = page.locator('details').filter({ has: page.locator('summary', { hasText: /^Needs review/ }) }).last();
+      await review.locator('summary').first().click();
+      const text = await review.innerText();
+      check(text.includes('ABC-1001: keep GET /sessions'), 'record review includes the complete copyable keep key');
+      check(text.includes('ABC-1001: move GET /sessions ABC-1002'), 'record review includes additive move command');
+    } finally { await ctx.close(); }
+  },
   async dayline(browser, base, check) {
     const ctx = await browser.newContext();
     try {

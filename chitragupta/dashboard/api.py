@@ -357,6 +357,8 @@ def ticket(key):
     })
     from .. import brief, delivery
     out["brief"] = brief.view(tk, key)
+    from .. import offticket
+    out["record_reviews"] = offticket.record_reviews(tk)
     if out["brief"].get("epic"):  # an Epic's knowledge is its children's: the tabs say so instead of showing it
         from ..render import EPIC_NOTE
         out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[],

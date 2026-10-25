@@ -134,18 +134,60 @@ def recheck(tk, t, prefixes, at=None):
     return out
 
 
-_DIRECTIVE = re.compile(r"(?i)^\s*(keep|move)\s+([0-9a-f]{10})(?:\s+(?:to\s+)?([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}))?\s*\.?\s*$")
+_DIRECTIVE = re.compile(r"(?i)^\s*(keep|move)\s+(.+?)\s*$")
 
 
 def parse_directive(text):
-    """("keep", id, None) / ("move", id, KEY) for an inbox line's text after "<KEY>:", else None."""
-    m = _DIRECTIVE.match(text or "")
+    """Keep/move accepts an item/query id, qualified table key or complete API key."""
+    m = _DIRECTIVE.fullmatch(text or "")
     if not m:
         return None
-    verb, iid, key = m.group(1).lower(), m.group(2).lower(), (m.group(3) or "").upper() or None
-    if (verb == "move") != bool(key):
-        return None
-    return verb, iid, key
+    verb, key = m.group(1).lower(), m.group(2).strip()
+    if verb == "keep":
+        return verb, key.rstrip("."), None
+    dest = re.fullmatch(r"(.+?)\s+(?:to\s+)?([A-Za-z][A-Za-z0-9]{1,9}-\d{1,6})\s*\.?", key, re.I)
+    return (verb, dest.group(1).strip(), dest.group(2).upper()) if dest else None
+
+
+def record_reviews(tk):
+    """Review rows share the existing finding UI; the id is the exact inbox record key."""
+    out = []
+    for kind in ("queries", "tables", "apis"):
+        for key, rec in (tk.get(kind) or {}).items():
+            if isinstance(rec, dict) and rec.get("review") and not rec.get("archived"):
+                out.append(dict(rec, id=key, kind=kind[:-1], title=rec.get("purpose") or rec.get("name") or key,
+                                detail=rec.get("text") or rec.get("path") or "", date=rec.get("date") or rec.get("last") or ""))
+    return out
+
+
+def _resolve_record(st, t, kind, iid, rec, verb, key, ts, prefixes):
+    import copy
+    from . import store as S
+    if verb == "keep":
+        rec.update(review=None, review_kept=ts)
+        st.touch_ticket(t)
+        return "kept %s in %s" % (iid, t)
+    dest = S.valid_ticket(key, {p.upper() for p in prefixes} if prefixes else None)
+    if not dest or dest == t:
+        return "not a ticket to move to: %s" % key
+    if rec.get("archived"):
+        return "%s in %s was already archived" % (iid, t)
+    row = copy.deepcopy({k: v for k, v in rec.items() if k not in ("review", "review_kept", "archived", "relevance", "hidden_reason", "variant_of")})
+    nid = S.query_id(dest, row.get("text")) if kind == "queries" else iid
+    if kind == "queries":
+        row["id"] = nid
+    row.update(src="user", review=None, review_kept=ts, moved_from="%s/%s" % (t, iid))
+    S.touch_ticket_meta(st, dest, rec.get("date") or rec.get("last") or ts[:10])
+    records = st.ticket(dest)[kind]
+    records[nid] = S._merge_rec(records.get(nid), row)
+    records[nid].update(review=None, review_kept=ts)
+    rec["archived"] = {"at": ts, "reason": "moved to %s" % dest}
+    if kind in ("tables", "apis"):
+        S._merge_catalog(st.catalog()[kind], nid, row, dest, ts[:10])
+        st.catalog_dirty = True
+    st.touch_ticket(t)
+    st.touch_ticket(dest)
+    return "moved %s from %s to %s as %s" % (iid, t, dest, nid)
 
 
 def apply_directive(store, t, d, ts, prefixes):
@@ -155,7 +197,12 @@ def apply_directive(store, t, d, ts, prefixes):
     tk = store.ticket(t)
     it = (tk.get("items") or {}).get(iid)
     if not it:
-        return "no item %s in %s" % (iid, t)
+        matches = [(kind, k, row) for kind in ("queries", "tables", "apis")
+                   for k, row in (tk.get(kind) or {}).items() if k.casefold() == iid.casefold()]
+        if len(matches) == 1:
+            kind, actual, row = matches[0]
+            return _resolve_record(store, t, kind, actual, row, verb, key, ts, prefixes)
+        return "no unambiguous item or record %s in %s" % (iid, t)
     if verb == "keep":
         it["review"], it["review_kept"] = None, ts
         store.touch_ticket(t)

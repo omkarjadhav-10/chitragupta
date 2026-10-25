@@ -52,3 +52,44 @@ class RecordReview(Base):
         after = common.read_text(store.ticket_path(T))
         kb51.record_review(False, [], backups.append)
         self.assertEqual(after, common.read_text(store.ticket_path(T)))
+
+
+class RecordResolution(Base):
+    merge_records = RecordReview.merge_records
+
+    def test_keep_and_move_accept_every_record_key(self):
+        import copy
+        from chitragupta import offticket, store
+        self.merge_records()
+        for kind in ("queries", "tables", "apis"):
+            key = next(k for k, v in self.st.ticket(T)[kind].items() if v.get("review"))
+            directive = offticket.parse_directive("keep " + key)
+            self.assertEqual(directive, ("keep", key, None))
+            offticket.apply_directive(self.st, T, directive, "2026-09-01T10:00:00", ["ABC"])
+            original = self.st.ticket(T)[kind][key]
+            self.assertFalse(original.get("review"))
+            self.assertTrue(original["review_kept"])
+            before = copy.deepcopy(original)
+            directive = offticket.parse_directive("move " + key + " ABC-1002")
+            offticket.apply_directive(self.st, T, directive, "2026-09-01T10:01:00", ["ABC"])
+            self.assertEqual(original["archived"]["reason"], "moved to ABC-1002")
+            self.assertIn(key, self.st.ticket(T)[kind])
+            destkey = store.query_id("ABC-1002", original["text"]) if kind == "queries" else key
+            moved = self.st.ticket("ABC-1002")[kind][destkey]
+            self.assertEqual(moved["src"], "user")
+            self.assertFalse(moved.get("review"))
+            self.assertNotIn("archived", moved)
+            for field in ("text", "purpose", "name", "path"):
+                self.assertEqual(moved.get(field), before.get(field))
+
+    def test_flagged_records_are_visible_in_review_surfaces(self):
+        from chitragupta import common, render, store
+        from chitragupta.dashboard import api
+        self.merge_records()
+        common.write_json(store.ticket_path(T), self.st.ticket(T))
+        md = render.render_ticket(self.st, T)
+        for kind in ("queries", "tables", "apis"):
+            key = next(k for k, v in self.st.ticket(T)[kind].items() if v.get("review"))
+            self.assertIn(T + ": keep " + key, md)
+            self.assertIn(T + ": move " + key, md)
+        self.assertEqual(len(api.ticket(T)["record_reviews"]), 3)

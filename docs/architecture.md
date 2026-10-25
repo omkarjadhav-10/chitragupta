@@ -291,3 +291,5 @@ All other unnamed prompts use branch, then general carry. A longer question deci
 ## Record routing review
 
 K8 checks query SQL, table and endpoint names, and their purposes at merge time, using the same ticket overlap rules as findings. Suspect records carry a review flag and remain stored in place. A record cannot establish its own overlap; flagged and explicitly other-ticket records do not establish overlap for one another. Owner-kept records remain kept. The forward-only `kb51-record-review` migration backs up tickets before adding these flags to existing records.
+
+Record review rows appear alongside findings in Needs review. Inbox keep/move accepts the exact query id, qualified table key or API key (including its method). Keep records the owner decision; move copies content to the destination with user provenance and archives the source. Query ids are recomputed for their new owner. Repeated moves do not duplicate records.

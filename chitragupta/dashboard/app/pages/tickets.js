@@ -198,7 +198,7 @@ function AllFindings({ t }) {
       <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${count(k)}</span></h2>
       <${KindItems} list=${groups[k]} byId=${byId} /></section>`)
       : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
-    <${NeedsReview} t=${t} list=${live.filter((i) => i.review)} />
+    <${NeedsReview} t=${t} list=${live.filter((i) => i.review).concat(t.record_reviews || [])} />
     <${Collapsed} title="Archived" list=${archived} byId=${byId} /></details>`;
 }
 function Overview({ t, jump, tabHref }) {

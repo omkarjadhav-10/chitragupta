@@ -685,7 +685,8 @@ def render_ticket(store, t):
     if by("risk"):
         sec("Risks", by("risk"))
     sec("Open questions · TODO · blockers", by("question", "todo", "blocker"))
-    rv = needs_review(t, items)
+    from . import offticket
+    rv = needs_review(t, items + offticket.record_reviews(tk))
     if rv:
         L += ["## Needs review"] + rv + [""]
     sec("Code map", code_map(tk))
