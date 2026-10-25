@@ -85,3 +85,22 @@ class JiraVerificationRegressions(VerifiedByQa):
         cfg["brief"]["verified_statuses"] = ["Signed Off"]
         common.write_json(common.wl("config.json"), cfg)
         self.assertEqual(self.after()["state"], "not-verified")
+
+    def test_view_does_not_build_the_generation_context(self):
+        from chitragupta import brief
+        from unittest.mock import patch
+        self.status("Done", tests=True)
+        self.gen()
+        with patch.object(brief, "_Ctx", side_effect=AssertionError("view built full context")):
+            self.after()
+
+    def test_passing_test_does_not_expire_after_fifteen_newer_tests(self):
+        from chitragupta import brief
+        tk = self.saved()
+        tk["jira"]["status"] = "In Progress"
+        tk["replay"] = {}
+        tk["tests"] = {"old": {"id": "old", "status": "passed", "at": "2026-01-01"}}
+        tk["tests"].update({str(n): {"id": str(n), "status": "failed", "at": "2026-10-%02d" % n} for n in range(1, 17)})
+        tk["brief"] = {"sections": {"after": {"verified": {"state": "verified", "cites": ["test:old"]}}}}
+        after = next(s for s in brief.view(tk, tb.T, self.cfg())["sections"] if s["id"] == "after")
+        self.assertEqual(after["verified"]["cites"], ["test:old"])

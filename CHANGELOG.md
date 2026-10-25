@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Fixed
+- Brief rendering reads passing evidence directly and retains older passing-test citations beyond the recent-facts window.
 - Rebuild restoration unions prior and re-extracted histories, preserving both through compaction.
 - Terse re-mentions preserve richer explanations and do not promote confidence. Identical updates are no-ops; brief freshness ignores whitespace and case.
 - Item history uses content deduplication, chronological snapshots without evidence, and a five-version inline bound. Older versions remain in an additive archive; existing data is backed up before migration.

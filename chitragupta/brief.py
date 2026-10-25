@@ -272,6 +272,15 @@ def _words(s):
     return len(str(s or "").split())
 
 
+def _passing(tk):
+    """Read verification ids directly, without Jira, facts caps or the generation corpus."""
+    tests = {"test:" + t["id"] for t in (tk.get("tests") or {}).values()
+             if isinstance(t, dict) and t.get("id") and t.get("status") == "passed" and not t.get("archived")}
+    replay = {"replay:%s" % r["n"] for r in (tk.get("replay") or {}).get("final") or []
+              if isinstance(r, dict) and r.get("n") is not None}
+    return tests | replay
+
+
 class _Ctx:
     """What a claim may cite and name: this ticket's current item ids and deterministic facts, its verified files
     and the words its current records use."""
@@ -282,8 +291,7 @@ class _Ctx:
         f = facts(key, tk, card)
         self.facts = f
         self.known = set(self.items) | _fact_ids(f)
-        self.passing = {t["id"] for t in f.get("tests") or [] if t.get("status") == "passed"} | \
-                       {r["id"] for r in f.get("replay") or []}
+        self.passing = _passing(tk)
         self.fix_ids = {i for i, x in self.items.items() if x.get("kind") == "fix"}
         files = [x for x in (tk.get("files") or {}).values() if isinstance(x, dict)]
         self.good_paths = {str(x.get("path") or "").lower() for x in files if x.get("verified") is not False}
@@ -757,7 +765,7 @@ def view(tk, key=None, cfg=None):
             if sid == "after":
                 v = dict(s.get("verified") or {"state": "not-verified", "text": "", "cites": []})
                 js = S.jira_status(tk)
-                proof = [c for c in v.get("cites") or [] if c in _Ctx(key, tk, None).passing]
+                proof = [c for c in v.get("cites") or [] if c in _passing(tk)]
                 by_test = v.get("state") == "verified" and bool(proof)
                 if by_test:
                     v["label"], v["cites"] = "Verified", proof

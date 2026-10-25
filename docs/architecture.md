@@ -277,3 +277,5 @@ Item history deduplicates title/detail/confidence and omits evidence from snapsh
 Stable-id re-mentions retain the longer detail and never raise confidence on recency alone. Explicit `updates` corrections may replace shorter text and confidence. Case/whitespace changes do not invalidate the brief; status, confidence, substantive text and deterministic facts still do.
 
 Rebuild restoration unions prior and re-extracted histories by content before applying the inline cap and additive archive.
+
+Brief view verification reads tests and replay directly rather than building model context; passing tests remain evidence beyond the fifteen-test generation window.
