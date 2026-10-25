@@ -625,14 +625,43 @@ def _when(it):
 
 
 def _hist(it):
-    return json.loads(json.dumps({k: v for k, v in it.items() if k != "history"}))
+    return json.loads(json.dumps({k: v for k, v in it.items() if k not in ("history", "evidence")}))
 
 
-def _remember(it, version):
-    hist = it.setdefault("history", [])
-    snap = _hist(version)
-    if snap not in hist:
-        hist.append(snap)
+def history_key(it):
+    """Provenance changes alone do not create a new version."""
+    return tuple(it.get(k) or "" for k in ("title", "detail", "confidence"))
+
+
+def union_history(*groups):
+    """Linear content dedupe, followed by chronological ordering (previous version last)."""
+    seen, out = set(), []
+    for group in groups:
+        for version in group or []:
+            key = history_key(version)
+            if key not in seen:
+                seen.add(key)
+                out.append(_hist(version))
+    return sorted(out, key=_when)
+
+
+def compact_history(it, owner):
+    """Keep the first and newest four snapshots; append every older version before removing it inline."""
+    from .safety import paths as sp
+    hist = union_history(it.get("history"))
+    if len(hist) > 5:
+        name = owner if valid_ticket(owner, None) else common.stable_id(owner)
+        path = common.hp("data", "history", name + ".jsonl")
+        rows = [{"item": it.get("id"), "version": h} for h in hist[1:-4]]
+        sp.makedirs(os.path.dirname(path))
+        sp.append_text(path, "".join(json.dumps(redact_obj(r), ensure_ascii=False) + "\n" for r in rows))
+        hist = hist[:1] + hist[-4:]
+    it["history"] = hist
+
+
+def _remember(it, version, owner):
+    it["history"] = union_history(it.get("history"), [_hist(version)])
+    compact_history(it, owner)
 
 
 def _merge_item(store, dd, t, gkey, rec, updates, tslot):
@@ -649,16 +678,16 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
         older = _when(rec) < _when(old)  # a re-extracted earlier session: its text never replaces a newer one
         if old.get("session") == "inbox" or old.get("src") == "user":
             if any(old.get(k) != rec.get(k) for k in ("kind", "title", "detail", "confidence")):
-                _remember(old, rec)
+                _remember(old, rec, t or gkey)
                 store.bump(t or gkey, "updates")
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
         elif target and older:
-            _remember(old, rec)
+            _remember(old, rec, t or gkey)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
             store.bump(t or gkey, "updates")
         elif target:
-            hist = old.get("history") or []
-            hist.append(_hist(old))
+            _remember(old, old, t or gkey)
+            hist = old["history"]
             new = dict(rec, id=iid, first_date=old.get("first_date") or old.get("date"), history=hist)
             new["evidence"] = _union(rec["evidence"], old.get("evidence"))[:10]
             for k in ("archived", "review_kept"):  # your decisions survive an update; new text is current again
@@ -670,14 +699,14 @@ def _merge_item(store, dd, t, gkey, rec, updates, tslot):
             store.bump(t or gkey, "updates")
         else:
             if older and rec.get("detail") != old.get("detail"):
-                _remember(old, rec)
+                _remember(old, rec, t or gkey)
             old["evidence"] = _union(old.get("evidence"), rec["evidence"])[:10]
             for k in ("phase", "ref"):
                 if rec.get(k) and not old.get(k):
                     old[k] = rec[k]
             if rec["detail"] and not older:
                 if rec["detail"] != old.get("detail"):
-                    _remember(old, old)
+                    _remember(old, old, t or gkey)
                 for k in ("detail", "date", "time", "session", "ref"):
                     if rec.get(k) is not None:
                         old[k] = rec[k]

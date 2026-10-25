@@ -271,3 +271,5 @@ A model citation `item:<id>` is canonicalized to the bare id only when that exac
 ### Owner note authority
 
 Item merges preserve owner wording only for inbox or explicit user provenance. Extractor note kinds remain updateable; identical retries do not count as updates and retain at most ten evidence entries.
+
+Item history deduplicates title/detail/confidence and omits evidence from snapshots. Inline history keeps the first version and newest four, ordered by date/time; overflow is appended to `data/history/<KEY>.jsonl`. The `kb51-history-compact` migration backs up canonical tickets and existing archives before compacting them.

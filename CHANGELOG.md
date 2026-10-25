@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Fixed
+- Item history uses content deduplication, chronological snapshots without evidence, and a five-version inline bound. Older versions remain in an additive archive; existing data is backed up before migration.
 - Extracted notes accept corrections; only inbox/user provenance protects owner wording. Identical owner-note retries do not count as updates, and evidence is capped at ten.
 
 ## [0.5.0] - 2026-10-24
