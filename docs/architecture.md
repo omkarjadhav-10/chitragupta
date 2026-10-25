@@ -281,3 +281,5 @@ Rebuild restoration unions prior and re-extracted histories by content before ap
 Brief view verification reads tests and replay directly rather than building model context; passing tests remain evidence beyond the fifteen-test generation window.
 
 Archive appends deduplicate by item and content against the existing JSONL in one linear read. Rebuilds and interrupted migration retries append only unseen versions and never rewrite the archive.
+
+Supersession calls require at least two candidate ids after comparison context is selected, including the final batch. A context-free singleton waits rather than spending a call.

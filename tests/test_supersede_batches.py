@@ -87,3 +87,11 @@ class SingletonTail(Batches):
         self.assertEqual({r["id"] for b in self.sent for r in b["items"]}, set(tk["items"]))
         self.assertEqual(len(self.sent), 2)
         self.assertGreaterEqual(len(self.sent[-1]["items"]), 2)
+
+    def test_singleton_without_comparison_context_does_not_spend_a_call(self):
+        from chitragupta import supersede
+        from unittest.mock import patch
+        batches = [{"items": [{"id": "f000"}, {"id": "f001"}]}, {"items": [{"id": "f002"}]}, {"items": []}]
+        with patch.object(supersede, "supersede_input", side_effect=batches):
+            supersede.run_day(self.st, self.cfg(), {}, D, tickets=[T])
+        self.assertEqual(len(self.sent), 1)

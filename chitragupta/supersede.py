@@ -296,7 +296,7 @@ def run_day(store, cfg, health, day, tickets=None):
         while True:  # one call per batch, until every current candidate was sent once
             data = supersede_input(store, t, day, sent)
             ids = {r["id"] for r in data["items"]}
-            if not ids or (len(ids) < 2 and not batch) or (batch and not ids - sent):
+            if len(ids) < 2 or (batch and not ids - sent):
                 break  # nothing (more) to compare
             if modelbudget.over_budget(health, cfg, "supersede"):
                 if batch:
