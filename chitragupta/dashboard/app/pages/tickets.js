@@ -166,9 +166,9 @@ function Finding({ i, byId }) {
   return html`<li class="finding-row" id=${'i-' + i.id} tabindex="-1"><div class="finding-copy"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
     ${i.review ? html`<div class="m"><strong>Needs review:</strong> ${i.review.why || 'maybe not this ticket'}${i.review.suggest ? ' (suggested: ' + i.review.suggest + ')' : ''}</div>` : null}
     ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) { for (let d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true; el.scrollIntoView({ block: 'center' }); el.focus({ preventScroll: true }); } }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</div>
-    <aside class="finding-evidence" aria-label="Recorded evidence"><div>${[i.date, i.time].filter(Boolean).join(' ')}</div>
+    <div class="finding-evidence" aria-label="Recorded evidence"><div>${[i.date, i.time].filter(Boolean).join(' ')}</div>
       ${conf ? html`<div>${conf} confidence</div>` : null}${i.closed_by ? html`<div>Done: ${i.closed_by}</div>` : null}
-      ${[].concat(i.evidence || []).map((e, n) => html`<p key=${n}>${e}</p>`)}${i.ref ? html`<p class="mono">${i.ref}</p>` : null}</aside></li>`;
+      ${[].concat(i.evidence || []).map((e, n) => html`<p key=${n}>${e}</p>`)}${i.ref ? html`<p class="mono">${i.ref}</p>` : null}</div></li>`;
 }
 // Current items per kind; done TODOs and items a newer one replaced are collapsed under each kind (K3).
 function KindItems({ list, byId }) {

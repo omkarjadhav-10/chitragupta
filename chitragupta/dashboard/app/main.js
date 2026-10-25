@@ -43,7 +43,7 @@ function TopBar() {
     <nav class="primary-nav" aria-label="Pages">${primary.map((n) => item(n))}</nav>
     <div class="top-right">
       ${conn === 'offline' ? html`<a class="offline-status" href="#/health">Offline</a>` : null}
-      <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls="more-pages"
+      <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls=${more ? 'more-pages' : null}
         onClick=${() => morePagesOpen.set(!more)}><span class="desktop-more">More</span><span class="mobile-more">Pages</span><${Icon} name=${more ? 'up' : 'down'} size=${14} /></button>
       <button type="button" class="cmd" onClick=${() => paletteOpen.set(true)} aria-haspopup="dialog" aria-label="Go to a page, ticket, or command" aria-keyshortcuts="Control+K">
         <span>Go to</span><kbd>Ctrl K</kbd></button>
@@ -155,7 +155,9 @@ function KeysDialog() {
 }
 function typing(t) { return t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); }
 function railStep(dir) {
-  const links = Array.from(document.querySelectorAll('.rlist a'));
+  const switcher = document.querySelector('details.ticket-switcher');
+  if (switcher) switcher.open = true;
+  const links = Array.from(document.querySelectorAll('.rlist a')).filter((a) => a.getClientRects().length > 0);
   if (!links.length) return;
   let i = links.indexOf(document.activeElement);
   if (i < 0) i = links.findIndex((a) => a.getAttribute('aria-current'));

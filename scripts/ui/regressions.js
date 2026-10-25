@@ -1,5 +1,21 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async accessibility(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await page.goto(base + '#/tickets/ABC-1001');
+      await page.locator('#page-title').waitFor();
+      const target = await page.locator('.more-pages').getAttribute('aria-controls');
+      check(!target || await page.locator('[id="' + target + '"]').count() === 1, 'closed More menu has no dangling controls target');
+      await page.locator('#all-findings > summary').click();
+      check(await page.getByRole('complementary', { name: 'Recorded evidence' }).count() === 0, 'finding evidence does not create complementary landmarks');
+      await page.keyboard.press('j');
+      check(await page.evaluate(() => document.activeElement.matches('.rlist a') && document.activeElement.getClientRects().length > 0), 'j focuses a visible ticket link');
+      await page.keyboard.press('k');
+      check(await page.evaluate(() => document.activeElement.matches('.rlist a') && document.activeElement.getClientRects().length > 0), 'k keeps focus on visible ticket links');
+    } finally { await ctx.close(); }
+  },
   async print(browser, base, check) {
     const ctx = await browser.newContext({ colorScheme: 'dark' });
     try {

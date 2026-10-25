@@ -101,3 +101,5 @@ Brief text wraps long method names and owner corrections inside its reading widt
 Ticket delivery alerts render once in the shared header (or once inside the Branches tab), including when the Overview is open. The browser regression supplies a ticket with delivery alerts.
 
 Printing forces the light palette and light color scheme for both dashboard pages and standalone exports, including when Night ink or System dark is selected.
+
+Evidence margins use plain elements rather than a complementary landmark per finding. The More trigger only references a rendered menu; j/k opens the ticket switcher and moves among visible links.
