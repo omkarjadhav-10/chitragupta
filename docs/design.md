@@ -103,3 +103,5 @@ Ticket delivery alerts render once in the shared header (or once inside the Bran
 Printing forces the light palette and light color scheme for both dashboard pages and standalone exports, including when Night ink or System dark is selected.
 
 Evidence margins use plain elements rather than a complementary landmark per finding. The More trigger only references a rendered menu; j/k opens the ticket switcher and moves among visible links.
+
+Appearance setup feature-detects media-query listeners, with an addListener fallback, so older browsers still apply density and motion preferences.

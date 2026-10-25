@@ -15,7 +15,11 @@
     if (meta) meta.setAttribute('content', dark ? '#0F1216' : '#FAFAF8');
   }
   tint();
-  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', tint);
+  if (window.matchMedia) {
+    var media = window.matchMedia('(prefers-color-scheme: dark)');
+    if (media.addEventListener) media.addEventListener('change', tint);
+    else if (media.addListener) media.addListener(tint);
+  }
   var d = get('density');
   if (d === 'compact') root.setAttribute('data-density', d);
   var mo = get('motion');

@@ -1,5 +1,20 @@
 // Focused browser regressions; also included in the full browser check.
 const cases = {
+  async media(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      await ctx.addInitScript(() => {
+        Object.defineProperty(MediaQueryList.prototype, 'addEventListener', { value: undefined });
+        try { localStorage.setItem('cg-density', 'compact'); localStorage.setItem('cg-motion', 'reduce'); } catch (_) {}
+      });
+      const page = await ctx.newPage(), errors = [];
+      page.on('pageerror', e => errors.push(e.message));
+      await page.goto(base + '#/today');
+      await page.locator('#page-title').waitFor();
+      check(!errors.length, 'legacy media queries do not stop appearance setup');
+      check(await page.evaluate(() => document.documentElement.dataset.density === 'compact' && document.documentElement.dataset.motion === 'reduce'), 'legacy media queries preserve density and motion choices');
+    } finally { await ctx.close(); }
+  },
   async accessibility(browser, base, check) {
     const ctx = await browser.newContext();
     try {
