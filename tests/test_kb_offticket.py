@@ -50,7 +50,7 @@ class FlagTests(Base):
         self.assertIn("ABC-1002", it["review"]["why"])
         self.assertTrue(it["review"]["at"])
         md = render.render_ticket(self.st, T)
-        rc = md[md.index("## Root cause"):md.index("## How it works")]
+        rc = md.split("## Needs review", 1)[0]  # default focused content, before review-only evidence
         self.assertNotIn("login lockout", rc)
         nr = md[md.index("Needs review (1)"):]
         self.assertIn("login lockout", nr)

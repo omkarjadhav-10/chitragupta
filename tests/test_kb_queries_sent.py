@@ -124,12 +124,17 @@ class ExtractionTests(Base):
         self.assertEqual((qs["order status"]["sent"], qs["order status"]["ref"]), (True, "raw/%s/%s.jsonl:3" % (D, SID)))
         self.assertIs(qs["customer lookup"]["sent"], False)
         md = render.render_queries(a.store, "ABC-1001")
-        self.assertIn("shop.orders", md)
-        self.assertIn("raw/%s/%s.jsonl:3" % (D, SID), md)
+        # No result was supplied for either query: C keeps them in the recorded companion, with sent provenance.
+        self.assertNotIn("shop.orders", md)
         self.assertNotIn("shop.customers", md)
-        self.assertIn("1 more", md)
+        self.assertIn("All recorded (2)", md)
+        recorded = render.render_recorded_queries(a.store, "ABC-1001")
+        self.assertIn("shop.orders", recorded)
+        self.assertIn("raw/%s/%s.jsonl:3" % (D, SID), recorded)
+        self.assertIn("no-result", recorded)
+        self.assertIn("not sent", recorded)
         hub = render.render_ticket(a.store, "ABC-1001")
-        self.assertIn("1 query — see [queries.md]", hub)
+        self.assertIn("All recorded queries (2)", hub)
         dq = {q["purpose"]: q for q in api._queries(a.store.ticket("ABC-1001"))}
         self.assertEqual((dq["order status"]["sent"], dq["customer lookup"]["sent"]), (True, False))
 

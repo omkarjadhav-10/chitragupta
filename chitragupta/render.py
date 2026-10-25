@@ -704,6 +704,8 @@ def render_ticket(store, t):
     if not relevance.focused(tk) or is_epic(tk):
         return _render_ticket_all(store, t)
     L = [heading(t, tk), "", quick_links(t, tk), "", "Status: " + status_text(tk), ""]
+    if not display_title(tk) and tk.get("title_hint"):
+        L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
     # Long findings live in the recorded companion; summary evidence links remain reachable.
     L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_brief(brief_view(tk, t), tk.get("items"))]
     L += ["## " + relevance.heading(tk, "queries"), ""]
@@ -715,6 +717,9 @@ def render_ticket(store, t):
         for r in relevance.core(tk, kind, cap):
             name = r.get("name") if kind == "tables" else "%s %s" % (r.get("method") or "", r.get("path") or "")
             L.append("- %s — %s" % (code(name or ""), cell(common.truncate(r.get("purpose") or "", 220))))
+    rows = scenario_rows(tk)
+    if rows:
+        L += ["", "## Scenarios", "", "| Scenario | Trigger request | DB effect | Verify |", "|---|---|---|---|"] + rows
     flows = dbflow.entries(tk)
     if flows:
         L += ["", "## Core DB flow", "", "| Scenario | Component | Operation | Table |", "|---|---|---|---|"]
@@ -1039,8 +1044,12 @@ def scenario_rows(tk):
     for n in view_names or [e.get("scenario") for e in flows]:
         if n and n not in names:
             names.append(n)
+    from . import relevance
+    if relevance.focused(tk):
+        active = {e.get("scenario") or "main" for e in flows}
+        names = [n for n in names if n in active]
     names = names[:6]
-    if not names and final:
+    if not names and final and not relevance.focused(tk):
         names = [""]
     triggers = [s for s in final if not s.get("repeat") and not re.search(r"(?i)login|token|auth", s.get("name") or "")]
     # unlabelled steps (e.g. your own folder.bru order) go to the one scenario they share the most words with
@@ -1133,6 +1142,7 @@ def render_recorded_queries(store, t):
         L += ['<a id="q-%s"></a>' % key, "", "## " + (q.get("purpose") or "Query"), "",
               "%s%s" % (q.get("relevance") or "core", " · " + q["hidden_reason"] if q.get("hidden_reason") else ""),
               "Variant of: " + q["variant_of"] if q.get("variant_of") else "", q.get("revealed") or "",
+              "Sent: %s%s" % (q.get("sent"), " · " + q["ref"] if q.get("ref") else ""),
               "```sql", fence_safe(q.get("text") or ""), "```", ""]
     return "\n".join(L)
 
@@ -1230,6 +1240,9 @@ def render_context(store, t):
         L += [relevance.heading(tk, "queries") + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in relevance.core(tk, "queries", 5))]
         L += [relevance.heading(tk, "tables") + ": " + ", ".join(r.get("name") or "" for r in relevance.core(tk, "tables", 6)),
               relevance.heading(tk, "apis") + ": " + "; ".join("%s %s" % (r.get("method") or "", r.get("path") or "") for r in relevance.core(tk, "apis", 5))]
+        from . import dbflow
+        if dbflow.summary_line(tk):
+            L.append(dbflow.summary_line(tk))
         return redact(common.truncate("\n".join(L), CONTEXT_MAX))
     cur = [i for i in current_items(tk) if isinstance(i, dict)]
     opens = sort_items([i for i in cur if i.get("kind") in OPEN_KINDS])[:6]
@@ -1502,7 +1515,7 @@ def render_all(store, cfg, health, days=None, tickets=None, everything=False):
             for name, body in (("all-recorded.md", render_recorded_ticket(store, t)),
                                ("queries-recorded.md", render_recorded_queries(store, t))):
                 path = os.path.join(h, "tickets", t, name)
-                if common.write_text(path, redact(body)):
+                if (write_view(path, redact(body)) if name == "all-recorded.md" else common.write_text(path, redact(body))):
                     changed.append(path)
         dfp = os.path.join(h, "tickets", t, "db-flow.md")
         if tk.get("data_flow") or os.path.exists(dfp):
