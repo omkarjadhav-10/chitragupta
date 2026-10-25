@@ -311,6 +311,7 @@ KB_STEPS = [
     ("kb51-record-provenance", "kb51:record_provenance"),
     ("kb51-record-review", "kb51:record_review"),
     ("kb51-relevance", "kb51:record_relevance"),
+    ("kb51-summary", "kb51:ticket_summary"),
 ]
 
 

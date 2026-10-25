@@ -265,3 +265,14 @@ def catalog_view(cat, lookup):
     out["db_writers"] = writers
     out["relevance_filtered"] = True
     return out
+
+
+def source_records(tk):
+    """Hash all generation facts without feeding relevance output back into freshness."""
+    out = {}
+    excluded = {"relevance", "relevance_source", "hidden_reason", "variant_of"}
+    for kind in ("queries", "tables", "apis", "files", "data_flow"):
+        out[kind] = {key:{k:v for k,v in row.items() if k not in excluded and not (kind == "queries" and k == "role")}
+                     for key,row in (tk.get(kind) or {}).items() if isinstance(row,dict)}
+    out["scenarios"] = flow_scenarios(tk)
+    return out

@@ -313,3 +313,9 @@ Focused views retain labelled title hints when Jira has not supplied a title. Co
 ## Logical changes in ticket summaries
 
 Change facts use delivery patch-id groups, with cherry-picked SHA citations retained as aliases of the same logical change. Commits without group evidence remain separate. Commit capture excludes `refs/stash` and stash snapshot subjects; old snapshots stay stored but do not appear as delivered changes.
+
+## Six-question summary
+
+`brief.summary` (v1) retains six named sections (`problem`, `root_cause`, `changed`, `verified`, `unknowns`, `next_action`) plus an explicit `next_action` claim. The original seven-section `brief.sections` remains intact. The `kb51-summary` migration backs up tickets before deriving a summary from existing evidence; it makes no model calls.
+
+The existing brief call also returns cited unknowns and a concrete next action. Jira supplies the problem, validated current evidence and owner notes supply the cause, delivery patch groups supply changes, and recorded tests, replay outcomes, verify-query results and QA status supply verification. A saved replay plan or expected response alone proves nothing. Current ids are rechecked on every read without rebuilding the generation corpus. Only inbox/user provenance gives a note priority over other evidence. All generation facts participate in freshness; relevance output does not feed back into its own hash. Empty questions say Not recorded yet, and absent execution evidence says Nothing verified yet.

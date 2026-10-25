@@ -364,6 +364,62 @@
         "scenarios"
       ],
       "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "unknowns": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 280
+              },
+              "cites": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "text",
+              "cites"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_action": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 280
+            },
+            "cites": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "text",
+            "cites"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "unknowns",
+        "next_action"
+      ],
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,
@@ -375,6 +431,7 @@
     "fixes_made",
     "after",
     "cons",
-    "relevance"
+    "relevance",
+    "summary"
   ]
 }

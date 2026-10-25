@@ -85,3 +85,22 @@ def record_relevance(dry_run, notes, backup):
             notes.append("%s: additive relevance and literal variants" % t)
             if not dry_run:
                 common.write_json(S.ticket_path(t), tk)
+
+
+def ticket_summary(dry_run, notes, backup):
+    """Add the summary alongside the old seven sections; no generation or rewriting of evidence."""
+    from . import summary
+    keys = S.Store.all_ticket_ids()
+    backup([S.ticket_path(t) for t in keys])
+    cfg = common.load_config()
+    for t in keys:
+        tk = common.read_json(S.ticket_path(t), {})
+        b = tk.get("brief")
+        if not isinstance(b,dict) or "summary" in b:
+            continue
+        v = summary.view(tk,t,cfg)
+        b["summary"] = {"v":1, "sections":{s["id"]:{k:v for k,v in s.items() if k in ("claims","confidence")} for s in v["sections"]},
+                        "next_action":v["next_action"]}
+        notes.append("%s: summary beside preserved seven-section brief" % t)
+        if not dry_run:
+            common.write_json(S.ticket_path(t),tk)

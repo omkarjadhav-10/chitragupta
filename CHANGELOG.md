@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [0.5.1] - 2026-10-25
 
 ### Added
+- A grounded six-question summary and concrete next action alongside the preserved full brief, with a backed migration and the existing single-call budget/triggers. Jira, grouped git changes and actual verification facts win over model wording; only owner provenance overrides the cause.
 - Additive record/scenario relevance, explanations and literal-query variants retain all evidence while separating core work from supporting context and noise; a backed migration covers existing tickets.
 - A learning guide maps captured events, ticket knowledge, time, delivery and the interface to the project's code and documentation.
 

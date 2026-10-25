@@ -221,7 +221,7 @@ def _item_view(i):
     for k in ("status", "phase", "state"):
         if i.get(k):
             d[k] = i[k]
-    if i.get("session") == "inbox" or i.get("kind") == "note":
+    if i.get("session") == "inbox" or i.get("src") == "user":
         d["user_note"] = True
     ev = [common.truncate(str(e), 120) for e in i.get("evidence") or []][:2]
     if ev:
@@ -260,7 +260,9 @@ def source_hash(key, tk, cfg=None, card=None):
         return " ".join(str(text or "").lower().split())
     items = sorted([i.get("id"), i.get("kind"), wording(i.get("title")), wording(i.get("detail")), i.get("confidence"), i.get("status"),
                     i.get("phase"), i.get("state")] for i in current_items(tk))
-    blob = json.dumps({"v": V, "kind": kind_of(tk, cfg), "items": items, "facts": facts(key, tk, card)},
+    from . import relevance
+    blob = json.dumps({"v": V, "summary_v": 1, "kind": kind_of(tk, cfg), "items": items, "facts": facts(key, tk, card),
+                       "records": relevance.source_records(tk)},
                       sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -539,7 +541,7 @@ def overrides(tk):
     """{section: (note item, text)} from your notes (inbox "KEY: root cause: …", "KEY: fix: …", "KEY: cons: …"):
     the newest note per section."""
     out = {}
-    notes = sorted((i for i in current_items(tk) if i.get("kind") == "note"),
+    notes = sorted((i for i in current_items(tk) if i.get("kind") == "note" and (i.get("session") == "inbox" or i.get("src") == "user")),
                    key=lambda i: (i.get("date") or "", i.get("time") or ""))
     for n in notes:
         text = " ".join(str(n.get("detail") or n.get("title") or "").split())
@@ -581,6 +583,8 @@ def generate(key, store=None, cfg=None, health=None, force=False):
     kind = kind_of(tk, cfg)
     if kind == "epic":
         return {"ok": True, "epic": True, "skipped": "epic: a children summary, no brief"}
+    from . import relevance
+    relevance.classify(tk)
     card = jira_card(key)
     h = source_hash(key, tk, cfg, card)
     old = tk.get("brief") if isinstance(tk.get("brief"), dict) else None
@@ -604,6 +608,8 @@ def generate(key, store=None, cfg=None, health=None, force=False):
     tk["brief"] = {"v": V, "kind": kind, "generated_at": common.now_iso(), "model": extract.model_for("brief", cfg),
                    "tokens": {"in": tin, "out": tout}, "cost_usd": round(float(cost or usd or 0), 4), "source_hash": h,
                    "sections": sec, "overrides": ov, "dropped": dropped, "relevance_dropped": relevance_dropped}
+    from . import summary
+    tk["brief"]["summary"], tk["brief"]["summary_dropped"] = summary.build(tk,key,cfg,sec,(out or {}).get("summary"),card)
     st.touch_ticket(key)
     if dropped:
         common.log("agent", "brief %s: %d claims dropped (%s)" % (
@@ -820,6 +826,8 @@ def view(tk, key=None, cfg=None):
         view_[k] = (b or {}).get(k)
     if not b:
         view_["fallback"] = _fallback(tk)
+    from . import summary
+    view_["summary"] = summary.view(tk,key,cfg,sections=sec)
     return view_
 
 
