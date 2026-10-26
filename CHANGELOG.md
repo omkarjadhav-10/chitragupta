@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Batch host CLI pull-request refreshes once per repository and reuse open-PR checks until due.
 - Reuse one off-ticket record profile per ticket during merges and migrations, retaining self-evidence exclusion.
 - Six-question summaries show the newest logical changes and count earlier groups; fallback unknowns prioritize current blockers, questions and risks while preserving grounded model choices first.
 - Ticket change facts group cherry-picked copies by delivery patch id and preserve old SHA citation aliases; stash snapshots are excluded from commit capture and summary changes.

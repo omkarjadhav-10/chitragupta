@@ -101,10 +101,10 @@ GH_FIELDS = "number,title,state,baseRefName,headRefName,headRefOid,mergedAt,merg
 
 
 def gh_prs(cfg, info, branch, run=_run):
-    if not SAFE_ARG.match(branch or ""):
+    if branch is not None and not SAFE_ARG.match(branch or ""):
         return []
-    rc, so, se = run([cli_path(cfg, "gh"), "pr", "list", "--repo", info["path"], "--head", branch, "--state", "all",
-                      "--limit", "20", "--json", GH_FIELDS])
+    rc, so, se = run([cli_path(cfg, "gh"), "pr", "list", "--repo", info["path"]] + (["--head", branch] if branch is not None else []) + ["--state", "all",
+                      "--limit", "20" if branch is not None else "1000", "--json", GH_FIELDS])
     if rc != 0:
         raise SourceError("gh: " + (se or so).strip()[:200])
     out = []
@@ -123,9 +123,9 @@ def gh_prs(cfg, info, branch, run=_run):
 # --------------------------------------------------------------------------- GitLab (glab)
 
 def glab_prs(cfg, info, branch, run=_run):
-    if not SAFE_ARG.match(branch or ""):
+    if branch is not None and not SAFE_ARG.match(branch or ""):
         return []
-    rc, so, se = run([cli_path(cfg, "glab"), "mr", "list", "--repo", info["path"], "--source-branch", branch, "--all",
+    rc, so, se = run([cli_path(cfg, "glab"), "mr", "list", "--repo", info["path"]] + (["--source-branch", branch] if branch is not None else ["--per-page", "100"]) + ["--all",
                       "--output", "json"])
     if rc != 0:
         raise SourceError("glab: " + (se or so).strip()[:200])
@@ -149,13 +149,13 @@ _VOTE = {10: "approved", 5: "approved", 0: "", -5: "changes_requested", -10: "ch
 
 
 def az_prs(cfg, info, branch, run=_run):
-    if not SAFE_ARG.match(branch or ""):
+    if branch is not None and not SAFE_ARG.match(branch or ""):
         return []
     if not all(SAFE_NAME.match(info.get(k) or "") for k in ("org", "project", "repo")):
         raise SourceError("az: unexpected characters in the org / project / repo name")
     org = "https://dev.azure.com/" + info["org"]
     rc, so, se = run([cli_path(cfg, "az"), "repos", "pr", "list", "--org", org, "--project", info["project"],
-                      "--repository", info["repo"], "--source-branch", branch, "--status", "all", "--top", "20",
+                      "--repository", info["repo"]] + (["--source-branch", branch] if branch is not None else []) + ["--status", "all", "--top", "20" if branch is not None else "1000",
                       "--detect", "false", "--output", "json"], timeout=90)
     if rc != 0:
         raise SourceError("az: " + (se or so).strip()[:200])
@@ -188,6 +188,16 @@ def prs_for_branch(cfg, info, source, branch, run=_run):
     """PRs whose source is `branch` from the host CLI; [] for merge-commit mode. Raises SourceError."""
     fn = CLI.get(source)
     return fn(cfg, info, branch, run=run) if fn else []
+
+
+def prs_for_repo(cfg, info, source, run=_run):
+    """One bounded repository list; callers filter sources locally. Never declare a capped result complete."""
+    fn = CLI.get(source)
+    rows = fn(cfg, info, None, run=run) if fn else []
+    limit = 100 if source == "glab" else 1000
+    if len(rows) >= limit:
+        raise SourceError("%s: repository PR list reached %d rows; previous PR checks retained" % (source,limit))
+    return rows
 
 
 # --------------------------------------------------------------------------- merge commits (git only)

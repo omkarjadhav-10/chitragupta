@@ -325,3 +325,5 @@ All default summary surfaces consume the same six-question view. Markdown keeps 
 Summary changes show the newest three logical groups, preferring further reached delivery targets on date ties, and count earlier changes without adding evidence ids. Grounded model unknowns lead, followed by current delivery gaps and fallback blockers, questions, then risks, newest within each kind. Archived, superseded and review items stay excluded.
 
 K8 record checks prepare one good-record word profile per ticket per extraction merge or backed migration. Per-record word counts exclude the record itself while retaining independent overlap from other accepted records.
+
+Host CLI PR refreshes list a repository once and filter due source branches locally. A moving tip with an already open PR waits for the normal refresh interval. Capped repository lists retain previous checks and report an error rather than claiming complete results.
