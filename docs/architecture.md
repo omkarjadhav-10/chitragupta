@@ -335,3 +335,5 @@ Path verification shares its git-call budget across pending tickets and rotates 
 For many pending paths, one guarded read-only `git ls-tree` reads a commit tree and caches membership answers for those paths; it never stores file contents or a full tree. Missing commit objects cannot poison an entire file-list batch.
 
 Each background run records monotonic total and per-step milliseconds in `ticks.jsonl`, including failed steps. The sources duration includes its separately reported branches duration. Health warns when the latest completed run within an hour exceeded 60 seconds and lists its slowest steps.
+
+Branch commit-fact caches treat an empty own-commit list as a valid answer. Their signature includes local, remote and parent tips, so unchanged empty branches do not force repeated ticket rewrites while remote movement still invalidates delivery facts.

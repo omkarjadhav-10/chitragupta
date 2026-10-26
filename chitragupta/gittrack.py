@@ -628,8 +628,8 @@ class Tracker:
             rec["parent_role"] = up.get("parent_role")  # cut from another work branch: it plays that branch's role
             if up.get("parent_source") == "inferred" or up.get("role_guessed"):
                 rec["role_guessed"] = True
-        sig = "%s#%s" % (tip, r.sha(rec["parent_ref"]) if rec.get("parent_ref") else "")
-        if old.get("_sig") != sig or not old.get("own") and tip:
+        sig = "%s#%s#%s" % (tip,rec.get("remote_tip"),r.sha(rec["parent_ref"]) if rec.get("parent_ref") else "")
+        if old.get("_sig") != sig or (not isinstance(old.get("own"),list) and tip):
             self.commit_facts(r, rec, tip_ref, local, rref)
             rec["_sig"] = sig
             rec["checked_at"] = common.now_iso()
