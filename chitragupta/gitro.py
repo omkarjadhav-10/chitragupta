@@ -3,7 +3,7 @@ the safety layer's command guard (chitragupta/safety/commands.py: purpose `git-w
 
 Allowed: rev-parse, for-each-ref, log, rev-list, merge-base, cherry, patch-id, show (metadata only), reflog (show),
 branch --list / --contains, ls-remote, remote get-url, config --get, fetch (remote-tracking refs only, never prune,
-only in a watched repo, git.allow_fetch), ls-files (untracked files, for artifacts).
+only in a watched repo, git.allow_fetch), ls-tree (names at a commit), ls-files (untracked files, for artifacts).
 Every call is hardened against the repo's own config (no pager, fsmonitor, external diff, textconv, ext:: transport
 or hooks) and runs with GIT_OPTIONAL_LOCKS=0, no window and no terminal prompt. Anything else raises NotAllowed
 (safety Blocked) before a process starts. The data home's own repo (gitsync.py) is not a work repo.

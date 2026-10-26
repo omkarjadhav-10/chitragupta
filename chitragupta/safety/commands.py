@@ -47,7 +47,7 @@ GIT_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTI
 NO_DRIVERS = ["--no-ext-diff", "--no-textconv"]  # forced on log / show
 
 WORK_READ = {"rev-parse", "for-each-ref", "log", "rev-list", "merge-base", "cherry", "patch-id", "show", "reflog",
-             "branch", "ls-remote", "remote", "config", "fetch", "ls-files"}
+             "branch", "ls-remote", "remote", "config", "fetch", "ls-files", "ls-tree"}
 _REFSPEC = re.compile(r"^\+?refs/heads/[^:\s]+:refs/remotes/[^/:\s]+/[^:\s]+$")
 _FETCH_FLAGS = {"--no-tags", "--quiet", "-q", "--no-auto-gc", "--no-auto-maintenance", "--no-write-fetch-head",
                 "--no-recurse-submodules"}

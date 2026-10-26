@@ -329,3 +329,7 @@ K8 record checks prepare one good-record word profile per ticket per extraction 
 Host CLI PR refreshes list a repository once and filter due source branches locally. A moving tip with an already open PR waits for the normal refresh interval. Capped repository lists retain previous checks and report an error rather than claiming complete results.
 
 Background branch refreshes attempt fetches for at most two due repositories per tick, rotating from a saved cursor even after a network failure. Explicit `/cg:check` retains its immediate fetch of the selected repositories.
+
+Path verification shares its git-call budget across pending tickets and rotates the starting ticket. Recorded/cached commit file lists settle edit-only committed flags first. Branch checks prefer the remote tip, use per-SHA path answers, and mark missing local folders `unknown-repo` once rather than leaving them pending.
+
+For many pending paths, one guarded read-only `git ls-tree` reads a commit tree and caches membership answers for those paths; it never stores file contents or a full tree. Missing commit objects cannot poison an entire file-list batch.

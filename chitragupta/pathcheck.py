@@ -3,7 +3,7 @@
 A file record's `verified` is True (edited by an Edit/Write tool call, in a commit, or found in git), False (not in the
 repo at the heads checked, or not a path git can check) or None (pending). Each pending path is checked with the
 read-only `git rev-parse --verify -q <sha>:<path>` (through gitro, so the safety layer's work-repo guard applies)
-against the ticket's branch heads in the repo the record belongs to, or the repo's HEAD when no branch is tracked.
+against one preferred head per ticket branch (remote, else local) in the repo the record belongs to, or the repo's HEAD when no branch is tracked.
 Whether a path exists at a commit never changes, so answers are cached per (repo, sha, path) in
 .worklog/cache/pathcheck.json. At most `budget` git calls run per tick; the rest waits for the next tick.
 
@@ -51,6 +51,7 @@ class _Run:
         self.commit_files = cache.get("commit_files") or {}
         self.cache = cache
         self.waiting = False
+        self.pending_paths = ()
 
     def git_ok(self, root, args):
         self.calls += 1
@@ -63,7 +64,9 @@ class _Run:
             tips = []
             for b in (self.store.branches().get(gitcmd.repo_key(name)) or {}).values():
                 if isinstance(b, dict) and b.get("ticket") == t and not b.get("deleted_at"):
-                    tips += [s for s in (b.get("remote_tip"), b.get("tip")) if s and s not in tips]
+                    sha = b.get("remote_tip") or b.get("tip")
+                    if sha and sha not in tips:
+                        tips.append(sha)
             if not tips:
                 if self.calls >= self.budget:
                     return None
@@ -74,11 +77,14 @@ class _Run:
         return self.heads_memo[key]
 
     def check(self, t, tk, rec, path):
-        """True / False when answered, None when it has to wait (no repo folder known, or out of budget)."""
-        waiting = False
+        """True / False when answered, None only when out of budget; missing local repositories are terminal unknown-repo."""
+        waiting, unknown = False, []
         for name in [rec["repo"]] if rec.get("repo") else list(tk.get("repos") or []):
             root = repo_root(self.cfg, name, rec)
-            heads = self.heads(t, name, root) if root else None
+            if not root:
+                unknown.append(name)
+                continue
+            heads = self.heads(t, name, root)
             if heads is None:
                 waiting = True
                 continue
@@ -88,10 +94,23 @@ class _Run:
                     if self.calls >= self.budget:
                         waiting = True
                         break
-                    self.known[ck] = self.git_ok(root, ["rev-parse", "--verify", "-q", "%s:%s" % (sha, path)])
+                    if len(self.pending_paths) >= 8:
+                        self.calls += 1
+                        rc, so, _ = gitro.run(self.cfg,root,["ls-tree","-r","-z","--name-only",sha])
+                        if rc not in (0,128):
+                            waiting = True
+                            break
+                        paths = set(so.split("\0")) if rc == 0 else set()
+                        for pending in self.pending_paths:
+                            self.known["%s|%s|%s" % (gitcmd.repo_key(name),sha,pending)] = pending in paths
+                    else:
+                        self.known[ck] = self.git_ok(root, ["rev-parse", "--verify", "-q", "%s:%s" % (sha, path)])
                 if self.known[ck]:
                     rec["repo"] = name
                     return True
+        if not waiting and unknown:
+            rec["verified_by"] = "unknown-repo"
+            rec["unknown_repos"] = unknown
         return None if waiting else False
 
 
@@ -106,16 +125,28 @@ class _Run:
                 todo.append(sha)
         root = repo_root(self.cfg, name) if todo else None
         if todo and not root:
+            for sha in todo:
+                self.commit_files["%s|%s" % (gitcmd.repo_key(name),sha)] = None
             return out
-        for i in range(0, len(todo), 50):
+        batches = [todo[i:i+50] for i in range(0,len(todo),50)]
+        while batches:
             if self.calls >= self.budget:
                 self.waiting = True
                 break
-            part = todo[i:i + 50]
+            part = batches.pop(0)
             self.calls += 1
             rc, so, _ = gitro.run(self.cfg, root, ["log", "--no-walk", "--name-only", "--format=" + _SEP + "%H"] + part)
+            if rc == 128:  # a rewritten/missing object must not poison the whole batch forever
+                if len(part) > 1:
+                    mid = len(part)//2
+                    batches[:0] = [part[:mid],part[mid:]]
+                else:
+                    self.commit_files["%s|%s" % (gitcmd.repo_key(name),part[0])] = None
+                    out[part[0]] = None  # unknown proof, never a negative committed verdict
+                continue
             if rc != 0:
-                continue  # a sha this clone doesn't have: its files stay unknown
+                self.waiting = True  # timeout or other transient failure: retry next tick
+                break
             for rec in so.split(_SEP):
                 lines = [x.strip() for x in rec.strip().splitlines() if x.strip()]
                 if not lines:
@@ -179,9 +210,20 @@ def run(store, cfg, budget=BUDGET):
     if not r.cache.get("seeded"):
         todo |= set(Store.all_ticket_ids())  # once: records from before this step existed
     left = set()
-    for t in sorted(todo):
+    tickets = sorted(todo)
+    cursor = r.cache.get("cursor")
+    if cursor in tickets:
+        n = tickets.index(cursor) + 1
+        tickets = tickets[n:] + tickets[:n]
+    for n,t in enumerate(tickets):
+        # Give each remaining ticket its share; a tiny budget rotates on the next tick.
+        quota = max(0,(budget-r.calls + len(tickets)-n-1) // (len(tickets)-n))
+        r.budget = min(budget,r.calls+quota)
+        before = r.calls
         tk = store.ticket(t)
-        changed = False
+        r.pending_paths = [(rec.get("path") or k).replace("\\","/") for k,rec in (tk.get("files") or {}).items() if _pending(rec)]
+        r.waiting = False
+        changed = r.mark_committed(tk)  # cached/recorded commit proof settles before path lookups
         for k, rec in (tk.get("files") or {}).items():
             if not _pending(rec):
                 continue
@@ -192,9 +234,8 @@ def run(store, cfg, budget=BUDGET):
                 if ok:
                     rec["verified_by"] = "git"
                 changed = True
-        r.waiting = False
-        if r.mark_committed(tk):
-            changed = True
+        if r.calls > before:
+            cursor = t
         if changed:
             store.touch_ticket(t)
         if r.waiting or any(_pending(x) for x in (tk.get("files") or {}).values()):
@@ -205,7 +246,7 @@ def run(store, cfg, budget=BUDGET):
     cf = r.commit_files
     if len(cf) > COMMIT_CACHE_MAX:
         cf = dict(list(cf.items())[-COMMIT_CACHE_MAX:])
-    common.write_json(cache_path(), {"seeded": True, "pending": sorted(left), "paths": known, "commit_files": cf})
+    common.write_json(cache_path(), {"seeded": True, "pending": sorted(left), "paths": known, "commit_files": cf, "cursor": cursor})
     if r.calls:
         common.log("agent", "pathcheck: %d git call(s), %d ticket(s) still pending" % (r.calls, len(left)))
     return r.calls

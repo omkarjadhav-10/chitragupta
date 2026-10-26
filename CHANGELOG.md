@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Make path verification converge with fair ticket budgets, committed-file cache priority, and terminal unknown-repo results.
 - Stagger background fetches across ticks, with at most two due repositories and fair rotation after failures.
 - Batch host CLI pull-request refreshes once per repository and reuse open-PR checks until due.
 - Reuse one off-ticket record profile per ticket during merges and migrations, retaining self-evidence exclusion.
