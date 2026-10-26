@@ -369,6 +369,7 @@ class Tracker:
         self.pending = {}  # repo name -> [session events]
         self.changed_tickets = set()
         self.notes = []
+        self._fetch_attempts = 0
 
     # ---- session events from the hook stream
     def add_session_event(self, ev):
@@ -389,7 +390,14 @@ class Tracker:
     def refresh(self, repos=None, fetch=True, force_pr=False):
         self.flush_session_events()
         out = {}
-        for path in repos if repos is not None else (self.cfg.get("watched_repos") or []):
+        self._fetch_attempts = 0
+        paths = list(repos if repos is not None else (self.cfg.get("watched_repos") or []))
+        cursor = self.state.get("fetch_cursor")
+        names = [repo_key(p) for p in paths]
+        if not self.force_fetch and cursor in names:
+            start = names.index(cursor) + 1
+            paths = paths[start:] + paths[:start]
+        for path in paths:
             if not os.path.exists(os.path.join(path, ".git")):
                 continue
             try:
@@ -464,11 +472,15 @@ class Tracker:
         mine = {b.get("ticket") for b in data.branches.values()}
         if not self.force_fetch and not self.fetch_due(data, bool(active & mine) or (not data.branches and bool(active))):
             return
+        if not self.force_fetch and self._fetch_attempts >= 2:
+            return
         remote = conf["remote"]
         if gitro.locked(path):
             data.meta["fetch_skipped"] = common.now_iso() + " a git lock file exists"
             data.touch("meta")
             return
+        self._fetch_attempts += 1
+        self.state["fetch_cursor"] = repo_key(path)  # advance even after an offline attempt
         rc, so, se = gitro.run(self.cfg, path, ["ls-remote", "--heads", remote], timeout=60)
         if rc != 0:
             data.meta["fetch_error"] = common.now_iso() + " " + (se or so).strip()[:200]

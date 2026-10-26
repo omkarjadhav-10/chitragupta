@@ -327,3 +327,5 @@ Summary changes show the newest three logical groups, preferring further reached
 K8 record checks prepare one good-record word profile per ticket per extraction merge or backed migration. Per-record word counts exclude the record itself while retaining independent overlap from other accepted records.
 
 Host CLI PR refreshes list a repository once and filter due source branches locally. A moving tip with an already open PR waits for the normal refresh interval. Capped repository lists retain previous checks and report an error rather than claiming complete results.
+
+Background branch refreshes attempt fetches for at most two due repositories per tick, rotating from a saved cursor even after a network failure. Explicit `/cg:check` retains its immediate fetch of the selected repositories.
