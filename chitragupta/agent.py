@@ -900,7 +900,7 @@ class Agent:
 
         # branches, commits and PRs per ticket; after the inbox, so manual links / abandons apply at once
         try:
-            self.run_branches()
+            self._timed("branches",self.run_branches)
         except Exception:
             common.log("agent", "branch tracking failed: " + traceback.format_exc())
 
@@ -1219,51 +1219,61 @@ class Agent:
                 continue
 
     # ------------------------------------------------------------------ main
+    def _timed(self, name, fn, *args, **kwargs):
+        begin = time.monotonic()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            if not hasattr(self,"steps"):
+                self.steps = {}
+            self.steps[name] = self.steps.get(name,0) + max(0,int((time.monotonic()-begin)*1000))
+
     def tick(self):
+        self.steps = {}
         h = self.health
         h["last_tick"] = common.now_iso()
         paused = os.path.exists(common.wl("PAUSED"))
-        gitsync.ensure_repo(self.cfg)
-        self.safety_net(paused)
+        self._timed("ensure_repo",gitsync.ensure_repo,self.cfg)
+        self._timed("safety_net",self.safety_net,paused)
         if not paused:
-            self.ingest()
-            self.run_extractions()
-            self.refresh_fallbacks()
-            self.run_sources()
+            self._timed("ingest",self.ingest)
+            self._timed("extractions",self.run_extractions)
+            self._timed("fallbacks",self.refresh_fallbacks)
+            self._timed("sources",self.run_sources)
             try:
                 if configstore.on(self.cfg, "artifacts.enabled"):  # off: queued files wait until it's back on
-                    self.features.process_artifacts()
+                    self._timed("artifacts",self.features.process_artifacts)
             except Exception:
                 common.log("agent", "artifacts failed: " + traceback.format_exc())
             try:
-                self.features.curate_and_generate(self.force)
+                self._timed("curate",self.features.curate_and_generate,self.force)
             except Exception:
                 common.log("agent", "replay failed: " + traceback.format_exc())
             try:
                 from . import pathcheck
-                pathcheck.run(self.store, self.cfg)  # model-mentioned file paths checked against git (read-only)
+                self._timed("pathcheck",pathcheck.run,self.store,self.cfg)  # model-mentioned file paths checked against git (read-only)
             except Exception:
                 common.log("agent", "pathcheck failed: " + traceback.format_exc())
-            self.close_days()
+            self._timed("close_days",self.close_days)
             try:
-                self.jwl.tick()
+                self._timed("worklog",self.jwl.tick)
             except Exception:
                 common.log("agent", "jira worklog failed: " + traceback.format_exc())
             try:
-                self.jobs.tick()
+                self._timed("jobs",self.jobs.tick)
             except Exception:
                 common.log("agent", "mcp jobs failed: " + traceback.format_exc())
         if self.cfg_dirty:
             common.save_config(self.cfg, base=self.cfg_base)
             self.cfg_base = copy.deepcopy(self.cfg)
-        self.store.save()
-        self.update_health()
+        self._timed("save",self.store.save)
+        self._timed("health",self.update_health)
         from . import kb5
-        changed = render.render_all(self.store, self.cfg, h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,
+        changed = self._timed("render",render.render_all,self.store,self.cfg,h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,
                                     everything=kb5.take_rerender())  # once after a data migration
         day = common.workday(common.now(), self.cfg)
         msg = gitsync.commit_message(day, self.store.delta, " ".join(self.extras + [self.features.commit_extras()]).strip())
-        committed = gitsync.commit(self.cfg, msg, h)
+        committed = self._timed("commit",gitsync.commit,self.cfg,msg,h)
         if committed:
             common.log("agent", "committed: " + msg)
         lp = common.parse_ts(h.get("last_push"))
@@ -1272,12 +1282,12 @@ class Agent:
         if not configstore.on(self.cfg, "push_enabled"):
             pass  # commits stay local until the push is switched back on
         elif due and gitsync.unpushed(self.cfg) > 0:
-            if gitsync.push(self.cfg, h):
+            if self._timed("push",gitsync.push,self.cfg,h):
                 common.log("agent", "pushed")
         else:
             gitsync.check_privacy(self.cfg, h)
-        self.update_health()
-        self.prune()
+        self._timed("health",self.update_health)
+        self._timed("prune",self.prune)
         h["last_tick_ok"] = common.now_iso()
         return changed
 
@@ -1290,7 +1300,7 @@ def save_state(agent):
 
 def cmd_tick(force=False):
     from . import ticklog
-    t0 = time.time()
+    t0 = time.monotonic()
     if os.path.exists(common.wl("locks", "upgrade.lock")):
         ticklog.record("skipped-upgrade")
         return 0  # an upgrade is in progress; hooks keep capturing, processing resumes afterwards
@@ -1321,7 +1331,7 @@ def cmd_tick(force=False):
                 save_state(agent)
             except Exception:
                 common.log("agent", "state save failed: " + traceback.format_exc())
-        ticklog.record(outcome, (time.time() - t0) * 1000, trim=True)
+        ticklog.record(outcome, (time.monotonic() - t0) * 1000, trim=True, steps=getattr(agent,"steps",None))
         lock.release()
 
 

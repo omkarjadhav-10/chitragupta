@@ -21,10 +21,13 @@ def path():
     return common.wl("logs", "ticks.jsonl")
 
 
-def record(outcome, ms=0, trim=False):
+def record(outcome, ms=0, trim=False, steps=None):
     """Append one run record; never raises. trim=True (only under the agent lock) keeps the last KEEP lines."""
     try:
-        paths.append_text(path(), json.dumps({"at": common.now_iso(), "outcome": outcome, "ms": int(ms)}) + "\n",
+        row = {"at": common.now_iso(), "outcome": outcome, "ms": max(0,int(ms))}
+        if steps is not None:
+            row["steps"] = {name:max(0,int(value)) for name,value in steps.items()}
+        paths.append_text(path(), json.dumps(row) + "\n",
                           caller="ticklog")
         if trim:
             lines = common.read_text(path()).splitlines()
@@ -99,3 +102,17 @@ def stale_warning(health, now=None, last_event=None):
     when = ("since %s" % ok.strftime("%Y-%m-%d %H:%M")) if ok else "yet"
     return ("Worklog recorder status: Claude Code hooks recorded events in the last hour but no background run has "
             "succeeded %s%s." % (when, tail))
+
+
+def slow_warning(now=None):
+    """Warn about the most recent completed/error tick in the last hour; skips do not hide a slow run."""
+    now = now or common.now()
+    row = next((r for r in reversed(recent()) if r.get("outcome") in ("ok","error")),None)
+    if not row or int(row.get("ms") or 0) <= 60000:
+        return ""
+    at = common.parse_ts(row.get("at"))
+    if not at or (now-at).total_seconds() > 3600:
+        return ""
+    steps = sorted((row.get("steps") or {}).items(),key=lambda pair:pair[1],reverse=True)[:3]
+    detail = "; slowest steps: " + ", ".join("%s %.1fs" % (k,v/1000) for k,v in steps) if steps else ""
+    return "Last background tick took %.1fs (over 60s)%s." % (row["ms"]/1000,detail)

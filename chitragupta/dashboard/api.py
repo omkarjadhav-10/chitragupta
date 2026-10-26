@@ -1087,7 +1087,7 @@ def status(cfg=None, now=None, server=None):
         "mcp": _mcp(h, cfg, today_day),
         "models": _models(h, cfg, today_day),
         "today": h.get("today") if (h.get("today") or {}).get("day") == today_day else {"day": today_day},
-        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now)] if w],
+        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now), _slow_tick(now)] if w],
         "errors_total": h.get("errors_total") or 0,
         "errors": recent_errors(h),
         "dashboard": server or {},
@@ -1114,6 +1114,14 @@ def _stale(h, now):
         from .. import ticklog
         return ticklog.stale_warning(h, now)
     except Exception:  # noqa: BLE001 - the rest of the page still shows
+        return ""
+
+
+def _slow_tick(now):
+    try:
+        from .. import ticklog
+        return ticklog.slow_warning(now)
+    except Exception:
         return ""
 
 

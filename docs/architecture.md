@@ -333,3 +333,5 @@ Background branch refreshes attempt fetches for at most two due repositories per
 Path verification shares its git-call budget across pending tickets and rotates the starting ticket. Recorded/cached commit file lists settle edit-only committed flags first. Branch checks prefer the remote tip, use per-SHA path answers, and mark missing local folders `unknown-repo` once rather than leaving them pending.
 
 For many pending paths, one guarded read-only `git ls-tree` reads a commit tree and caches membership answers for those paths; it never stores file contents or a full tree. Missing commit objects cannot poison an entire file-list batch.
+
+Each background run records monotonic total and per-step milliseconds in `ticks.jsonl`, including failed steps. The sources duration includes its separately reported branches duration. Health warns when the latest completed run within an hour exceeded 60 seconds and lists its slowest steps.
