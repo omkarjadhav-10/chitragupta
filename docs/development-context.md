@@ -37,3 +37,5 @@ The dashboard follows the quiet Mix design: top navigation, a Day Line and workl
 ## Evolution
 
 The standalone engine became the plugin in 0.1. Subsequent releases added branch delivery tracking (0.2), centralized safety and an expanded dashboard (0.3), shared search, MCP recall, protected actions, sharing, and scheduler backends (0.4). Version 0.4.1 hardened guards, capture scope, MCP budgets, and diagnostics. Consult the current roadmap before treating platform support or redaction limitations as resolved.
+
+Version 0.5.0 introduced ticket briefs backed by current evidence. Version 0.5.1 leads with six cited questions and a next action, with capped core records and full retained evidence on demand. History compaction is additive and backed up; attribution follows the previous turn for narrow continuations. Background work batches repository PR reads, rotates fetches and path budgets, and records monotonic step timings.

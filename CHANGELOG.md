@@ -56,6 +56,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Allow guarded names-only `ls-tree` reads for path verification; reject output-file and repository-redirect options. Document existing `ls-files` reads alongside the safety red-team coverage.
 
 ### Migration
+- Backed `kb51-record-review`, `kb51-relevance` and `kb51-summary` steps add review/relevance fields and six-section summaries while preserving canonical evidence and the previous brief.
 - `kb51-record-provenance` backs up tickets/catalog before marking unknown historical origins as legacy, without moving records or inventing times.
 - `kb51-history-compact` backs up canonical tickets and existing history archives, then retains the first and newest four snapshots inline. Older versions remain in additive, content-deduplicated `data/history/<KEY>.jsonl` files.
 
