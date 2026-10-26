@@ -11,7 +11,7 @@ Two layers make this hold:
 
 1. **No codebase changes.** Chitragupta never creates, edits, moves or deletes a file outside its own folders: the data home, `%USERPROFILE%\.chitragupta\`, its plugin folder and its temp/sandbox folder. Work repos and every other folder are read-only.
 2. **Git is read-only in work repos.**
-   - Allowed: `rev-parse`, `for-each-ref`, `log`, `rev-list`, `merge-base`, `cherry`, `patch-id`, `show` (metadata), `reflog`, `branch --list` / `--contains`, `ls-remote`, `remote get-url`, `config --get`, and `fetch` of remote-tracking refs only.
+   - Allowed: `rev-parse`, `for-each-ref`, `log`, `rev-list`, `merge-base`, `cherry`, `patch-id`, `show` (metadata), `reflog`, `branch --list` / `--contains`, `ls-remote`, `remote get-url`, `config --get`, `ls-files`, `ls-tree` (names only at one commit SHA, no output-file or repository-redirect options), and `fetch` of remote-tracking refs only.
    - Never: `commit`, `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `checkout`, `switch`, `restore`, `stash`, `pull`, `push`, `tag`, `branch -d/-D/-m`, `clean`, `gc`, `prune`, `am`, `apply`, `worktree`, `submodule update`, or any config write.
    - The one exception: committing and pushing daily files in Chitragupta's own data-home repo.
 3. **Git hosts are read-only.**

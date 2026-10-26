@@ -210,6 +210,23 @@ class CommandGuardTests(SafetyCase):
                 self.assertBlocked(lambda: commands.check(commands.work_argv(cfg, self.repo, args), "git-work", cfg=cfg),
                                    "command")
 
+    def test_ls_tree_names_only_and_repo_redirects_are_guarded(self):
+        from chitragupta import gitro
+        cfg = self.cfg()
+        sha = _git(self.repo,"rev-parse","HEAD").strip()
+        other = _init_repo(os.path.join(self.scratch,"outside"))
+        cfg["capture_scope"] = {"include_paths":[self.repo],"exclude_paths":[]}
+        marker = os.path.join(self.scratch,"unwanted.txt")
+        attempts = [["--output="+marker],["-C",other],["--git-dir",os.path.join(other,".git")],
+                    ["--work-tree",other],["--git-dir="+os.path.join(other,".git")],["--work-tree="+other]]
+        for extra in attempts:
+            with self.subTest(extra=extra):
+                self.assertBlocked(lambda:gitro.run(cfg,self.repo,["ls-tree","--name-only"]+extra+[sha]),"command")
+        self.assertBlocked(lambda:gitro.run(cfg,other,["ls-tree","--name-only",sha]),"command")
+        self.assertBlocked(lambda:gitro.run(cfg,self.repo,["ls-tree",sha]),"command")
+        rc,out,_ = gitro.run(cfg,self.repo,["ls-tree","-r","-z","--name-only",sha])
+        self.assertEqual(rc,0);self.assertIn("a.txt",out.split("\0"));self.assertFalse(os.path.exists(marker))
+
     def test_gitro_refuses_before_a_process_starts(self):
         from chitragupta import gitro
         before = _git(self.repo, "rev-parse", "HEAD")
@@ -1110,7 +1127,8 @@ class AllowedTests(SafetyCase):
                      ["rev-list", "--count", "HEAD"], ["merge-base", "HEAD", "HEAD"], ["cherry", "HEAD", "HEAD"],
                      ["show", "-s", "--format=%s", "HEAD"], ["reflog", "-n", "1"], ["branch", "--list"],
                      ["branch", "--contains", head], ["ls-remote", "--heads", "origin"], ["remote", "get-url", "origin"],
-                     ["config", "--get", "remote.origin.url"], ["ls-files", "--others", "--exclude-standard"]):
+                     ["config", "--get", "remote.origin.url"], ["ls-files", "--others", "--exclude-standard"],
+                     ["ls-tree","-r","-z","--name-only",head]):
             with self.subTest(args=args):
                 rc, so, se = gitro.run(cfg, self.repo, args)
                 self.assertEqual(rc, 0, se)

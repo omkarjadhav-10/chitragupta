@@ -52,6 +52,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Wrap long brief method names and owner corrections on phones, keep ticket actions below the heading, and lead with generated content without repeating the legacy summary.
 
 
+### Security
+- Allow guarded names-only `ls-tree` reads for path verification; reject output-file and repository-redirect options. Document existing `ls-files` reads alongside the safety red-team coverage.
+
 ### Migration
 - `kb51-record-provenance` backs up tickets/catalog before marking unknown historical origins as legacy, without moving records or inventing times.
 - `kb51-history-compact` backs up canonical tickets and existing history archives, then retains the first and newest four snapshots inline. Older versions remain in additive, content-deduplicated `data/history/<KEY>.jsonl` files.

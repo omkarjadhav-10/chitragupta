@@ -91,6 +91,11 @@ def git_work_reason(args):
                                       "--remove-section", "-e", "--edit", "--file", "-f", "--global", "--system")
                                 for x in rest)):
         return "git config: only --get"
+    if sub == "ls-tree":
+        refs = [x for x in rest if not x.startswith("-")]
+        if "--name-only" not in rest or any(x.startswith("-") and x not in ("-r","-z","--name-only") for x in rest) or \
+                len(refs) != 1 or not re.fullmatch(r"[0-9a-fA-F]{7,40}",refs[0]):
+            return "git ls-tree: names only at one commit SHA; only -r, -z and --name-only"
     if sub == "ls-files" and any(x in ("--with-tree",) for x in rest):
         return "git ls-files flag not allowed"
     if sub == "fetch":
