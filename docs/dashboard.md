@@ -183,3 +183,5 @@ Migrated tickets show a small set of queries, tables and APIs on Overview. Lists
 ### Six-question summary
 
 Ticket Overview answers the problem, current cause and certainty, changes, actual verification, remaining unknowns and next action. Each answer cites current evidence; missing verification says Nothing verified yet. Full brief opens the preserved seven-section explanation. Verification chips open their recorded proof. Epics show the same six answers on each child row. The hub, offline export, SessionStart context and MCP defaults use the same summary. Refresh brief continues to generate both views within the existing budget.
+
+JSON responses use standard-library gzip when the client accepts it and compression reduces the response. `Vary: Accept-Encoding`, explicit `gzip;q=0` and HEAD content lengths are preserved; event streams stay uncompressed.

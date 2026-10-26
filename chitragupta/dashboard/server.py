@@ -26,6 +26,7 @@ Routes
   /api/shutdown?token=T  stops the server (token from the user folder; used by `dashboard stop` / ensure)
 """
 import hashlib
+import gzip
 import hmac
 import json
 import os
@@ -311,7 +312,26 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def send_json(self, obj, code=200):
-        self._send(code, _json_bytes(obj), "application/json; charset=utf-8")
+        body = _json_bytes(obj)
+        extra = [("Vary","Accept-Encoding")]
+        encodings = {}
+        for value in self.headers.get_all("Accept-Encoding",[]):
+            for part in value.split(","):
+                bits = [b.strip().lower() for b in part.split(";")]
+                quality = 1.0
+                for param in bits[1:]:
+                    if param.startswith("q="):
+                        try:
+                            quality = float(param[2:])
+                        except ValueError:
+                            quality = 0.0
+                encodings[bits[0]] = quality
+        if len(body) >= 512 and encodings.get("gzip",encodings.get("*",0)) > 0:
+            packed = gzip.compress(body,compresslevel=5,mtime=0)
+            if len(packed) < len(body):
+                body = packed
+                extra.append(("Content-Encoding","gzip"))
+        self._send(code,body,"application/json; charset=utf-8",extra)
 
     def send_file(self, path, ctype, cache):
         try:
