@@ -64,7 +64,7 @@ def _work_ticket(tk):
         "worklog" not in (store.display_title(tk) or "").lower()
 
 
-def check(tk, t, rec, prefixes):
+def check(tk, t, rec, prefixes, prepared=None):
     """The review flag for a new item `rec` of ticket `t`, or None."""
     from . import store
     text = _item_text(rec)
@@ -77,15 +77,27 @@ def check(tk, t, rec, prefixes):
     others = [k for k in keys if k != t]
     src = rec.get("src")
     why, suggest, prof = None, None, None
+    def overlap():
+        nonlocal prof
+        if prepared is not None:
+            counts, exclude = prepared
+            return any(counts.get(w,0) > (w in exclude) for w in words(text))
+        if prof is None:
+            prof = profile(tk)
+        return bool(words(text) & prof)
+    def has_profile():
+        if prepared is not None:
+            counts, exclude = prepared
+            return len(counts) > sum(counts.get(w) == 1 for w in exclude)
+        return bool(prof)
     if others and t not in keys and src not in SPECIFIC_SRC:
-        prof = profile(tk)
-        if not (words(text) & prof):
+        if not overlap():
             why, suggest = "names %s, not %s" % (", ".join(others[:3]), t), others[0]
     if not why and _SELF.search(text) and _work_ticket(tk):
         why = "about the worklog tool itself, not the ticket's work"
     elif not why and src in WEAK_SRC:
-        prof = profile(tk) if prof is None else prof
-        if prof and not (words(text) & prof):
+        hit = overlap()
+        if has_profile() and not hit:
             why = "shares no file, table, endpoint or title word with %s (ticket from %s)" % (t, src)
     if not why:
         return None
@@ -97,26 +109,37 @@ def record_text(rec):
                     ("text", "purpose", "revealed", "name", "path", "host_or_service", "tables"))
 
 
-def record_check(tk, t, kind, key, rec, prefixes):
+def record_profile(tk, t):
+    """One good-record profile per merge/migration. Counts let each record exclude itself in O(its words)."""
+    from collections import Counter
+    base = dict(tk, tables={}, apis={}, queries={})
+    counts, own = Counter(profile(base)), {}
+    for family in ("tables", "apis"):
+        for rid, row in (tk.get(family) or {}).items():
+            if not isinstance(row, dict) or row.get("review") or row.get("archived"):
+                continue
+            keys = set(_KEY.findall(record_text(row)))
+            if keys and t not in keys and row.get("src") not in SPECIFIC_SRC and not row.get("review_kept"):
+                continue
+            if family == "tables":
+                names = words(str(rid).rsplit(".",1)[-1].replace("/"," ").replace("."," "))
+            else:
+                names = words(" ".join(row.get("paths") or [row.get("path") or ""]).replace("/"," "))
+            own[(family,rid)] = names
+            counts.update(names)
+    return counts,own
+
+
+def record_check(tk, t, kind, key, rec, prefixes, prepared=None):
     """K8 for records. Neither a record itself nor other suspect records establish overlap."""
     old = (tk.get(kind) or {}).get(key) or {}
     if old.get("review_kept") or old.get("archived"):
         return None
-    view = dict(tk)
-    for family in ("queries", "tables", "apis"):
-        good = {}
-        for rid, row in (tk.get(family) or {}).items():
-            if not isinstance(row, dict) or (family == kind and rid == key) or row.get("review"):
-                continue
-            keys = set(_KEY.findall(record_text(row)))
-            suspect = keys and t not in keys and row.get("src") not in SPECIFIC_SRC and not row.get("review_kept")
-            if not suspect:
-                good[rid] = row
-        view[family] = good
+    counts, own = record_profile(tk,t) if prepared is None else prepared
     proxy = dict(rec, title=record_text(rec), detail="")
     if proxy.get("src") in (None, "legacy", "carry-recent"):
         proxy["src"] = "carry"
-    return check(view, t, proxy, prefixes)
+    return check(tk, t, proxy, prefixes, prepared=(counts,own.get((kind,key),())))
 
 
 def recheck(tk, t, prefixes, at=None):

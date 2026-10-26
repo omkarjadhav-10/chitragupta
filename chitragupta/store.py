@@ -271,6 +271,12 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             meta["ref"] = ref
         return ticket, meta
 
+    record_profiles = {}
+    def record_profile(t):
+        if t not in record_profiles:
+            record_profiles[t] = offticket.record_profile(store.ticket(t),t)
+        return record_profiles[t]
+
     touched = set()
 
     def skip(t):
@@ -354,7 +360,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
                "kind": q.get("kind") or "read", "revealed": q.get("revealed") or "", "days": [day]}
         rec.update(provenance)
         if t:
-            rv = offticket.record_check(store.ticket(t), t, "queries", qid, rec, prefixes)
+            rv = offticket.record_check(store.ticket(t), t, "queries", qid, rec, prefixes, prepared=record_profile(t))
             if rv:
                 rec["review"] = rv
         slot = tslot(t)
@@ -393,7 +399,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
         fold_bare(cat["tables"], ".", table_name)
         store.catalog_dirty = True
         if t:
-            rv = offticket.record_check(store.ticket(t), t, "tables", key, rec, prefixes)
+            rv = offticket.record_check(store.ticket(t), t, "tables", key, rec, prefixes, prepared=record_profile(t))
             if rv:
                 rec["review"] = rv
         own[key] = _merge_rec(own.get(key), rec)
@@ -423,7 +429,7 @@ def merge_extraction(store, res, ctx, prefixes, only=None):
             tk = store.ticket(t)
             if key not in tk["apis"]:
                 store.bump(t, "APIs")
-            rv = offticket.record_check(tk, t, "apis", key, rec, prefixes)
+            rv = offticket.record_check(tk, t, "apis", key, rec, prefixes, prepared=record_profile(t))
             if rv:
                 rec["review"] = rv
             tk["apis"][key] = _merge_rec(tk["apis"].get(key), rec)

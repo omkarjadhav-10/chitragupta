@@ -93,3 +93,29 @@ class RecordResolution(Base):
             self.assertIn(T + ": keep " + key, md)
             self.assertIn(T + ": move " + key, md)
         self.assertEqual(len(api.ticket(T)["record_reviews"]), 3)
+
+
+class RecordProfileCost(Base):
+    def test_one_profile_per_ticket_per_merge_and_migration(self):
+        from unittest import mock
+        from chitragupta import common,kb51,offticket,store
+        rows={"queries":[{"text":"select id from shop.orders where id = %d" % n,"purpose":"stock investigation"} for n in range(20)],
+              "tables":[{"name":"shop.orders%d" % n,"purpose":"stock investigation"} for n in range(20)],
+              "apis":[{"method":"GET","path":"/orders/%d" % n,"purpose":"stock investigation"} for n in range(20)]}
+        with mock.patch.object(offticket,"profile",wraps=offticket.profile) as prof:
+            store.merge_extraction(self.st,rows,ctx(),["ABC"])
+            self.assertEqual(prof.call_count,1)
+        common.write_json(store.ticket_path(T),self.st.ticket(T))
+        with mock.patch.object(offticket,"profile",wraps=offticket.profile) as prof:
+            kb51.record_review(True,[],lambda paths:None)
+            self.assertEqual(prof.call_count,1)
+
+    def test_cached_profile_excludes_own_record_but_keeps_shared_evidence(self):
+        from chitragupta import offticket
+        tk={"title":"Stock reservation","title_source":"jira","items":{},"tables":{"shop.sessions":{"name":"shop.sessions","src":"prompt"}},"apis":{}}
+        rec={"name":"shop.sessions","purpose":"sessions lookup","src":"branch"}
+        prepared=offticket.record_profile(tk,T)
+        self.assertTrue(offticket.record_check(tk,T,"tables","shop.sessions",rec,["ABC"],prepared=prepared))
+        tk["apis"]={"GET /sessions":{"path":"/sessions","src":"prompt"}}
+        prepared=offticket.record_profile(tk,T)
+        self.assertIsNone(offticket.record_check(tk,T,"tables","shop.sessions",rec,["ABC"],prepared=prepared))

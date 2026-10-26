@@ -323,3 +323,5 @@ The existing brief call also returns cited unknowns and a concrete next action. 
 All default summary surfaces consume the same six-question view. Markdown keeps Full brief collapsed; the dashboard and export use an accessible disclosure and test-evidence anchors. SessionStart stays within 4,000 characters, and Epic children get six compact answers on one row. Synthetic golden artifacts cover the README, embedded export summary and normalized SessionStart text.
 
 Summary changes show the newest three logical groups, preferring further reached delivery targets on date ties, and count earlier changes without adding evidence ids. Grounded model unknowns lead, followed by current delivery gaps and fallback blockers, questions, then risks, newest within each kind. Archived, superseded and review items stay excluded.
+
+K8 record checks prepare one good-record word profile per ticket per extraction merge or backed migration. Per-record word counts exclude the record itself while retaining independent overlap from other accepted records.

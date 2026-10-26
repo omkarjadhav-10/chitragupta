@@ -55,12 +55,13 @@ def record_review(dry_run, notes, backup):
     prefixes = common.load_config().get("ticket_prefixes") or []
     for t in keys:
         tk = common.read_json(S.ticket_path(t), {})
+        prepared = offticket.record_profile(tk,t)
         changed = False
         for kind in ("queries", "tables", "apis"):
             for key, rec in (tk.get(kind) or {}).items():
                 if not isinstance(rec, dict) or rec.get("review"):
                     continue
-                rv = offticket.record_check(tk, t, kind, key, rec, prefixes)
+                rv = offticket.record_check(tk, t, kind, key, rec, prefixes, prepared=prepared)
                 if rv:
                     rec["review"] = rv
                     changed = True
