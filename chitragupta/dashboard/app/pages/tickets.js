@@ -269,7 +269,7 @@ function Queries({ qs, t }) {
     const core = qs.filter(q => q.sent !== false && !q.review && !q.archived && q.relevance === 'core' && !q.variant_of).map(q => byId.get(q.id) || q);
     const ids = new Set(core.map(q => q.id)), rest = all.filter(q => !ids.has(q.id));
     return html`${queryGroups(t, core).filter(([, rows]) => rows.length).map(([title, rows]) => html`<section key=${title}><h2>${title}</h2>${rows.map(q => html`<${Query} key=${q.id} q=${q} />`)}</section>`)}
-      ${!EXPORT ? html`<details class="more" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All recorded (${(t.record_counts || {}).queries || all.length})</summary>
+      ${!EXPORT ? html`<details id="all-queries" class="more" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All recorded (${(t.record_counts || {}).queries || all.length})</summary>
         <p class="muted small">Key queries are shown above; other evidence remains recorded below.</p>
         ${detail.loading ? html`<p class="muted">Loading recorded queries…</p>` : null}
         ${rest.map((q) => html`<div key=${q.id}><p class="small muted">${q.relevance || 'supporting'}${q.hidden_reason ? ' · ' + q.hidden_reason : ''}${q.review ? ' · Needs review: ' + q.review.why : ''}</p><${Query} q=${q} /></div>`)}</details>` : null}`;
@@ -350,10 +350,17 @@ export function TicketPage({ route }) {
   const tabHref = (id) => (EXPORT ? '#' : href('tickets', key, Object.assign({}, route.params, { tab: id === 'overview' ? '' : id })));
   const jump = (id, el) => {
     setTab(id);
-    let n = 0;
+    const deadline = performance.now() + 5000;
     const show = () => {
       const e = el ? document.getElementById(el) : document.getElementById('tk-panel');
-      if (!e) { if (++n < 30) requestAnimationFrame(show); return; }
+      if (!e) {
+        if (id === 'queries' && el && el.startsWith('q-')) {
+          const recorded = document.getElementById('all-queries');
+          if (recorded) recorded.open = true;
+        }
+        if (performance.now() < deadline) requestAnimationFrame(show);
+        return;
+      }
       for (let d = e.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
       if (e.tagName === 'DETAILS') e.open = true;
       e.scrollIntoView({ block: el ? 'center' : 'start' });

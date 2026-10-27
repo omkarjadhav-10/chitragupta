@@ -339,3 +339,5 @@ Each background run records monotonic total and per-step milliseconds in `ticks.
 Branch commit-fact caches treat an empty own-commit list as a valid answer. Their signature includes local, remote and parent tips, so unchanged empty branches do not force repeated ticket rewrites while remote movement still invalidates delivery facts.
 
 Default query selection uses up to five key queries (cause, fix-design, verify) and three context queries. The hub headline keeps five key queries; query companions, dashboard, MCP and exports show Key queries then Also used. Unranked query views show at most eight with an honest unranked heading. The existing brief call receives each eligible non-noise query with date, sent status and the first 160 whitespace-collapsed SQL characters; canonical SQL and projection distinctions stay intact. Runtime validation enforces both category caps and current eligible ids.
+
+Dashboard query citations open All recorded when their target is outside the default list, then focus the evidence after lazy loading (up to five seconds).

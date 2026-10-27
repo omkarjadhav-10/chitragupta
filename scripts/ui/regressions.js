@@ -60,6 +60,29 @@ const cases = {
       check(loads.includes('notes'), 'hub text is fetched when My notes opens');
     } finally { await ctx.close(); }
   },
+  async querycite(browser, base, check) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      const hidden = { id: 'hidden', text: 'select state from shop.orders', purpose: 'Supporting query proof',
+        sent: true, relevance: 'supporting', revealed: 'Reserved after cancellation' };
+      await page.route('**/api/tickets/ABC-1001*', async route => {
+        if (new URL(route.request().url()).searchParams.get('section') === 'queries') {
+          await new Promise(resolve => setTimeout(resolve, 700));
+          return route.fulfill({ json: { key: 'ABC-1001', section: 'queries', queries: [hidden] } });
+        }
+        const response = await route.fetch(), ticket = await response.json();
+        Object.assign(ticket, { focused: true, lazy: true, queries: [], core: { tables: [], apis: [] }, record_counts: { queries: 1 } });
+        const unknowns = ticket.brief.summary.sections.find(s => s.id === 'unknowns');
+        Object.assign(unknowns, { claims: [{ text: 'Recheck the reserved order.', cites: ['query:hidden'] }], empty: false, text: null });
+        await route.fulfill({ json: ticket });
+      });
+      await page.goto(base + '#/tickets/ABC-1001');
+      await page.locator('#s-unknowns').locator('..').locator('a.cite').click();
+      await page.locator('#q-hidden').waitFor({ state: 'visible', timeout: 4000 });
+      check(await page.locator('#q-hidden').evaluate(e => e === document.activeElement), 'supporting query citation loads, opens and focuses its proof after lazy response');
+    } finally { await ctx.close(); }
+  },
   async reviews(browser, base, check) {
     const ctx = await browser.newContext();
     try {
