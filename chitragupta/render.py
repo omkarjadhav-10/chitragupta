@@ -1178,7 +1178,7 @@ def render_recorded_queries(store, t):
 def render_queries(store, t):
     from . import relevance
     tk = store.ticket(t)
-    if not relevance.focused(tk):
+    if not relevance.focused(tk) or is_epic(tk):
         return _render_queries_all(store, t)
     L = ["# %s — %s" % (t, relevance.heading(tk, "queries")), ""]
     for title, rows in relevance.query_groups(tk):
@@ -1265,6 +1265,8 @@ def render_context(store, t):
         L.append("%s: %s." % (stage_label(st), st["text"]))
     v = brief_view(tk, t)
     L += brief_context_lines(v)
+    if v.get("epic"):
+        return redact(common.truncate("\n".join(L + [EPIC_NOTE]), CONTEXT_MAX))
     from . import relevance
     if relevance.focused(tk) or v.get("summary"):
         for title, rows in relevance.query_groups(tk):

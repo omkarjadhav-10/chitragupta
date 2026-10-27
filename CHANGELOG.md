@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
 
 ### Fixed
+- Focused Epic query files, SessionStart and core API lists keep retained child evidence under the children instead of presenting it as Epic knowledge.
+
 - Summary citations open and focus supporting query evidence even when its lazy response takes longer than one animation cycle.
 
 - Cache empty branch commit facts and invalidate them when the remote tip moves, avoiding repeated unchanged-ticket rewrites.

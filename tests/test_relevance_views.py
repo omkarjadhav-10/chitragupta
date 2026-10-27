@@ -129,6 +129,28 @@ class FocusedViews(WithQueryIds):
         self.assertEqual(len(groups[0][1]), 8)
         self.assertNotIn("Also used", render.render_queries(st, TICKET))
 
+    def test_focused_epic_query_companion_and_context_keep_child_evidence_out(self):
+        from chitragupta import render
+        st, tk = self.prepared()
+        tk["jira"] = {"type": "Epic"}
+        self.assertNotIn("Cancel state", render.render_queries(st, TICKET))
+        self.assertIn(render.EPIC_NOTE, render.render_queries(st, TICKET))
+        self.assertNotIn("Cancel state", render.render_context(st, TICKET))
+        self.assertIn("Cancel state", render.render_recorded_queries(st, TICKET))
+        self.assertEqual(len(tk["queries"]), 2)
+
+    def test_focused_epic_api_core_records_stay_under_children(self):
+        from chitragupta import common, store
+        from chitragupta.dashboard import api
+        st, tk = self.prepared()
+        tk["jira"] = {"type": "Epic"}
+        tk["tables"] = {"shop.orders": {"name": "shop.orders", "relevance": "core"}}
+        tk["apis"] = {"GET /orders": {"method": "GET", "path": "/orders", "relevance": "core"}}
+        common.write_json(store.ticket_path(TICKET), tk)
+        data = api.ticket(TICKET)
+        self.assertEqual(data["core"], {"tables": [], "apis": []})
+        self.assertEqual(data["queries"], [])
+
 
 def render_md(st):
     from chitragupta import render

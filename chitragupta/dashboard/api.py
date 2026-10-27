@@ -377,7 +377,7 @@ def ticket(key):
     out["record_counts"]["branches"] = sum(len(x.get("branches") or []) for x in ((tk.get("git") or {}).get("repos") or {}).values())
     if out["brief"].get("epic"):  # an Epic's knowledge is its children's: the tabs say so instead of showing it
         from ..render import EPIC_NOTE
-        out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[],
+        out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[], core={"tables": [], "apis": []},
                    requests={"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0,
                              "bruno_folder": None},
                    dbflow={"markdown": "", "qa_trace": None})
