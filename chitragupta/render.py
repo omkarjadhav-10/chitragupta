@@ -709,7 +709,7 @@ def render_ticket(store, t):
     # Long findings live in the recorded companion; summary evidence links remain reachable.
     L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_ticket_brief(brief_view(tk, t), tk.get("items"))]
     L += ["## " + relevance.heading(tk, "queries"), ""]
-    for q in relevance.core(tk, "queries", 5):
+    for q in relevance.query_groups(tk)[0][1][:5]:
         L.append("- [%s](queries.md#q-%s)%s — %s" % (cell(q.get("purpose") or "Query"), q["id"],
             " (" + q["role"] + ")" if q.get("role") else "", cell(common.truncate(q.get("revealed") or "", 220))))
     for kind, title, cap in (("tables", "Core tables", 6), ("apis", "Core APIs", 5)):
@@ -1181,10 +1181,12 @@ def render_queries(store, t):
     if not relevance.focused(tk):
         return _render_queries_all(store, t)
     L = ["# %s — %s" % (t, relevance.heading(tk, "queries")), ""]
-    for q in relevance.core(tk, "queries", 5):
-        L += ['<a id="q-%s"></a>' % q["id"], "", "## " + cell(q.get("purpose") or "Query"), "",
-              "Role: " + (q.get("role") or "not selected yet"), cell(q.get("revealed") or ""),
-              "```sql", fence_safe(q.get("text") or ""), "```", ""]
+    for title, rows in relevance.query_groups(tk):
+        L += ["## " + title, ""]
+        for q in rows:
+            L += ['<a id="q-%s"></a>' % q["id"], "", "### " + cell(q.get("purpose") or "Query"), "",
+                  "Role: " + (q.get("role") or "not selected yet"), cell(q.get("revealed") or ""),
+                  "```sql", fence_safe(q.get("text") or ""), "```", ""]
     L += ["<details><summary>All recorded (%d)</summary>" % len(tk.get("queries") or {}), "",
           "[Open every query by relevance, including variants and unrun SQL](queries-recorded.md).", "", "</details>", ""]
     return "\n".join(L)
@@ -1265,7 +1267,8 @@ def render_context(store, t):
     L += brief_context_lines(v)
     from . import relevance
     if relevance.focused(tk) or v.get("summary"):
-        L += [relevance.heading(tk, "queries") + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in relevance.core(tk, "queries", 5))]
+        for title, rows in relevance.query_groups(tk):
+            L.append(title + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in rows))
         L += [relevance.heading(tk, "tables") + ": " + ", ".join(r.get("name") or "" for r in relevance.core(tk, "tables", 6)),
               relevance.heading(tk, "apis") + ": " + "; ".join("%s %s" % (r.get("method") or "", r.get("path") or "") for r in relevance.core(tk, "apis", 5))]
         from . import dbflow

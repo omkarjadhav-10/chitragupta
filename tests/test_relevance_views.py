@@ -101,6 +101,34 @@ class FocusedViews(WithQueryIds):
         self.assertEqual([q["id"] for q in api.ticket(TICKET)["queries"]], ["cause", "verify"])
         self.assertIn("## Key queries", render_md(st))
 
+    def test_key_and_context_lists_keep_eight_defaults_but_five_hub_headlines(self):
+        from chitragupta import common, relevance, render, store, mcpserver
+        from chitragupta.dashboard import api
+        st, tk = self.prepared()
+        tk["queries"] = {str(i): {"id": str(i), "text": "select col%d from shop.orders" % i,
+              "purpose": "Synthetic query %d" % i, "revealed": "Reserved", "sent": True} for i in range(9)}
+        relevance.apply_picks(tk, {"queries": [{"id": str(i), "role": "cause" if i < 5 else "context"} for i in range(8)]})
+        common.write_json(store.ticket_path(TICKET), tk)
+        hub, queries = render.render_ticket(st, TICKET), render.render_queries(st, TICKET)
+        self.assertNotIn("Synthetic query 5", hub)
+        self.assertIn("## Also used", queries)
+        self.assertIn("Synthetic query 7", queries)
+        self.assertNotIn("Synthetic query 8", queries)
+        data = api.ticket(TICKET)
+        self.assertEqual(len(data["queries"]), 8)
+        self.assertEqual([q["role"] for q in data["queries"]], ["cause"] * 5 + ["context"] * 3)
+        lines = "\n".join(mcpserver._summary_lines(data))
+        self.assertIn("Also used:", lines)
+        self.assertIn("Synthetic query 7", lines)
+        # Before picks, eight queries are honestly labelled as unranked.
+        for q in tk["queries"].values():
+            for k in ("role", "relevance_source", "relevance"): q.pop(k, None)
+        relevance.classify(tk)
+        groups = relevance.query_groups(tk)
+        self.assertEqual(groups[0][0], "Recorded queries (not yet ranked)")
+        self.assertEqual(len(groups[0][1]), 8)
+        self.assertNotIn("Also used", render.render_queries(st, TICKET))
+
 
 def render_md(st):
     from chitragupta import render

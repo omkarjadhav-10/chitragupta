@@ -4,8 +4,8 @@ import re
 from . import common
 
 LEVELS = ("core", "supporting", "noise")
-ROLES = ("cause", "fix-design", "verify")
-CAPS = {"queries": 5, "tables": 6, "apis": 5}
+ROLES = ("cause", "fix-design", "verify", "context")
+CAPS = {"queries": 8, "tables": 6, "apis": 5}
 CATALOG = re.compile(r"(?i)information_schema|pg_catalog|\bsys\.\w|^\s*(?:show\b|\\d)|has_perms_by_name|table_constraints|key_column_usage|\bpg_\w+\(|sp_help|object_id\(")
 SHELL = re.compile(r"(?i)psql(\.exe)?\b|PGPASSWORD|\bexport\s+\w+=|set -a")
 NORES = re.compile(r"(?i)not (shown|recorded|described|stated) in|result not|not in the chunk|output is not|not yet run|not run yet|no conclusion|\(result not recorded\)|^\s*$|query template|will show")
@@ -142,13 +142,29 @@ def heading(tk, kind):
     return {"queries": "Key queries", "tables": "Core tables", "apis": "Core APIs"}[kind]
 
 
+def query_groups(tk):
+    """Default query views: five key picks plus three context picks, or eight unranked."""
+    rows = core(tk, "queries")
+    if not ranked(tk, "queries"):
+        return [(heading(tk, "queries"), rows[:8])]
+    key = [q for q in rows if q.get("role") != "context"][:5]
+    context = [q for q in rows if q.get("role") == "context"][:3]
+    return [("Key queries", key)] + ([("Also used", context)] if context else [])
+
+
+def listed_queries(tk):
+    return [q for _, rows in query_groups(tk) for q in rows]
+
+
 def candidates(tk):
     """Small, identified records for the existing brief call; no second model call."""
     data = {}
-    fields = {"queries": ("purpose", "revealed", "tables"), "tables": ("purpose",), "apis": ("purpose", "path")}
+    fields = {"queries": ("purpose", "revealed", "tables", "date", "sent"), "tables": ("purpose",), "apis": ("purpose", "path")}
     for kind in CAPS:
         data[kind] = [dict(id=k, **{f: r.get(f) for f in fields[kind]}) for k, r in (tk.get(kind) or {}).items()
                       if eligible(r) and r.get("relevance") != "noise"]
+    for row in data["queries"]:
+        row["sql"] = " ".join(((tk["queries"][row["id"]].get("text")) or "").split())[:160]
     data["scenarios"] = flow_scenarios(tk)
     return data
 
@@ -169,10 +185,14 @@ def apply_picks(tk, picks):
             if not eligible(row) or row.get("relevance") == "noise" or (kind == "queries" and role not in ROLES):
                 dropped.append({"kind": kind, "id": rid, "why": "unknown or ineligible id/role"})
                 continue
-            if len(selected) < cap:
-                selected[rid] = role
-            else:
+            if rid in selected:
+                continue
+            role_cap = 3 if role == "context" else 5
+            same_group = sum((r == "context") == (role == "context") for r in selected.values())
+            if len(selected) >= cap or (kind == "queries" and same_group >= role_cap):
                 dropped.append({"kind": kind, "id": rid, "why": "pick cap"})
+                continue
+            selected[rid] = role
         # Entirely invalid answers cannot demote the ticket's existing candidates.
         if picks[kind] and not selected:
             continue

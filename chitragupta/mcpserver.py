@@ -291,7 +291,15 @@ def _summary_lines(t):
     if bl:
         L += [""] + bl
     if t.get("focused") or (t.get("brief") or {}).get("summary"):
-        L += ["Key queries:" if (t.get("core_ranked") or {}).get("queries") else "Recorded queries (not yet ranked):"] + ["- %s [%s]" % (_one(q.get("purpose") or "Query", 180), q["id"]) for q in t.get("queries") or []]
+        qs = t.get("queries") or []
+        if (t.get("core_ranked") or {}).get("queries"):
+            groups = [("Key queries", [q for q in qs if q.get("role") != "context"][:5]),
+                      ("Also used", [q for q in qs if q.get("role") == "context"][:3])]
+        else:
+            groups = [("Recorded queries (not yet ranked)", qs[:8])]
+        for label, rows in groups:
+            if rows:
+                L += [label + ":"] + ["- %s [%s]" % (_one(q.get("purpose") or "Query", 180), q["id"]) for q in rows]
         for kind, label in (("tables", "Core tables"), ("apis", "Core APIs")):
             label = label if (t.get("core_ranked") or {}).get(kind) else "Recorded %s (not yet ranked)" % kind
             L += [label + ": " + "; ".join(r.get("name") or (r.get("method") or "") + " " + (r.get("path") or "") for r in (t.get("core") or {}).get(kind) or [])]

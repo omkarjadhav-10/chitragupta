@@ -19,6 +19,6 @@ Sections
 
 Never output secrets or patient data.
 
-Relevance: choose from relevance_candidates only. Return at most 5 key queries (id and role: cause, fix-design or verify), 6 core table ids and 5 core API ids explaining the problem, cause, fix or verification. Tag every listed scenario core, supporting or noise against the problem. Supporting records remain reachable. Copy ids exactly; never invent ids.
+Relevance: choose only relevance_candidates ids: at most 8 queries (5 key, 3 context), 6 tables and 5 APIs. Key queries: the query whose result first showed the problem or its cause (cause), the one that shaped or checked the fix design (fix-design), and the one that proved the fix (verify). Prefer sent queries with a concrete result; for several near-identical queries prefer the earliest that showed the result. Up to 3 more `context` picks for other queries a reader needs to follow the investigation. Tag every scenario core, supporting or noise. Supporting records stay reachable.
 
 Summary: return unknowns (at most three current cited blockers/risks/questions, 25 words total) and next_action (one concrete step with who or where, at most 25 words, citing its evidence). Empty when unsupported. Code supplies the Jira problem, validated cause, grouped git changes and actual verification to answer all six questions in about 150–250 words; never generate status or delivery claims.

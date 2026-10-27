@@ -214,10 +214,15 @@ function RecordedKind({ t, kind }) {
     <ul class="findings">${rows.map((r) => html`<li key=${r.id}><div class="t"><code>${r.name || (r.method ? r.method + ' ' : '') + (r.path || r.id)}</code></div>
       <div class="d">${r.purpose || r.role || ''}</div><div class="m">${r.relevance || 'core'}${r.hidden_reason ? ' · ' + r.hidden_reason : ''}</div></li>`)}</ul></details>`;
 }
+function queryGroups(t, qs) {
+  if (!(t.core_ranked || {}).queries) return [['Recorded queries (not yet ranked)', qs.slice(0, 8)]];
+  return [['Key queries', qs.filter(q => q.role !== 'context').slice(0, 5)],
+    ['Also used', qs.filter(q => q.role === 'context').slice(0, 3)]];
+}
 function CoreRecords({ t, jump, tabHref }) {
   const core = t.core || {}, ranked = t.core_ranked || {};
-  return html`<section class="bsec"><h2>${ranked.queries ? 'Key queries' : 'Recorded queries (not yet ranked)'}</h2><ul class="findings">${(t.queries || []).slice(0, 5).map((q) => html`<li key=${q.id}>
-      <a href=${tabHref('queries')} onClick=${(e) => { e.preventDefault(); jump('queries', 'q-' + q.id); }}>${q.purpose || 'Query'}</a>${q.role ? ' · ' + q.role : ''}</li>`)}</ul></section>
+  return html`${queryGroups(t, t.queries || []).filter(([, rows]) => rows.length).map(([title, rows]) => html`<section class="bsec" key=${title}><h2>${title}</h2><ul class="findings">${rows.map((q) => html`<li key=${q.id}>
+      <a href=${tabHref('queries')} onClick=${(e) => { e.preventDefault(); jump('queries', 'q-' + q.id); }}>${q.purpose || 'Query'}</a>${q.role ? ' · ' + q.role : ''}</li>`)}</ul></section>`)}
     ${['tables', 'apis'].map((kind) => html`<section class="bsec" key=${kind}><h2>${ranked[kind] ? (kind === 'tables' ? 'Core tables' : 'Core APIs') : 'Recorded ' + (kind === 'tables' ? 'tables' : 'APIs') + ' (not yet ranked)'}</h2>
       <ul class="findings">${(core[kind] || []).map((r) => html`<li key=${r.id}><div class="t"><code>${r.name || (r.method || '') + ' ' + (r.path || '')}</code></div><div class="d">${r.purpose || ''}</div></li>`)}</ul>
       ${!EXPORT ? html`<${RecordedKind} t=${t} kind=${kind} />` : null}</section>`)}
@@ -259,9 +264,11 @@ function Queries({ qs, t }) {
   const detail = useApi(opened && t.lazy ? '/api/tickets/' + encodeURIComponent(t.key) + '?section=queries' : null);
   if (t.focused) {
     const all = detail.data && detail.data.key === t.key ? detail.data.queries : qs;
-    const core = all.filter((q) => q.sent !== false && !q.review && !q.archived && q.relevance === 'core' && !q.variant_of).slice(0, 5);
-    const rest = all.filter((q) => !core.includes(q));
-    return html`${core.map((q) => html`<${Query} key=${q.id} q=${q} />`)}
+    // Keep the server's role order when the date-ordered full evidence arrives.
+    const byId = new Map(all.map(q => [q.id, q]));
+    const core = qs.filter(q => q.sent !== false && !q.review && !q.archived && q.relevance === 'core' && !q.variant_of).map(q => byId.get(q.id) || q);
+    const ids = new Set(core.map(q => q.id)), rest = all.filter(q => !ids.has(q.id));
+    return html`${queryGroups(t, core).filter(([, rows]) => rows.length).map(([title, rows]) => html`<section key=${title}><h2>${title}</h2>${rows.map(q => html`<${Query} key=${q.id} q=${q} />`)}</section>`)}
       ${!EXPORT ? html`<details class="more" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All recorded (${(t.record_counts || {}).queries || all.length})</summary>
         <p class="muted small">Key queries are shown above; other evidence remains recorded below.</p>
         ${detail.loading ? html`<p class="muted">Loading recorded queries…</p>` : null}

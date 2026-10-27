@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [0.5.1] - 2026-10-25
 
 ### Added
+- Briefs select up to five key queries and three context queries. Default query views keep both groups visible; short dated SQL candidates help preserve early cause evidence.
+
 - Gzip negotiation for dashboard JSON responses, including explicit identity and HEAD handling.
 - Monotonic per-step tick timings and a Health warning for background runs over 60 seconds.
 - A grounded six-question summary and concrete next action alongside the preserved full brief, with a backed migration and the existing single-call budget/triggers. Jira, grouped git changes and actual verification facts win over model wording; only owner provenance overrides the cause.

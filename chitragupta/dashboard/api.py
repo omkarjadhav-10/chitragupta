@@ -350,7 +350,7 @@ def ticket(key):
         "problem": tk.get("problem") or "", "title_source": tk.get("title_source") or "",
         "branches": _linked_branches(tk), "jira": tk.get("jira") or {},
         "findings": [dict(i, detail="", evidence=[]) for i in _items(tk) if not i.get("archived") and i.get("status") not in ("done", "superseded")] if focus else _items(tk),
-        "queries": _queries(dict(tk, queries={q["id"]: q for q in relevance.core(tk, "queries", 5)})) if focus else _queries(tk),
+        "queries": _queries(dict(tk, queries={q["id"]: q for q in relevance.listed_queries(tk)})) if focus else _queries(tk),
         "requests": {"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0} if focus else _requests(key, tk, paths),
         "dbflow": {"markdown": "", "qa_trace": None} if focus else _dbflow(key, paths),
         "artifacts": [] if focus else _artifacts(key, tk),
@@ -371,7 +371,7 @@ def ticket(key):
                              for r in relevance.core(tk, kind, cap)] for kind, cap in (("tables", 6), ("apis", 5))}
     if focus:
         queries = {q["id"]: q for q in out["queries"]}
-        out["queries"] = [queries[q["id"]] for q in relevance.core(tk, "queries", 5)]
+        out["queries"] = [queries[q["id"]] for q in relevance.listed_queries(tk)]
     out["core_ranked"] = {kind: relevance.ranked(tk, kind) for kind in ("queries", "tables", "apis")}
     out["record_counts"] = {kind: len(tk.get(kind) or {}) for kind in ("items", "queries", "tables", "apis", "files")}
     out["record_counts"]["branches"] = sum(len(x.get("branches") or []) for x in ((tk.get("git") or {}).get("repos") or {}).values())

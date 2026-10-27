@@ -30,16 +30,17 @@ const cases = {
     try {
       const page = await ctx.newPage(), loads = [];
       const core = { id: 'core', text: 'select state from shop.orders', purpose: 'Synthetic core query', revealed: 'Reserved', sent: true, relevance: 'core', role: 'cause' };
+      const context = { ...core, id: 'context', purpose: 'Synthetic context query', role: 'context' };
       const noise = { id: 'noise', text: 'select * from information_schema.tables', purpose: 'Synthetic catalog query', sent: true, relevance: 'noise', hidden_reason: 'catalog' };
       const review = { id: 'review', text: 'select id from shop.sessions', purpose: 'Synthetic reviewed query', sent: true, relevance: 'supporting', review: { why: 'wrong ticket' } };
       await page.route('**/api/tickets/ABC-1001*', async route => {
         const url = new URL(route.request().url()), section = url.searchParams.get('section');
         if (section) loads.push(section);
         if (section === 'notes') return route.fulfill({ json: { key: 'ABC-1001', section, readme: 'Synthetic lazy owner note' } });
-        if (section === 'queries') return route.fulfill({ json: { key: 'ABC-1001', section, queries: [core, noise, review] } });
+        if (section === 'queries') return route.fulfill({ json: { key: 'ABC-1001', section, queries: [context, noise, core, review] } });
         const response = await route.fetch(), ticket = await response.json();
-        if (!section) Object.assign(ticket, { focused: true, lazy: true, queries: [core], readme: '',
-          core: { tables: [{ id: 'shop.orders', name: 'shop.orders' }], apis: [] }, record_counts: { queries: 3, items: ticket.findings.length, tables: 1, apis: 0, files: 0 } });
+        if (!section) Object.assign(ticket, { focused: true, lazy: true, queries: [core, context], core_ranked: { queries: true }, readme: '',
+          core: { tables: [{ id: 'shop.orders', name: 'shop.orders' }], apis: [] }, record_counts: { queries: 4, items: ticket.findings.length, tables: 1, apis: 0, files: 0 } });
         await route.fulfill({ json: ticket });
       });
       await page.goto(base + '#/tickets/ABC-1001');
@@ -47,9 +48,12 @@ const cases = {
       check(loads.length === 0, 'focused Overview does not fetch heavy evidence or hub text');
       await page.getByRole('tab', { name: /^Queries/ }).click();
       await page.locator('#q-core').waitFor();
+      check(await page.getByRole('heading', { name: 'Also used', exact: true }).isVisible(), 'context queries have their own default section');
+      check(await page.locator('#q-context').isVisible(), 'context pick stays uncollapsed');
       check(await page.locator('#q-review').count() === 0 && await page.locator('#q-noise').count() === 0, 'noise and unresolved reviews stay out of the default query list');
-      await page.getByText('All recorded (3)', { exact: true }).click();
+      await page.getByText('All recorded (4)', { exact: true }).click();
       await page.locator('#q-review').waitFor();
+      check((await page.locator('[id^=q-]').evaluateAll(es => es.map(e => e.id))).slice(0, 2).join(',') === 'q-core,q-context', 'loading all evidence preserves key then context order');
       check(loads.includes('queries') && await page.locator('#q-noise').isVisible(), 'All recorded fetches and exposes retained query evidence');
       await page.getByRole('tab', { name: /^Notes/ }).click();
       await page.getByText('Synthetic lazy owner note', { exact: true }).waitFor();
