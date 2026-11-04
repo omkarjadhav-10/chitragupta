@@ -162,8 +162,15 @@ def _session_start_output(cfg, common, ev, inp):
     warn = _health_warning(health, common)
     ticket = ev.get("ticket")
     if ticket:
-        ctx = common.read_text(common.wl("cache", "context", ticket + ".md")).strip()
+        cpath = common.wl("cache", "context", ticket + ".md")
+        ctx = common.read_text(cpath).strip()
         if ctx:
+            try:
+                age = int(max(0, time.time() - os.path.getmtime(cpath)) // 60)
+                ctx += "\n(Cached worklog context, written %s ago by the background tick; /cg:check %s refreshes it.)" % (
+                    "%d min" % age if age < 120 else "%d h" % (age // 60), ticket)
+            except OSError:
+                pass
             parts.append(ctx)
     if warn:
         parts.append(warn)

@@ -400,7 +400,8 @@ def tool_results(res, tool_suffix):
 # Allowlist entry for the Jira server, filed under the configured name (mcp.jira.server, default mcp-atlassian) and
 # re-applied from here every day, so a renamed server works and new read tools reach existing installs.
 JIRA_ALLOW_DEFAULT = {
-    "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile"],
+    "read": ["jira_get_issue", "jira_search", "jira_batch_get_changelogs", "jira_get_worklog", "jira_get_user_profile",
+             "jira_get_project_versions"],
     "write": ["jira_add_comment", "jira_add_issues_to_sprint", "jira_add_watcher", "jira_add_worklog",
               "jira_assign_issue", "jira_batch_create_issues", "jira_batch_create_versions",
               "jira_create_customer_request", "jira_create_issue", "jira_create_issue_link",
@@ -608,18 +609,30 @@ def card_sources(raw, comments=10, description_chars=3000, comment_chars=500):
     return {"description": common.truncate(redact(" ".join(_adf_text(desc).split())), description_chars), "comments": out}
 
 
+CARD_FIELDS = "summary,issuetype,status,priority,parent,issuelinks,description,comment,customfield_10020,labels"
+
+
+def card_fields(cfg):
+    """The fields the card job reads: the base set, plus the fix versions, assignee and configured release / UAT
+    fields when release tracking is on (same single call)."""
+    from . import release
+    extra = release.card_fields(cfg) if release.enabled(cfg) else []
+    return ",".join([CARD_FIELDS] + [f for f in extra if f not in CARD_FIELDS.split(",")])
+
+
 def jira_card(key, cfg, health):
     srv = server_name(cfg, "jira")
     reads = [mcp_tool(srv, "jira_get_issue")]
-    task = ("Call jira_get_issue once with issue_key=%s, fields=\"summary,issuetype,status,priority,parent,issuelinks,"
-            "description,comment,customfield_10020,labels\", comment_limit=30. Then return the JSON. found=false only when the "
-            "tool says the issue does not exist. summary: 2-3 plain sentences on the problem and where it stands." % key)
+    fields = card_fields(cfg)
+    task = ("Call jira_get_issue once with issue_key=%s, fields=\"%s\", comment_limit=30. Then return the JSON. "
+            "found=false only when the tool says the issue does not exist. summary: 2-3 plain sentences on the problem "
+            "and where it stands." % (key, fields))
     res = run("jira-card-" + key, {srv: ["jira_get_issue"]}, reads, _writes(srv, cfg), task, CARD_SCHEMA, cfg, health,
               max_turns=3)
     raw = tool_results(res, "jira_get_issue")
     out = res.get("out") or {}
     rec = {"key": key, "fetched_at": common.now_iso(), "card": out, "raw": raw[0][1] if raw else None,
-           "error": next((c["result"] for c in res["calls"] if c.get("is_error")), None)}
+           "error": next((c["result"] for c in res["calls"] if c.get("is_error")), None), "fields": fields}
     path = common.hp("data", "jira", key + ".json")
     old = common.read_json(path, {}) or {}
     if not raw and old.get("raw"):
@@ -634,6 +647,54 @@ def jira_card(key, cfg, health):
 
 DONE_SCHEMA = {"type": "object", "properties": {"done": {"type": "boolean"}}, "required": ["done"],
                "additionalProperties": False}
+
+
+def jira_versions(project, cfg, health):
+    """Release tracking: one read-only job, jira_get_project_versions for one project. The versions (id, name,
+    release date, released / archived) are taken from the raw result by code and merged into
+    data/jira/_versions/<PROJECT>.json (a renamed version keeps its id and its old name). -> the catalog."""
+    from . import release
+    srv = server_name(cfg, "jira")
+    task = ("Call jira_get_project_versions exactly once with project_key=%s. Results may be saved to files: that is "
+            "expected, do not retry or read them. Then return {\"done\": true}." % json.dumps(project))
+    res = run("jira-versions-" + project, {srv: ["jira_get_project_versions"]}, [mcp_tool(srv, "jira_get_project_versions")],
+              _writes(srv, cfg), task, DONE_SCHEMA, cfg, health, max_turns=3)
+    got = [unwrap(v) for _, v in tool_results(res, "jira_get_project_versions")]
+    lst = got[0] if got else None
+    if isinstance(lst, dict):
+        lst = lst.get("versions") or lst.get("values") or lst.get("result")
+    path = release.versions_path(project)
+    old = common.read_json(path, {}) or {}
+    if not isinstance(lst, list):
+        err = next((c["result"] for c in res["calls"] if c.get("is_error")), res.get("result"))
+        old.update(project=project, error=str(err)[:300], failed_at=common.now_iso())
+        common.write_json(path, old)
+        raise JobError("jira_get_project_versions returned nothing usable: %s" % str(err)[:200], skip=True)
+    rec = release.merge_catalog(old, release.parse_versions(lst, project), common.now_iso())
+    rec["project"] = project
+    common.write_json(path, rec)
+    return rec
+
+
+def jira_release_scope(cfg, health):
+    """Release tracking: one read-only jira_search with releases.jira.scope_jql (by default your tickets with a fix
+    version), fields limited to what release tracking reads. Kept as data/jira/_releases/scope.json, only the release
+    facts per issue. -> that record."""
+    from . import release
+    j = release.settings(cfg)["jira"]
+    srv = server_name(cfg, "jira")
+    jql, limit = j["scope_jql"], max(1, min(100, int(j.get("scope_limit") or 50)))
+    task = ("Call jira_search exactly once with jql=%s, fields=%s, limit=%d and no other arguments. Results may be "
+            "saved to files: that is expected, do not retry or read them. Then return {\"done\": true}." % (
+                json.dumps(jql), json.dumps(release.scope_fields(cfg)), limit))
+    res = run("jira-release-scope", {srv: ["jira_search"]}, [mcp_tool(srv, "jira_search")], _writes(srv, cfg), task,
+              DONE_SCHEMA, cfg, health, max_turns=3, timeout=400)
+    got = [unwrap(v) for _, v in tool_results(res, "jira_search")]
+    if not got or not isinstance(got[0], dict):
+        err = next((c["result"] for c in res["calls"] if c.get("is_error")), res.get("result"))
+        release.save_scope(None, jql, cfg, common.now_iso(), error=err or "no result")
+        raise JobError("jira_search returned nothing usable: %s" % str(err)[:200], skip=True)
+    return release.save_scope(got[0].get("issues") or [], jql, cfg, common.now_iso())
 
 
 def jira_evening(day, tickets, cfg, health):

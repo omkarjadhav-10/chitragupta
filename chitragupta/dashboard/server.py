@@ -16,6 +16,7 @@ Routes
   /api/setup             a read-only setup checklist (doctor's fast mode, cached 60 s)
   /api/events            Server-Sent Events: "cursor" events when /api/changes would move (max 16 streams)
   /api/tickets[?q=]      ticket list
+  /api/releases[?month=YYYY-MM]   my tickets by planned release date (release tracking), overdue / unresolved apart
   /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts, branches & PRs
   /api/tickets/<KEY>/export?mode=full|shareable   the ticket page as one self-contained HTML file (attachment;
                          built in memory, nothing is written). /api/ticket/<KEY>/export is the same.
@@ -512,6 +513,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(api.setup())
         if path == "/api/tickets":
             return self.send_json(api.tickets(q("q")[:200]))
+        if path == "/api/releases":
+            try:
+                return self.send_json(api.releases(q("month")[:7] or None, cfg))
+            except ValueError as e:
+                return self.send_json({"error": str(e)[:200]}, 400)
         m = TICKET_PATH.match(path)
         if m:
             key = m.group(1).upper()

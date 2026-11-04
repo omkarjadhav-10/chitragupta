@@ -124,7 +124,23 @@ def ticket_summary(key, tk):
         "first": tk.get("first") or "", "last": tk.get("last") or "", "minutes": _ticket_minutes(tk),
         "tldr": tk.get("tldr") or "", "repos": [os.path.basename(str(r).rstrip("/\\")) for r in tk.get("repos") or []],
         "counts": _counts(tk), "branches": _linked_branches(tk)[:5], "alerts": _alerts(tk),
+        "reminders": _reminders(tk), "release": _release_line(tk),
     }
+
+
+def _reminders(tk):
+    """Release tracking's open reminders (recomputed from evidence by every tick; showing one never clears it)."""
+    rel = tk.get("release") if isinstance(tk.get("release"), dict) else {}
+    return [{"id": r.get("id") or "", "kind": r.get("kind") or "", "text": r.get("text") or "", "repo": r.get("repo") or "",
+             "severity": r.get("severity") or "info"} for r in rel.get("reminders") or [] if isinstance(r, dict)]
+
+
+def _release_line(tk):
+    rel = tk.get("release") if isinstance(tk.get("release"), dict) else {}
+    if not rel.get("v"):
+        return None
+    from .. import release
+    return {"label": release.release_label(rel), "ready": bool((rel.get("readiness") or {}).get("ready"))}
 
 
 def _alerts(tk):
@@ -382,11 +398,20 @@ def ticket(key):
                              "bruno_folder": None},
                    dbflow={"markdown": "", "qa_trace": None})
     out["delivery"] = delivery.stage(tk.get("git") or {})
+    from .. import release
+    out["release_plan"] = release.view(tk, key)
+    out["release_brief"] = release.brief_lines(tk, key) if out["release_plan"] else []
     out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
     return out
 
 
 DETAIL_SECTIONS = ("findings", "queries", "tables", "apis", "files", "notes", "requests", "dbflow", "artifacts", "branches")
+
+
+def releases(month=None, cfg=None):
+    """The monthly release overview (release.month_overview): read-only, computed from the stored records."""
+    from .. import release
+    return release.month_overview(month or None, cfg)
 
 
 def ticket_detail(key, section):

@@ -14,6 +14,10 @@ DEFAULT_STRATEGIES = {
     "release-then-qa": {"targets": ["release", "qa"], "steps": [
         {"from": "release", "pr_into": "release"},
         {"from": "qa", "brings": "merge", "of_step": 1, "pr_into": "qa"}]},
+    # the QA step is shared: an integration branch cut from qa takes the whole release branch, then PRs into qa
+    "release-then-qa-sync": {"targets": ["release", "qa"], "steps": [
+        {"from": "release", "pr_into": "release"},
+        {"from": "qa", "brings": "merge", "of_role": "release", "pr_into": "qa", "shared": True}]},
     "qa-only": {"targets": ["qa"], "steps": [{"from": "qa", "pr_into": "qa"}]},
     "qa-cherry-pick": {"targets": ["qa", "uat", "staging"], "steps": [
         {"from": "qa", "pr_into": "qa"},

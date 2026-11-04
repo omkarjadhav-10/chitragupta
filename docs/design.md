@@ -48,6 +48,9 @@ tokens for both themes. `data-density="compact"` tightens spacing and `data-moti
 | `DataTable`, `Scroll` | sortable tables; wide tables scroll inside a labelled region |
 | `Empty`, `Skeleton`, `ErrorBox`, `Load` | empty, loading and error states of a request |
 | `CopyButton`, `CodeBlock`, `Markdown`, `Diagram`, `Dialog`, `Toasts` | copying, code, the README and DB-flow Markdown (escaped, no raw HTML), Mermaid, modal dialogs, the one polite live region |
+| `.stg` (`.ok\|warn\|bad\|info\|off`), `.stg-d` | a release stage: a symbol plus a word (✓ present, ◐ partial, ✗ missing, ? unknown, ○ not started, – not applicable); the tone only repeats them; `.stg-d` is its detail line |
+| `.relrow`, `.reltable` | one ticket on the Releases page (heading, facts) and its per-repository stage table (inside `Scroll`) |
+| `.relplan`, `.relrepo`, `.relrem`, `.relmiss`, `.relflags`, `.relcands` | the ticket's Release plan (`lib/release.js` `ReleasePlan`), one block per repository, reminders, what keeps it from being ready, flags, branch suggestions |
 
 ## The ticket brief (FX-20)
 

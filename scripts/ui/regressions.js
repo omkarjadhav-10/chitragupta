@@ -187,6 +187,58 @@ const cases = {
       check(await page.locator('#git-alerts').count() === 1, 'delivery alerts render exactly once on Overview');
       check(await page.locator('#git-alerts[role="alert"]').count() === 1, 'one delivery alert region is announced');
     } finally { await ctx.close(); }
+  },
+  async releases(browser, base, check) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    try {
+      const page = await ctx.newPage();
+      await page.goto(base + '#/releases');
+      await page.locator('.relrow').first().waitFor();
+      const ov = await (await page.request.get(base + 'api/releases')).json();
+      const heads = await page.locator('.relgroup h2').allInnerTexts();
+      check(heads.includes(ov.groups[0].release) && heads.includes('Overdue') && heads.includes('Release date unresolved'),
+        'Releases lists the month\'s release, then Overdue and Release date unresolved');
+      const row = page.locator('article.relrow', { has: page.locator('h3 a', { hasText: 'ABC-1001' }) });
+      check(await row.locator('.status.ok').count() === 0 && (await row.innerText()).includes('In progress'), 'a ticket that isn\'t ready never shows Ready');
+      const cells = await row.locator('tbody tr').allInnerTexts();
+      check(cells.length === 2 && /✓ present/.test(cells[0]) && /✗ missing/.test(cells[1]), 'one finished repo keeps the other repo\'s own state, in symbols and words');
+      check((await page.locator('article.relrow', { has: page.locator('h3 a', { hasText: 'ABC-1005' }) }).innerText()).includes('Not started'), 'a scope-only ticket shows as not started');
+      const month = ov.month;
+      await page.getByRole('button', { name: /^Previous month/ }).click();
+      await page.waitForFunction((m) => /month=\d{4}-\d{2}/.test(location.hash) && !location.hash.includes(m), month);
+      await page.locator('#page-title').waitFor();
+      await page.getByRole('button', { name: 'This month', exact: true }).click();
+      await page.waitForFunction((m) => location.hash.includes('month=' + m), month);
+      check(true, 'previous month and This month move the month in the address');
+      await page.goto(base + '#/releases?month=2026-13');
+      await page.locator('.relscope').waitFor();
+      check(await page.locator('.errorbox').count() === 0, 'a malformed month in the address falls back to the current month');
+      await page.goto(base + '#/tickets/ABC-1001');
+      await page.locator('.relline a').click();
+      await page.locator('#release-plan').waitFor();
+      check(/tab=branches/.test(page.url()), 'the header\'s release line opens the release plan on Branches & PRs');
+      const plan = await page.locator('#release-plan').innerText();
+      check(plan.includes('shared integration PR') && plan.includes('Wrong target') && plan.includes('Moved from'),
+        'release plan shows shared integration PRs, wrong targets and the release history');
+      check(await page.locator('#release-plan .status.ok', { hasText: /^Ready$/ }).count() === 0, 'release plan never claims Ready for an unready ticket');
+      await page.goto(base + '#/tickets/ABC-1003?tab=branches');
+      await page.locator('#page-title').waitFor();
+      check(await page.locator('#release-plan').count() === 1, 'every tracked ticket has its plan');
+      await page.route('**/api/tickets/ABC-1001', async (route) => {
+        const ticket = await (await route.fetch()).json();
+        await route.fulfill({ json: { ...ticket, release_plan: null, release_brief: [] } });
+      });
+      await page.goto(base + '#/tickets/ABC-1001?tab=branches');
+      await page.locator('#page-title').waitFor();
+      check(await page.locator('#release-plan').count() === 0 && await page.locator('.relline').count() === 0, 'no record, no release plan');
+      await page.unroute('**/api/tickets/ABC-1001');
+      await page.goto(base + '#/today');
+      await page.locator('#page-title').waitFor();
+      await page.keyboard.press('g');
+      await page.keyboard.press('r');
+      await page.waitForTimeout(300);
+      check(/#\/releases/.test(page.url()), 'g then r opens Releases');
+    } finally { await ctx.close(); }
   }
 };
 exports.run = async (browser, base, check, focus) => {

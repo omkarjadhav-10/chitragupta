@@ -8,7 +8,9 @@ const { chromium } = require('playwright-core');
 
 const AXE = fs.readFileSync(path.join(__dirname, 'vendor', 'axe.min.js'), 'utf8');
 const [base, today, shots] = process.argv.slice(2);
+const lastMonth = (() => { const d = new Date(+today.slice(0, 4), +today.slice(5, 7) - 2, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })();
 const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/tickets'], ['ticket', '#/tickets/ABC-1001'],
+  ['releases', '#/releases'], ['releases-month', '#/releases?month=' + lastMonth],
   ['ticket-branches', '#/tickets/ABC-1001?tab=branches'], ['ticket-dbflow', '#/tickets/ABC-1001?tab=dbflow'],
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
@@ -147,7 +149,7 @@ async function launch() {
   await page.setViewportSize({ width: 900, height: 900 });
   await page.goto(base + '#/today');
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
-  check(await page.locator('#more-pages a').count() === 10, 'compact navigation exposes every page');
+  check(await page.locator('#more-pages a').count() === 11, 'compact navigation exposes every page');
   await page.keyboard.press('Escape');
   check(await page.locator('#more-pages').count() === 0, 'Escape closes navigation from its trigger');
   await page.locator('.dayline-span').first().click();

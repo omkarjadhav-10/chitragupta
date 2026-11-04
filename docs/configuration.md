@@ -55,7 +55,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `branching.strategies` | object | `release-then-qa`, `qa-only`, `qa-cherry-pick` | `{name: {"targets": [roles], "steps": [{"from", "pr_into", "brings"?}]}}`, merged over the built-in three. |
+| `branching.strategies` | object | `release-then-qa`, `release-then-qa-sync`, `qa-only`, `qa-cherry-pick` | `{name: {"targets": [roles], "steps": [{"from", "pr_into", "brings"?}]}}`, merged over the four built-in ones. |
 | `branching.repos.<repo>.strategy` | string | none | The repo's default strategy. Repos without an entry are tracked but get no delivery check. |
 | `branching.repos.<repo>.bases` | object role → name / pattern / list | `release/*`, `qa`, `uat`, `staging`, `main`/`master` | This repo's branch names for each role, e.g. `{"qa": "develop-qa", "release": ["release/*", "*-hotfix"]}`. |
 | `branching.repos.<repo>.rules` | list | `[]` | `[{"jira_parent": "OPS-*", "strategy": "qa-only"}]`: a ticket whose Jira parent matches uses that strategy. |
@@ -68,6 +68,33 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 | `branching.ignore_tickets` | list | `[]` | Tickets with no branch tracking at all. |
 | `branching.fetch` | object | `{"enabled": true, "every_minutes": 30, "active_days": 14, "before_send_minutes": 20}` | When the tick fetches. |
 | `branching.pr_refresh_minutes` | int | `60` | How often open PRs are re-read. |
+
+Built-in strategies also include `release-then-qa-sync`: branch from the release branch and PR into it, then a QA integration branch cut from `qa` merges the release branch and PRs into `qa`. A step's `"of_role": "release"` says the step brings the whole release branch.
+
+## `releases`
+
+Release tracking: the ticket's Jira release, its release branch per repo, release / QA / UAT stages and reminders. Off by default. Full description in [releases.md](releases.md).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `releases.enabled` | bool | `false` | Turn release tracking on. Local computation; the Jira reads below use the daily MCP budget. |
+| `releases.stale_hours` | int | `24` | Refs fetched longer ago than this (or a failed fetch) make a "missing" change `unknown`. |
+| `releases.repos.<repo>.branches` | object release → branch | `{}` | Which branch ships a Jira release in this repo, keyed by version id or exact name. Usually set with `/cg:branch release-map`. |
+| `releases.repos.<repo>.uat` | object | none | `{"branch": "uat", "promotion": {"kind": "pr" \| "sync" \| "unspecified", "from"?, "brings"?, "sync_from"?}}`: the UAT destination and how changes get there. Absent: taken from a strategy step into `uat`, else not configured. |
+| `releases.repos.<repo>.naming` | object | see below | Suggested branch names: `dev`, `qa`, `uat`, with `{ticket}`, `{dev}`, `{release_branch}`, `{release_tail}`, `{release_key}`. |
+| `releases.naming` | object | `{"dev": "feature/{ticket}", "qa": "{dev}-qa", "uat": "{dev}-uat"}` | The default for every repo. Suggestions only; nothing is created. |
+| `releases.jira.uat_field` | string | `""` | Custom field id saying whether UAT is needed. Empty: the requirement stays `unknown` unless set per ticket or by label. |
+| `releases.jira.uat_values` | object | `required`: yes, required, true, y · `not_required`: no, not required, false, n, n/a, na, none | Field values (case-insensitive) for each state; anything else is `unknown`. |
+| `releases.jira.uat_labels` | object | `{"required": [], "not_required": []}` | Jira labels that settle the requirement. |
+| `releases.jira.planned_date_field` | string | `""` | Custom date field used when the fix version has no release date. |
+| `releases.jira.uat_deployed_statuses` | list | `[]` | Jira statuses that count as deployed to UAT. Empty: deployment stays unverified. |
+| `releases.jira.uat_accepted_statuses` | list | `[]` | Jira statuses that count as UAT accepted. |
+| `releases.jira.exclude_statuses` | list | cancelled, canceled, won't do, wont do, rejected, duplicate | Tickets in these statuses are left out of the monthly overview. |
+| `releases.jira.scope_jql` | string | `assignee = currentUser() AND fixVersion is not EMPTY AND updated >= -120d` | The scope search behind the monthly overview. |
+| `releases.jira.scope_refresh_hours` | int | `12` | How often the scope search runs. |
+| `releases.jira.scope_limit` | int | `50` | Issues read per scope search (at most 100). |
+| `releases.jira.versions_refresh_hours` | int | `24` | How often each project's versions catalog is re-read. |
+| `releases.scope` | object | `{"assigned": true, "branches": true, "worked": true}` | What makes a ticket yours for the overview: Jira assignment, a branch named for it with your commits, Claude Code work on it. |
 
 ## `models`
 

@@ -7,6 +7,7 @@ import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink,
 import { Desk, pageKeys } from '../lib/shell.js';
 import { ShareButton } from '../lib/share.js';
 import { Brief, BriefMeta } from './brief.js';
+import { ReleasePlan, ReleaseLine } from '../lib/release.js';
 
 // ------------------------------------------------------------------ list
 const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days']];
@@ -47,7 +48,8 @@ export function TicketsPage({ route }) {
   const all = (res.data && res.data.tickets) || [];
   const shown = useMemo(() => filterTickets(all, p), [all, p.q, p.status, p.repo, p.alerts, p.since]);
   const cols = [
-    { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}` },
+    { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}
+      ${(t.reminders || []).length ? html`<div><${Chip} icon="release" title=${t.reminders.map((r) => r.text).join(' | ')}>${plural(t.reminders.length, 'reminder')}</${Chip}></div>` : null}` },
     { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || html`<${Hint} t=${t} />`}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
     { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${StatusChips} t=${t} />` : html`<span class="muted">No status</span>`}
       ${(t.repos || []).length ? html`<div class="muted small" style="margin-top:4px;overflow-wrap:anywhere">${t.repos.join(', ')}</div>` : null}` },
@@ -382,7 +384,7 @@ export function TicketPage({ route }) {
   const nb = Object.values(g.repos || {}).reduce((a, e) => a + (e.branches || []).length, 0);
   const tabs = t ? [
     { id: 'overview', label: 'Overview', count: t.findings.filter((i) => !i.archived && !i.review && i.status !== 'superseded' && i.status !== 'done').length || null },
-    { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 },
+    { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 || ((t.release_plan || {}).reminders || []).some((r) => r.severity === 'alert') },
     { id: 'dbflow', label: 'DB flow', count: t.dbflow.markdown ? null : 0 },
     { id: 'requests', label: 'Requests', count: t.requests.steps.length },
     { id: 'queries', label: 'Queries', count: t.queries.filter((q) => q.sent !== false).length },
@@ -405,6 +407,7 @@ export function TicketPage({ route }) {
         <h1 id="page-title" tabindex="-1"><span class="tk-key">${t.key}</span>${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
         ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
         <${BriefMeta} t=${t} />
+        <${ReleaseLine} plan=${t.release_plan} href=${tabHref('branches')} onOpen=${() => jump('branches', 'release-plan')} />
         <div class="chips">
           ${(t.repos || []).length > 1 ? html`<${Chip} icon="branch" title=${'Repos ' + t.repos.join(', ')}>+${plural(t.repos.length - 1, 'repo')}</${Chip}>` : null}
           ${(t.branches || []).length > 1 ? html`<${Chip} title=${t.branches.slice(1).join(', ')}>+${plural(t.branches.length - 1, 'branch', 'branches')}</${Chip}>` : null}
@@ -422,7 +425,7 @@ export function TicketPage({ route }) {
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
         ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
-        ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
+        ${tab === 'branches' ? html`<${ReleasePlan} plan=${t.release_plan} brief=${t.release_brief} k=${t.key} /><${GitTab} g=${t.git} />` : null}
         ${t.epic && (tab === 'dbflow' || tab === 'requests' || tab === 'queries') ? html`<${Empty} title=${t.epic_note} icon="info">Open a child ticket from the Overview for its DB flow, requests and queries.</${Empty}>` : null}
         ${tab === 'dbflow' && !t.epic ? html`<${DbFlow} df=${t.dbflow} />` : null}
         ${tab === 'requests' && !t.epic ? html`<${Requests} rq=${t.requests} />` : null}

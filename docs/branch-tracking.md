@@ -13,15 +13,16 @@ Everything here comes from git and your Git host's own CLI. There are no model c
 
 ## Strategies
 
-A strategy says where branches start, where their PRs go, and which branches the work must reach. Strategies are config, not code. Three come built in:
+A strategy says where branches start, where their PRs go, and which branches the work must reach. Strategies are config, not code. Four come built in:
 
 | Strategy | Steps | Must reach |
 |---|---|---|
 | `release-then-qa` | 1. Branch from `release/*`, PR into that release.<br>2. Branch from `qa`, bring in the release-based branch (merge or cherry-pick), PR into `qa`. | the release branch **and** `qa` |
+| `release-then-qa-sync` | 1. Branch from `release/*`, PR into that release.<br>2. Branch from `qa`, merge the **release branch** into it (a shared QA integration branch), PR into `qa`. | the release branch **and** `qa` |
 | `qa-only` | Branch from `qa`, PR into `qa`. | `qa` |
 | `qa-cherry-pick` | Branch from `qa`, PR into `qa`. Then branch from `uat` and from `staging`, cherry-pick the commits onto each, PR into each. | `qa`, `uat` **and** `staging` |
 
-`release`, `qa`, `uat`, `staging` and `main` are **roles**. Each repo maps its own branch names to the roles, so a project whose qa branch is called `develop-qa` maps `"qa": "develop-qa"`. A pattern role such as `release/*` stands for many branches. The release that counts for a ticket is the target of its PR into a release, else the parent of the ticket branch cut from one. With neither, the check looks at every release branch changed in the last 120 days, plus `main`, and says so.
+`release`, `qa`, `uat`, `staging` and `main` are **roles**. Each repo maps its own branch names to the roles, so a project whose qa branch is called `develop-qa` maps `"qa": "develop-qa"`. A pattern role such as `release/*` stands for many branches. The release that counts for a ticket is the branch [release tracking](releases.md) confirmed for its Jira release (when that is on), else the target of its PR into a release, else the parent of the ticket branch cut from one. With none of these, the check looks at every release branch changed in the last 120 days, plus `main`, and says so. When release tracking says a ticket needs UAT, the UAT branch is checked as one more target.
 
 The config lives under `"branching"` in `<home>/.worklog/config.json`:
 
@@ -49,7 +50,7 @@ The config lives under `"branching"` in `<home>/.worklog/config.json`:
 
 | Key | Meaning |
 |---|---|
-| `strategies` | Your own strategies, merged over the built-in three. A new project or way of working is a config edit. |
+| `strategies` | Your own strategies, merged over the four built-in ones. A new project or way of working is a config edit. |
 | `repos.<repo>` | One entry per watched repo, keyed by the repo folder's name. A watched repo without an entry is still tracked (branches, parents, PRs), but gets no delivery check. |
 | `repos.<repo>.strategy` | The repo's default strategy. |
 | `repos.<repo>.bases` | Role → branch name, pattern, or a list of them. Defaults: `release/*`, `qa`, `uat`, `staging`, and `main` or `master`. A branch that matches a base is never treated as a ticket branch, even when its name carries a ticket key. |

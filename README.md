@@ -8,6 +8,7 @@ Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks reco
 - **ticket notes** with findings, root causes, queries, the APIs you called, saved requests you can replay, a DB-flow map and the files you produced
 - a local **knowledge base** of tables, APIs, integrations and branches
 - **branch tracking** per ticket: its branches and their parents, the PRs, and whether every commit reached every branch your branching strategy requires, with warnings on the ticket page, at session start, while you work and at 20:00 (see [docs/branch-tracking.md](docs/branch-tracking.md))
+- **release tracking** (opt-in): the Jira release each ticket ships in, the release branch to start from and target in each repo it touches, whether its changes reached release, QA and required UAT, UAT reminders, a planning brief at session start and a monthly Releases overview (see [docs/releases.md](docs/releases.md))
 - an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
 - a **dashboard** on `127.0.0.1`: today (with the exact 20:00 message), any past day, tickets, timesheet, the DB map, knowledge, search, team notes and settings, with a command palette, live updates and keyboard shortcuts
 - a read-only **MCP server**, so Claude asks the worklog through 8 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`) instead of reading files; about 140 tokens per session with tool search (see [docs/mcp.md](docs/mcp.md))
@@ -42,9 +43,9 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | `/cg:today [YYYY-MM-DD]` | Time per ticket so far today, plus a preview of tonight's Jira-worklog message (nothing is sent) |
 | `/cg:share <KEY> [sections] [--level team\|public]` | Share picked sections of a ticket with your team as a redacted bundle (preview first; written only when the scan passes); `--notes` lists your team's shared notes. See [docs/sharing.md](docs/sharing.md) |
 | `/cg:ticket <KEY> [--brief] [--export [--mode team\|shareable]]` | Everything recorded for a ticket: summary, root causes, time, saved requests, DB flow, artifacts, branches, file paths; `--brief` writes the ticket's brief now (one model call, none when nothing changed); `--export` saves the whole page as one HTML file |
-| `/cg:branches <KEY>` | The ticket's branches, PRs, delivery check per target and alerts |
+| `/cg:branches <KEY>` | The ticket's release plan, branches, PRs, delivery check per target and alerts; without a key (or with `YYYY-MM`) the monthly release overview |
 | `/cg:check [KEY]` | Fetch the watched repos and refresh branches, PRs and the delivery check now |
-| `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy |
+| `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy; `release-map`, `release-pick`, `release-branch`, `release-repos` and `uat` record release decisions |
 | `/cg:timesheet [week\|month] [date] [csv]` | Hours per ticket by day (week) or by ISO week (month), with leave and holidays; optional CSV |
 | `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
 | `/cg:search <words> [--rebuild]` | Search everything recorded (tickets, findings, queries, requests, branches, PRs, tables, APIs, DB links, daily notes) with filters by type, ticket, repo and date; shows the file to read for each result |
@@ -101,7 +102,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Learn the codebase](docs/learning-guide.md#follow-a-captured-event) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Learn the codebase](docs/learning-guide.md#follow-a-captured-event) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Release tracking](docs/releases.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

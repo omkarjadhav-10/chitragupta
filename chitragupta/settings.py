@@ -31,6 +31,8 @@ def _defaults():
     b = gitcmd.settings(d)
     d["branching"] = dict(d.get("branching") or {}, guard_mode=b["guard_mode"], stale_pr_days=b["stale_pr_days"],
                           fetch=b["fetch"])
+    from . import release
+    d["releases"] = release.settings(d)
     return d
 
 
@@ -41,7 +43,7 @@ def _i(key, label, help_, type_, group, **kw):
 
 
 GROUPS = [("capture", "Capture"), ("worklog", "Daily worklog & Slack"), ("jira", "Jira"), ("database", "Database MCP"),
-          ("branching", "Branches & PRs"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
+          ("branching", "Branches & PRs"), ("releases", "Releases & UAT"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
           ("models", "Models & budget"), ("data", "Data"), ("share", "Team sharing"), ("dashboard", "Dashboard"),
           ("safety", "Locked")]
 
@@ -93,6 +95,30 @@ STATIC = [
        "updates remote-tracking refs.", "bool", "branching"),
     _i("branching.stale_pr_days", "Stale PR after (days)", "An open PR older than this raises an alert.", "int",
        "branching", min=1, max=60),
+    _i("releases.enabled", "Track releases", "Which Jira release each ticket ships in, its release branch per repo, and "
+       "whether the changes reached release, QA and (when required) UAT. Local; the Jira reads use the daily budget.",
+       "bool", "releases", default_value=False, affects="Release plan, monthly Releases page, UAT reminders"),
+    _i("releases.stale_hours", "Refs stale after (hours)", "Older remote branches make a missing change 'unknown', "
+       "never 'missing'.", "int", "releases", min=1, max=336, default_value=24),
+    _i("releases.jira.uat_field", "Jira field: UAT required", "The custom field that says whether a ticket needs UAT, "
+       "for example customfield_10100. Empty: the requirement stays unknown unless you set it per ticket.", "name",
+       "releases", pattern=r"(customfield_\d{1,10})?", pattern_help="Use a custom field id such as customfield_10100, or "
+       "leave it empty.", default_value=""),
+    _i("releases.jira.planned_date_field", "Jira field: planned release date", "Optional custom field with a planned "
+       "date, used when the fix version has no release date.", "name", "releases", pattern=r"(customfield_\d{1,10})?",
+       pattern_help="Use a custom field id such as customfield_10200, or leave it empty.", default_value=""),
+    _i("releases.jira.uat_deployed_statuses", "Jira statuses meaning deployed to UAT", "Only these count as deployment "
+       "evidence (one per line). Empty: deployment stays unverified.", "names", "releases", default_value=[]),
+    _i("releases.jira.uat_accepted_statuses", "Jira statuses meaning UAT accepted", "Only these count as acceptance "
+       "evidence (one per line).", "names", "releases", default_value=[]),
+    _i("releases.jira.scope_refresh_hours", "Re-read my scheduled tickets every (hours)", "One Jira search for the "
+       "monthly overview.", "int", "releases", min=1, max=168, default_value=12),
+    _i("releases.scope.assigned", "My tickets: assigned to me in Jira", "Tickets Jira assigns to you count as yours on "
+       "the Releases page.", "bool", "releases", default_value=True),
+    _i("releases.scope.branches", "My tickets: my development branches", "A branch named for the ticket with my "
+       "commits. A shared integration PR alone never counts.", "bool", "releases", default_value=True),
+    _i("releases.scope.worked", "My tickets: worked on in Claude Code", "Tickets with recorded Claude Code work count "
+       "as yours.", "bool", "releases", default_value=True),
     _i("requests.enabled", "Requests", "Curate the API calls you make into Bruno requests per ticket. Off: nothing is "
        "curated or written to the Bruno folder.", "bool", "artifacts", default_value=True),
     _i("artifacts.enabled", "Artifacts", "Copy files that name a ticket into its folder. Off: they wait until it's on "
@@ -288,6 +314,8 @@ def check(it, value, current):
     if t == "name":
         if not isinstance(value, str) or len(value) > 80 or any(ord(c) < 32 for c in value):
             return "Use one line of at most 80 characters."
+        if it.get("pattern") and not re.fullmatch(it["pattern"], value):
+            return it.get("pattern_help") or "That value isn't allowed here."
         return None
     if t == "share_targets":
         from .safety import commands, paths as sp

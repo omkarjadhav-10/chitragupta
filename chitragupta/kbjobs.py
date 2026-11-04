@@ -93,6 +93,9 @@ class KBJobs:
             return mcpjobs.budget_left(self.a.health, self.cfg, today)
         if mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.cards") and left() > EVENING_RESERVE:
             self._job("jira", lambda: self.jira_cards(today, limit=min(2, left() - EVENING_RESERVE)))
+        from . import release
+        if mcpjobs.enabled(self.cfg, "jira") and release.enabled(self.cfg) and left() > EVENING_RESERVE:
+            self._job("jira", lambda: self.release_jobs(st, limit=min(2, left() - EVENING_RESERVE)))
         if mcpjobs.enabled(self.cfg, "database") and mcpjobs.server_name(self.cfg, "database") \
                 and mcpjobs.database_conn(self.cfg):  # each job re-checks: one failure stops the rest of the tick
             if left() > EVENING_RESERVE:
@@ -161,6 +164,55 @@ class KBJobs:
         elif card.get("found") is False and self.h.get("jira_auth_ok"):
             tk["jira_missing"] = rec.get("fetched_at")  # a look-alike key: reading works, but Jira has no such issue
         self.a.store.touch_ticket(t)
+
+    # ------------------------------------------------------------------ release tracking (Jira)
+    def release_projects(self):
+        """Jira projects whose versions catalog release tracking needs: those of tickets with a fix version (cards and
+        the scope search)."""
+        from . import release
+        out = set()
+        for v in ((common.read_json(release.scope_path(), {}) or {}).get("issues") or {}).values():
+            for x in v.get("versions") or []:
+                out.add(x.get("project"))
+        jdir = common.hp("data", "jira")
+        for fn in sorted(os.listdir(jdir)) if os.path.isdir(jdir) else []:
+            if fn.endswith(".json") and not fn.startswith("_"):
+                for x in release.jira_facts(fn[:-5], self.cfg).get("versions") or []:
+                    out.add(x.get("project"))
+        return sorted(p for p in out if p)
+
+    def release_jobs(self, st, limit=2):
+        """At most `limit` read-only Jira jobs: the scope search when it's due (releases.jira.scope_refresh_hours),
+        then versions catalogs older than releases.jira.versions_refresh_hours. -> jobs run."""
+        from . import release
+        j = release.settings(self.cfg)["jira"]
+        now = common.now()
+        n = 0
+        sc = common.read_json(release.scope_path(), {}) or {}
+        last = common.parse_ts(max(sc.get("failed_at") or "", sc.get("fetched_at") or "") or None)
+        if j.get("scope_jql") and (not last or (now - last).total_seconds() >= float(j["scope_refresh_hours"]) * 3600):
+            try:
+                mcpjobs.jira_release_scope(self.cfg, self.a.health)
+                n += 1
+            except mcpjobs.JobError as ex:
+                self._skipped("jira", ex)
+                return n
+        every = float(j.get("versions_refresh_hours") or 24) * 3600
+        for p in self.release_projects():
+            if n >= limit:
+                break
+            cat = release.catalog(p)
+            t = common.parse_ts(max(cat.get("failed_at") or "", cat.get("fetched_at") or "") or None)
+            if t and (now - t).total_seconds() < every:
+                continue
+            try:
+                mcpjobs.jira_versions(p, self.cfg, self.a.health)
+                n += 1
+            except mcpjobs.JobError as ex:
+                self._skipped("jira", ex)
+                break
+        st["release_jobs_at"] = common.now_iso()
+        return n
 
     # ------------------------------------------------------------------ database-MCP schema cards
     def flow_tables(self, tk):

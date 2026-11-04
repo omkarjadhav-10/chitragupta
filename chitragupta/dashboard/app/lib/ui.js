@@ -46,6 +46,7 @@ const P = {
   alert: '<path d="M12 6.5v7M12 17.5v.5"/>',
   file: '<path d="M6 3.5h8l4 4V20.5H6z"/><path d="M14 3.5v4h4"/>',
   day: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/>',
+  release: '<path d="M6 21V4"/><path d="M6 4.5h11.5l-2.5 4 2.5 4H6"/>',
 };
 export function Icon({ name, size, label }) {
   const s = size || 18;

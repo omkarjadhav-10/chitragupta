@@ -649,6 +649,10 @@ def _render_ticket_all(store, t):
         fix += ["", "Commits:"] + ["- %s %s %s %s _(%s)_" % (c.get("date", "")[:10], c.get("repo_name"), code(c.get("short")), c.get("subject"), c.get("ref"))
                                    for c in sorted(tk["commits"].values(), key=lambda c: c.get("date", ""), reverse=True)]
     sec("Fix / changes", fix if any(x.strip() for x in fix) else None)
+    from . import release
+    rp = release.brief_lines(tk, t, relative=False)
+    if rp:
+        sec("Release plan", ["- " + x.strip() if not x.startswith("  ") else "  - " + x.strip() for x in rp[1:]])
     gs = git_section(tk)
     if gs:
         sec("Branches & PRs", gs + ["", "_All branches: [knowledge/branches.md](../../knowledge/branches.md)_"])
@@ -1263,6 +1267,8 @@ def render_context(store, t):
     st = delivery_stage(tk)
     if st:
         L.append("%s: %s." % (stage_label(st), st["text"]))
+    from . import release
+    L += release.brief_lines(tk, t, relative=False)
     v = brief_view(tk, t)
     L += brief_context_lines(v)
     if v.get("epic"):

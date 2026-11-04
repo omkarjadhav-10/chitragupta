@@ -8,6 +8,7 @@ import { Icon, Toasts, Dialog, themeMode } from './lib/ui.js';
 import { NAV, NAV_END, paletteOpen, keysOpen, morePagesOpen, pageKeys, setTheme, Desk } from './lib/shell.js';
 import { TodayPage } from './pages/today.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
+import { ReleasesPage } from './pages/releases.js';
 import { TimesheetPage } from './pages/timesheet.js';
 import { KnowledgePage } from './pages/knowledge.js';
 import { DbPage } from './pages/db.js';
@@ -140,7 +141,7 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
+  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
   ['g then h', 'Health'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
@@ -209,6 +210,7 @@ function Page() {
     case 'today': return html`<${TodayPage} route=${r} />`;
     case 'day': return html`<${TodayPage} route=${r} />`;
     case 'tickets': return r.arg ? html`<${TicketPage} key=${'t-' + r.arg} route=${r} />` : html`<${TicketsPage} route=${r} />`;
+    case 'releases': return html`<${ReleasesPage} route=${r} />`;
     case 'timesheet': return html`<${TimesheetPage} route=${r} />`;
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
     case 'db': return html`<${DbPage} route=${r} />`;

@@ -71,16 +71,19 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "period": _s(enum=PERIODS), "from": _s(_DATE), "to": _s(_DATE), "page": _PAGE}, "required": ["period"]}},
     {"name": "get_branch_status",
-     "description": "A ticket's branches, PRs, delivery to each target branch, and alerts.",
+     "description": "A ticket's release plan (release branch per repo, release/QA/UAT state, next step), branches, PRs, "
+                    "delivery per target, alerts.",
      "inputSchema": {"type": "object", "properties": {"key": _s(), "repo": _s(), "page": _PAGE}, "required": ["key"]}},
     {"name": "get_db_table",
      "description": "A database table from the knowledge base: columns, links, code that writes it, tickets, queries.",
      "inputSchema": {"type": "object", "properties": {"name": _s("table or schema.table"), "page": _PAGE},
                      "required": ["name"]}},
     {"name": "list_tickets",
-     "description": "Known tickets, newest activity first, one line each.",
+     "description": "Known tickets, newest activity first. `release` (YYYY-MM or this-month): my tickets scheduled "
+                    "that month, with release/QA/UAT state.",
      "inputSchema": {"type": "object", "properties": {
-         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "page": _PAGE}}},
+         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "release": _s(),
+         "page": _PAGE}}},
     {"name": "get_alerts",
      "description": "What needs attention: branch/PR delivery alerts and worklog health warnings.",
      "inputSchema": {"type": "object", "properties": {"page": _PAGE}}},
@@ -471,6 +474,14 @@ def tool_get_ticket(args, cfg):
 
 def tool_list_tickets(args, cfg):
     from .dashboard import api
+    rel = _arg(args, "release")
+    if rel:
+        from . import release
+        m = None if rel.strip().lower() in ("this-month", "this month", "month", "now") else rel.strip()
+        try:
+            return "\n".join(release.overview_lines(release.month_overview(m, cfg)))
+        except ValueError as e:
+            raise ToolError(str(e))
     q, status, repo = _arg(args, "q"), _arg(args, "status"), _arg(args, "repo")
     since = parse_date(_arg(args, "since"), cfg, "since") if _arg(args, "since") else None
     ts = api.tickets(q)["tickets"]
@@ -696,6 +707,12 @@ def tool_get_alerts(args, cfg):
                 L += ["", "## Branches and PRs"]
             n += 1
             L.append("- %s · %s%s" % (t["key"], _one(a["text"], 240), " (%s)" % a["repo"] if a.get("repo") else ""))
+    rem = []
+    for t in api.tickets()["tickets"]:
+        for r in t.get("reminders") or []:
+            rem.append("- %s · %s" % (t["key"], _one(r["text"], 240)))
+    if rem:
+        L += ["", "## Release and UAT reminders"] + rem
     h = api.read_json_cached(common.wl("health.json")) or {}
     warn = []
     if os.path.exists(common.wl("PAUSED")):

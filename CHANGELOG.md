@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Release tracking (`releases.enabled`, off by default; [docs/releases.md](docs/releases.md)): each ticket's Jira release (fix version identity, planned date, the date in its name kept as a separate fact) resolved per repository to a release branch (your mapping, an unambiguous structured link, else suggestions to confirm) with source, confidence and verification time recorded. Ambiguous fix versions and unconfirmed branches stay visible and never yield a development base.
+- Per affected repository: development branches and their recorded start, PRs per destination (follow-up, closed and superseded PRs kept; a shared QA integration PR linked to every ticket whose commits it carries), release / QA / UAT stages from the delivery check's evidence (present, partial, missing, unknown, not started, not applicable), wrong-base and wrong-target flags, a moved release kept in history with old targets flagged, and one next step following the repository's strategy.
+- UAT as `required` / `not_required` / `unknown` from a configured Jira field or label or your choice; the UAT destination and promotion path per repository; branch inclusion, deployment and acceptance tracked separately (deployment and acceptance only from configured Jira statuses). Reminders are recomputed from evidence every tick and never cleared by being shown.
+- A planning brief per repository in the session context (with the cached context's age), `/cg:branches <KEY>` and `get_branch_status`; the monthly release overview through `/cg:branches [YYYY-MM]`, `list_tickets(release=...)` and the dashboard's Releases page, with overdue and unresolved-date groups and per-repo detail. Release and UAT reminders also appear in `get_alerts`.
+- Dashboard: a **Releases** page (`#/releases?month=YYYY-MM`) and, on a ticket, a *Release:* line in the header and a **Release plan** section at the top of Branches & PRs; a reminder count on the ticket list. Shareable exports drop the release plan's PR links like the other PR links.
+- Built-in strategy `release-then-qa-sync`: a QA integration branch cut from `qa` merges the release branch, then PRs into `qa`.
+- `/cg:branch release-map|release-unmap|release-pick|release-branch|release-repos|uat`, applied through `inbox.md`; a *Releases & UAT* group on the Settings page.
+- Jira: the card job also reads fix versions, assignee and the configured release / UAT fields (same call); two budgeted read-only jobs read the scope search for the monthly overview and each project's versions catalog (`jira_get_project_versions`, added to the Jira read allowlist).
+
+### Changed
+- The delivery check uses the release branch confirmed for the ticket's Jira release as its release target when release tracking is on, and checks the UAT branch when UAT is required.
+- The branch guard also warns when a new ticket branch is cut from, or a PR targets, another release branch than the one confirmed for the ticket's Jira release.
+
 ## [0.5.1] - 2026-10-25
 
 ### Added

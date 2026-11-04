@@ -43,13 +43,20 @@ def strategy_for(cfg, r, key, tk):
 
 # --------------------------------------------------------------------------- targets
 
-def resolve_targets(r, strat, branches, prs):
+def resolve_targets(r, strat, branches, prs, pins=None):
     """[{role, name, refs, how}] for the strategy's targets. For a pattern role (release/*) the release that counts is
-    the PR's target, else the parent of the ticket branch cut from it; with neither, every recent release branch
-    (and main) is checked and the column says so."""
+    the branch release tracking resolved for the ticket's Jira release (`pins`, verified against the refs), else the
+    PR's target, else the parent of the ticket branch cut from it; with neither, every recent release branch (and
+    main) is checked and the column says so. A UAT branch release tracking requires is added as one more target."""
     bases = r.conf["bases"]
+    pins = pins or {}
     out = []
     for role in strat["targets"]:
+        if role == "release" and pins.get("release"):
+            ref = r.ref_for(pins["release"])
+            out.append({"role": role, "name": pins["release"], "refs": [ref] if ref else [], "pinned": True,
+                        "how": "the Jira release's branch" if ref else "release branch %s not found" % pins["release"]})
+            continue
         if not gt.is_pattern_role(bases, role):
             refs = r.base_refs(role)
             out.append({"role": role, "name": (r.remote_name(refs[0]) or refs[0]) if refs else role, "refs": refs[:1],
@@ -73,7 +80,16 @@ def resolve_targets(r, strat, branches, prs):
         refs = r.base_refs(role) + r.base_refs("main")
         out.append({"role": role, "name": "any %s" % role, "refs": refs, "any": True,
                     "how": "no %s branch linked yet: checked every recent %s branch and main" % (role, role)})
+    if pins.get("uat") and "uat" not in strat["targets"]:
+        ref = r.ref_for(pins["uat"])
+        out.append({"role": "uat", "name": pins["uat"], "refs": [ref] if ref else [], "extra": True,
+                    "how": "UAT required (release tracking)" if ref else "UAT branch %s not found" % pins["uat"]})
     return out
+
+
+def pins_for(tk, repo):
+    """{release, uat}: the branches release tracking pinned for this repo (release.resolve), or {}."""
+    return (((tk or {}).get("release") or {}).get("pins") or {}).get(repo) or {}
 
 
 # --------------------------------------------------------------------------- rows
@@ -356,6 +372,7 @@ def compute(r, key, tk, cfg, now=None):
             "prs": [p["number"] for p in prs if p.get("source") == b["branch"]], "unpushed": b.get("unpushed") or 0,
             "ahead": b.get("ahead"), "behind": b.get("behind"), "last_commit": b.get("last_commit"),
             "local": b.get("local"), "on_remote": b.get("on_remote"), "own": len(b.get("own") or []),
+            "mine": sum(1 for c in b.get("own") or [] if c.get("mine", True)),
             "commits": [{"sha": c["sha"][:9], "subject": c["subject"], "date": c["date"]} for c in (b.get("own") or [])[:40]]})
     for p in prs:
         out["prs"].append({k: p.get(k) for k in ("number", "title", "source", "target", "state", "review", "created_at",
@@ -365,14 +382,15 @@ def compute(r, key, tk, cfg, now=None):
         return out
     excluded = {x["branch"] for x in out["branches"] if x["status"] == "abandoned" or x["suggested"]}
     counted = [b for b in branches if b["branch"] not in excluded]
-    targets = resolve_targets(r, strat, counted or branches, prs)
+    targets = resolve_targets(r, strat, counted or branches, prs, pins_for(tk, r.name))
     rows = rows_for(r, key, counted, cfg)
     ck = Checker(r, key, rows, prs, branches, cfg)
     ck.all_refs = sorted({ref for t in targets for ref in t["refs"]})
     for row in rows:
         row["cells"] = {t["role"]: ck.cell(row, t) if t["refs"] else {"s": "missing", "why": t["how"]} for t in targets}
         explain_with_relations(row, targets, out["relations"])
-    out["targets"] = [{k: t.get(k) for k in ("role", "name", "how", "any")} for t in targets]
+    out["targets"] = [dict({k: t.get(k) for k in ("role", "name", "how", "any")},
+                           **{k: True for k in ("pinned", "extra") if t.get(k)}) for t in targets]
     out["rows"] = [{"id": x["id"][:12], "shas": [s_[:9] for s_ in x["shas"]], "loose": [s_[:9] for s_ in x.get("loose") or []],
                     "subject": x["subject"], "date": x["date"], "branches": x["branches"], "cells": x["cells"]} for x in rows]
     out["alerts"] = alerts(r, key, out, strat, branches, counted, rows, prs, targets, s, now)
@@ -502,7 +520,8 @@ def sig_of(r, key, tk, cfg):
                  for p in r.data.prs.values() if p.get("source") in names)
     bases = sorted((ref, r.sha(ref)) for ref in r.all_base_refs())
     blob = json.dumps([branches, prs, bases, tk.get("git_override"), (tk.get("jira") or {}).get("parent"),
-                       r.data.meta.get("manual"), gt.settings(cfg), r.conf, gt.ALGO], sort_keys=True, default=str)
+                       r.data.meta.get("manual"), gt.settings(cfg), r.conf, gt.ALGO]
+                      + ([pins_for(tk, r.name)] if pins_for(tk, r.name) else []), sort_keys=True, default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 

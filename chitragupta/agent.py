@@ -21,6 +21,7 @@ from . import common  # noqa: E402
 from . import configstore  # noqa: E402
 from . import delivery  # noqa: E402
 from . import gittrack  # noqa: E402
+from . import release  # noqa: E402
 from . import extract  # noqa: E402
 from . import features as featmod  # noqa: E402
 from . import gitsync  # noqa: E402
@@ -866,6 +867,8 @@ class Agent:
         for n in sources.scan_inbox(cfg, st):
             if self.handle_branch_directive(n):
                 continue  # branch-link: / branch-unlink: / branch-abandon: / branch-restore: / strategy: lines
+            if self.handle_release_directive(n):
+                continue  # release-map: / release-unmap: / release-pick: / release-branch: / release-repos: / uat: lines
             if self.jwl.handle_inbox(n):
                 continue  # time: / leave: / half-day: / holiday: / workday: / resend: lines (jira worklog)
             rd = offticket.parse_directive(n["text"]) if n.get("ticket") else None
@@ -915,6 +918,19 @@ class Agent:
         self.store.branches_dirty = True
         return True
 
+    def handle_release_directive(self, n):
+        from . import release
+        d = release.parse_directive(n.get("text") or "")
+        if not d:
+            return False
+        ok, msg, cfg_changed = release.apply_directive(d, self.store, self.cfg, n.get("ts"))
+        common.log("agent", "inbox release directive: %s (%s)" % (msg, "ok" if ok else "ignored"))
+        if cfg_changed:
+            self.cfg_dirty = True  # saved at the end of the tick through the config write path (backup, history)
+        if d.get("ticket"):
+            self.git_force.add(d["ticket"])  # a mapping change reaches every ticket: each is re-resolved every tick
+        return True
+
     def run_branches(self):
         cfg, st = self.cfg, self.state
         since_map = st.setdefault("branch_activity_since", {})
@@ -958,7 +974,12 @@ class Agent:
             for b, rec in r.data.branches.items():
                 if rec.get("ticket"):
                     linked.setdefault(rec["ticket"], set()).add((name, b))
-        for t in sorted(set(linked) & (recent | tr.changed_tickets | self.git_force) | (self.git_force & set(linked))):
+        due = set(linked) & (recent | tr.changed_tickets | self.git_force) | (self.git_force & set(linked))
+        rel_keys = set()
+        if release.enabled(cfg):  # release tracking: resolve each ticket's release branch first, so the check uses it
+            rel_keys = release.candidates(self.store, cfg) | due | self.git_force
+            due |= release.refresh(self.store, rx, cfg, rel_keys, phase="resolve") & set(linked)
+        for t in sorted(due):
             tk = self.store.ticket(t)
             for name, b in sorted(linked[t]):
                 tk["branches"] = storemod._union(tk.get("branches"), [b])
@@ -969,6 +990,8 @@ class Agent:
                 today = common.workday(common.now(), cfg)
                 if t in (self.store.day(today).get("tickets") or {}):
                     self.store.touch_day(today)  # the daily file's "Branches & PRs" line
+        if rel_keys:
+            release.refresh(self.store, rx, cfg, rel_keys, phase="evaluate")
         self.git_force = set()
 
     def _branch_event(self, ts, rec):
@@ -1359,8 +1382,12 @@ def cmd_branch_check(key=None, wait_s=None):
         else:
             recent = tr.active_tickets(14)
             tickets = sorted({b.get("ticket") for r in rx.values() for b in r.data.branches.values()} & recent - {None})
+        if release.enabled(cfg):
+            release.refresh(agent.store, rx, cfg, tickets, phase="resolve")
         for t in tickets:
             delivery.update_ticket(agent.store, t, rx, cfg, force=True)
+        if release.enabled(cfg):
+            release.refresh(agent.store, rx, cfg, tickets, phase="evaluate")
         agent.store.branches_dirty = True
         agent.store.save()
         render.render_all(agent.store, cfg, agent.health, days=set(), tickets=set(t for t in tickets if t in agent.store.tickets))
