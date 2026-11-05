@@ -376,6 +376,7 @@ class PathGuardTests(SafetyCase):
         self.assertBlocked(lambda: paths.replace(os.path.join(self.repo, "a.txt"), os.path.join(h, "a.txt")), "path")
         self.assertTrue(os.path.isfile(os.path.join(self.repo, "a.txt")))
 
+    @unittest.skipUnless(os.name == "nt", "directory junctions are a Windows feature")
     def test_junction_out_of_the_data_home(self):
         import _winapi
         from chitragupta import common
@@ -388,6 +389,7 @@ class PathGuardTests(SafetyCase):
         self.assertBlocked(lambda: paths.write_text(os.path.join(j, "x.txt"), "x"), "path")
         self.assertFalse(os.listdir(outside))
 
+    @unittest.skipUnless(os.name == "nt", "Windows paths are case-insensitive; elsewhere a case variant is another path")
     def test_case_variant_of_an_own_root_is_still_ours(self):
         from chitragupta import common
         from chitragupta.safety import paths

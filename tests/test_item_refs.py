@@ -9,7 +9,7 @@ import json
 import os
 import unittest
 
-from tests.support import PY, Isolated, write_config
+from tests.support import PY, Isolated, local_iso, write_config
 
 DAY = "2026-09-01"
 SID = "abcdef1234567890"
@@ -32,7 +32,7 @@ class Base(Isolated, unittest.TestCase):
 class TurnLineFallback(Base):
     def events(self):
         def ev(hhmm, n, event="user-prompt", **p):
-            return {"ts": "%sT%s:00+05:30" % (DAY, hhmm), "event": event, "payload": p or {"prompt": "why " + hhmm},
+            return {"ts": local_iso(DAY, *map(int, hhmm.split(":"))), "event": event, "payload": p or {"prompt": "why " + hhmm},
                     "_ln": n, "_t": T, "_src": "prompt"}
         return [ev("10:00", 3), ev("10:05", 4, "stop", message="cancel skips release()"),
                 ev("10:30", 9), ev("10:40", 11, "stop", message="the job runs nightly")]

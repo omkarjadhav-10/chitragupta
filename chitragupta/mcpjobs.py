@@ -127,7 +127,7 @@ def budget_left(health, cfg, day):
     return min(budget - int(calls.get(day) or 0), budget - int((m.get("empty") or {}).get(day) or 0))
 
 
-_SAVED = re.compile(r"(?:saved to:?)\s+([A-Za-z]:[\\/][^\r\n]*?\.(?:txt|json))", re.I)
+_SAVED = re.compile(r"(?:saved to:?)\s+((?:[A-Za-z]:[\\/]|/)[^\r\n]*?\.(?:txt|json))", re.I)  # Windows or POSIX path
 
 
 def _persisted(content):

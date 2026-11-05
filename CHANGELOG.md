@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - The delivery check uses the release branch confirmed for the ticket's Jira release as its release target when release tracking is on, and checks the UAT branch when UAT is required.
 - The branch guard also warns when a new ticket branch is cut from, or a PR targets, another release branch than the one confirmed for the ticket's Jira release.
 
+### Fixed
+- MCP jobs on macOS and Linux read a large tool result that Claude Code saved to a file (a POSIX path); only Windows drive paths were recognised before.
+- Tests no longer assume the machine's clock is UTC+05:30 (fixtures use the local timezone), and the Windows-only path-guard tests are skipped elsewhere, so CI passes on its UTC runners.
+
 ## [0.5.1] - 2026-10-25
 
 ### Added

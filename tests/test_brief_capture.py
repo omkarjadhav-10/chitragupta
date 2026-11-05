@@ -57,7 +57,8 @@ class ExtractSchema(Isolated, unittest.TestCase):
 
     def test_digest_lines_carry_their_raw_line(self):
         from chitragupta import extract
-        ev = {"ts": "2026-09-01T10:00:00+05:30", "event": "user-prompt", "payload": {"prompt": "why does cancel fail"},
+        from tests.support import local_iso
+        ev = {"ts": local_iso("2026-09-01", 10, 0), "event": "user-prompt", "payload": {"prompt": "why does cancel fail"},
               "_ln": 7, "_t": "ABC-1001", "_src": "prompt"}
         d = extract.build_digests([ev], {"session": SID, "day": DAY}, ["ABC-1001"], {})[0]
         self.assertIn("[10:00 L7] PROMPT: why does cancel fail", d)
