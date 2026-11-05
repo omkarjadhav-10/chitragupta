@@ -95,9 +95,26 @@ class SourceError(Exception):
     pass
 
 
+def author_of(src, a):
+    """A PR's author as the host reports it -> {"id", "node_id", "login", "is_bot"}, or None. Only what tells the
+    author apart is kept (no display name, no email). gh's `author.id` is a GraphQL node id, so it goes to node_id;
+    REST and GitLab ids are numeric ids; Azure DevOps has an id (GUID) and a uniqueName (the sign-in name)."""
+    if not isinstance(a, dict):
+        return None
+    if src == "gh":
+        out = {"id": "", "node_id": str(a.get("id") or ""), "login": str(a.get("login") or ""), "is_bot": bool(a.get("is_bot"))}
+    elif src in ("az", "mcp:azure-devops"):
+        out = {"id": str(a.get("id") or ""), "node_id": "", "login": str(a.get("uniqueName") or ""), "is_bot": False}
+    else:  # glab, GitHub REST (mcp:github)
+        out = {"id": str(a.get("id") or ""), "node_id": str(a.get("node_id") or ""),
+               "login": str(a.get("username") or a.get("login") or ""),
+               "is_bot": bool(a.get("bot")) or str(a.get("type") or "").lower() == "bot"}
+    return out if (out["id"] or out["node_id"] or out["login"]) else None
+
+
 # --------------------------------------------------------------------------- GitHub (gh)
 
-GH_FIELDS = "number,title,state,baseRefName,headRefName,headRefOid,mergedAt,mergeCommit,isDraft,reviewDecision,url,createdAt"
+GH_FIELDS = "number,title,state,baseRefName,headRefName,headRefOid,mergedAt,mergeCommit,isDraft,reviewDecision,url,createdAt,author"
 
 
 def gh_prs(cfg, info, branch, run=_run):
@@ -107,6 +124,10 @@ def gh_prs(cfg, info, branch, run=_run):
                       "--limit", "20" if branch is not None else "1000", "--json", GH_FIELDS])
     if rc != 0:
         raise SourceError("gh: " + (se or so).strip()[:200])
+    return _gh_rows(so)
+
+
+def _gh_rows(so):
     out = []
     for p in json.loads(so or "[]"):
         st = (p.get("state") or "").upper()
@@ -116,7 +137,7 @@ def gh_prs(cfg, info, branch, run=_run):
                     "target": p.get("baseRefName"), "state": state, "review": rd, "created_at": p.get("createdAt"),
                     "merged_at": p.get("mergedAt"), "merge_commit": (p.get("mergeCommit") or {}).get("oid"),
                     "head": p.get("headRefOid"), "head_at_merge": p.get("headRefOid") if state == "merged" else None,
-                    "url": p.get("url"), "src": "gh"})
+                    "url": p.get("url"), "src": "gh", "author": author_of("gh", p.get("author"))})
     return out
 
 
@@ -129,6 +150,10 @@ def glab_prs(cfg, info, branch, run=_run):
                       "--output", "json"])
     if rc != 0:
         raise SourceError("glab: " + (se or so).strip()[:200])
+    return _glab_rows(so)
+
+
+def _glab_rows(so):
     out = []
     for p in json.loads(so or "[]"):
         st = (p.get("state") or "").lower()
@@ -139,7 +164,7 @@ def glab_prs(cfg, info, branch, run=_run):
                     "merged_at": p.get("merged_at"),
                     "merge_commit": p.get("merge_commit_sha") or p.get("squash_commit_sha"),
                     "head": p.get("sha"), "head_at_merge": p.get("sha") if state == "merged" else None,
-                    "url": p.get("web_url"), "src": "glab"})
+                    "url": p.get("web_url"), "src": "glab", "author": author_of("glab", p.get("author"))})
     return out
 
 
@@ -159,6 +184,10 @@ def az_prs(cfg, info, branch, run=_run):
                       "--detect", "false", "--output", "json"], timeout=90)
     if rc != 0:
         raise SourceError("az: " + (se or so).strip()[:200])
+    return _az_rows(so, org, info)
+
+
+def _az_rows(so, org, info):
     out = []
     for p in json.loads(so or "[]"):
         st = (p.get("status") or "").lower()
@@ -173,7 +202,7 @@ def az_prs(cfg, info, branch, run=_run):
                     "head": (p.get("lastMergeSourceCommit") or {}).get("commitId"),
                     "head_at_merge": (p.get("lastMergeSourceCommit") or {}).get("commitId") if state == "merged" else None,
                     "url": "%s/%s/_git/%s/pullrequest/%s" % (org, quote(info["project"]), quote(info["repo"]), n),
-                    "src": "az"})
+                    "src": "az", "author": author_of("az", p.get("createdBy"))})
     return out
 
 
@@ -198,6 +227,55 @@ def prs_for_repo(cfg, info, source, run=_run):
     if len(rows) >= limit:
         raise SourceError("%s: repository PR list reached %d rows; previous PR checks retained" % (source,limit))
     return rows
+
+
+# --------------------------------------------------------------------------- your own PRs (personal progress)
+
+AUTHORED_LIMIT = 200  # one bounded list per repository; a full page means "partial", never "complete"
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def authored_prs(cfg, info, source, account, since, run=_run):
+    """The PRs `account` (your confirmed account on this host) authored, asked of the host itself: gh `--author
+    <login>` with `updated:<since>..*`, glab `--author <username>`, az `--creator <id | sign-in name>`. Callers still
+    recheck each author. -> (rows, capped). Raises SourceError; ValueError when the account lacks what the CLI needs."""
+    login, aid = str(account.get("login") or ""), str(account.get("id") or "")
+    if since and not _DAY.match(since):
+        raise ValueError("since must be YYYY-MM-DD")
+    if source == "gh":
+        if not login or not SAFE_ARG.match(login):
+            raise ValueError("gh filters by login: confirm your GitHub login in the profile")
+        rc, so, se = run([cli_path(cfg, "gh"), "pr", "list", "--repo", info["path"], "--author", login, "--state", "all",
+                          "--limit", str(AUTHORED_LIMIT)] + (["--search", "updated:%s..*" % since] if since else []) +
+                         ["--json", GH_FIELDS])
+        if rc != 0:
+            raise SourceError("gh: " + (se or so).strip()[:200])
+        rows = _gh_rows(so)
+        return rows, len(rows) >= AUTHORED_LIMIT
+    if source == "glab":
+        if not login or not SAFE_ARG.match(login):
+            raise ValueError("glab filters by username: confirm your GitLab username in the profile")
+        rc, so, se = run([cli_path(cfg, "glab"), "mr", "list", "--repo", info["path"], "--author", login, "--all",
+                          "--per-page", "100", "--output", "json"])
+        if rc != 0:
+            raise SourceError("glab: " + (se or so).strip()[:200])
+        rows = _glab_rows(so)
+        return rows, len(rows) >= 100
+    if source == "az":
+        who = aid or login
+        if not who or not SAFE_ARG.match(who):
+            raise ValueError("az filters by creator: confirm your Azure DevOps id or sign-in name in the profile")
+        if not all(SAFE_NAME.match(info.get(k) or "") for k in ("org", "project", "repo")):
+            raise SourceError("az: unexpected characters in the org / project / repo name")
+        org = "https://dev.azure.com/" + info["org"]
+        rc, so, se = run([cli_path(cfg, "az"), "repos", "pr", "list", "--org", org, "--project", info["project"],
+                          "--repository", info["repo"], "--creator", who, "--status", "all", "--top",
+                          str(AUTHORED_LIMIT), "--detect", "false", "--output", "json"], timeout=90)
+        if rc != 0:
+            raise SourceError("az: " + (se or so).strip()[:200])
+        rows = _az_rows(so, org, info)
+        return rows, len(rows) >= AUTHORED_LIMIT
+    raise ValueError("no author-filtered list for %s" % source)
 
 
 # --------------------------------------------------------------------------- merge commits (git only)

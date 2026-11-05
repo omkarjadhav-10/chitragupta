@@ -53,8 +53,15 @@ questions in one call, in compact Markdown with the file paths to open for detai
 `search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: brief, findings, requests,
 queries, dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
 `get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name)` ·
-`list_tickets(q?, status?, repo?, since?, release?)` (`release=YYYY-MM`: my tickets scheduled that month) ·
-`get_alerts()`. Long answers end with "more: page=N" — pass `page`.
+`list_tickets(q?, status?, repo?, since?, release?, mine?)` (`release=YYYY-MM`: my tickets scheduled that month;
+`mine=true`: only tickets that are mine now, each with why) · `get_alerts()` (scoped to my tickets) ·
+`get_progress(period?, date?, include_ids?)` (today / week / month / records / wins: my authored commits, committed
+changes, PRs raised and merged, completed tickets, each known / zero / partial / stale / unknown with why). Long
+answers end with "more: page=N" — pass `page`.
+"Mine" always means the developer profile's confirmed identities (`docs/progress.md` of the plugin): Jira tickets
+assigned to my confirmed account or included by me, commits authored by a confirmed email, PRs authored by my
+confirmed host account. Never decide ownership from a display name, an email domain or a board; pass
+`include_ids=true` only when a query really needs my emails or account ids.
 Use them before reading files; read the files below only for detail they don't show, or when the tools aren't
 available.
 

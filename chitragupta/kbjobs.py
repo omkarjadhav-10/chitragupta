@@ -161,9 +161,17 @@ class KBJobs:
             tk["jira"] = {k: card.get(k) for k in ("type", "status", "priority", "sprint", "parent")}
             tk["jira"]["fetched"] = rec.get("fetched_at")  # its status stays in jira.status; day close keeps status_inferred
             tk.pop("jira_missing", None)
+            self.record_owner(tk, rec)
         elif card.get("found") is False and self.h.get("jira_auth_ok"):
             tk["jira_missing"] = rec.get("fetched_at")  # a look-alike key: reading works, but Jira has no such issue
         self.a.store.touch_ticket(t)
+
+    def record_owner(self, tk, rec):
+        """Ticket ownership from the card's assignee, compared with your confirmed Jira account (profile.Policy):
+        you | other | unassigned, with a history of changes. Only when the card job asked for the assignee; the other
+        person's identity is never kept."""
+        from . import profile
+        profile.owner_from_card(profile.Policy(self.cfg), tk, rec)
 
     # ------------------------------------------------------------------ release tracking (Jira)
     def release_projects(self):

@@ -2,7 +2,7 @@
 // and tonight's Jira entries with a copy button per field.
 import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtMin, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction } from '../lib/core.js';
+import { useApi, fmtMin, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction, notYours } from '../lib/core.js';
 import { Icon, Status, CopyButton, Empty, Load, PageHead, TicketLink, Scroll, Dialog } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 
@@ -154,16 +154,25 @@ function SendHistory({ saved, day }) {
     </table></${Scroll}></details>`;
 }
 
-function Alerts({ tickets }) {
-  const rows = [];
-  (tickets || []).forEach((t) => (t.alerts || []).forEach((a) => rows.push({ key: t.key, a })));
-  if (!rows.length) return html`<p class="muted small" style="margin:0 0 20px"><${Icon} name="ok" size=${15} /> No delivery alerts: every tracked commit is where its branches should be.</p>`;
+function Alerts({ tickets, owners }) {
+  const rows = [], away = new Set();
+  (tickets || []).forEach((t) => (t.alerts || []).forEach((a) => {
+    if (notYours((owners || {})[t.key])) away.add(t.key); else rows.push({ key: t.key, a });
+  }));
+  const left = away.size ? html`<p class="muted small" style="margin:0 0 20px">${plural(away.size, 'ticket')} assigned to someone else in Jira left out (${Array.from(away).slice(0, 4).join(', ')}).</p>` : null;
+  if (!rows.length) return html`<p class="muted small" style="margin:0 0 20px"><${Icon} name="ok" size=${15} /> No delivery alerts: every tracked commit is where its branches should be.</p>${left}`;
   const bad = rows.some((r) => r.a.kind === 'lost' || r.a.kind === 'only-copy');
   return html`<div class=${'alert' + (bad ? ' bad' : '')} role="status"><${Icon} name=${bad ? 'bad' : 'warn'} size=${18} />
     <div class="grow"><strong>${plural(rows.length, 'delivery alert')}</strong>
       <ul>${rows.slice(0, 6).map((r, i) => html`<li key=${i}><${TicketLink} k=${r.key} />: ${r.a.text}${r.a.repo ? html` <span class="muted">(${r.a.repo})</span>` : null}
         · <a href=${'#/tickets/' + encodeURIComponent(r.key) + '?tab=branches'}>Review branches</a></li>`)}
-        ${rows.length > 6 ? html`<li class="muted">and ${rows.length - 6} more on the Tickets page</li>` : null}</ul></div></div>`;
+        ${rows.length > 6 ? html`<li class="muted">and ${rows.length - 6} more on the Tickets page</li>` : null}</ul></div></div>${left}`;
+}
+
+function ownersOf(list) {  // ticket key -> its ownership (profile.Policy, from /api/tickets)
+  const m = {};
+  (list || []).forEach((t) => { m[t.key] = t.ownership; });
+  return m;
 }
 
 function dayAlerts(list) {  // the day's tickets' alerts, in the shape the strip takes
@@ -231,7 +240,7 @@ export function TodayPage({ route }) {
         <p class="sub">${fmtMin(d.total_minutes)} tracked${d.other && d.other.length ? ', ' + fmtMin(d.other.reduce((a, o) => a + o.minutes, 0)) + ' without a ticket' : ''}</p></div>
         <${Lanes} lanes=${lanes} commits=${d.commit_list || []} slots=${slots} entries=${(d.worklog_saved && d.worklog_saved.entries && d.worklog_saved.entries.length ? d.worklog_saved.entries : (d.worklog_preview || {}).entries) || []} isToday=${isToday} /></section>`}
       <div class="day-bottom"><div><${Entries} d=${Object.assign({ is_today: isToday }, d)} onReload=${res.reload} /></div>
-        <aside class="day-margin" aria-label="Day notes">${ticketSummary}<h2>Needs you</h2><${Alerts} tickets=${day ? dayAlerts(d.alerts) : tks.data && tks.data.tickets} /></aside></div>
+        <aside class="day-margin" aria-label="Day notes">${ticketSummary}<h2>Needs you</h2><${Alerts} tickets=${day ? dayAlerts(d.alerts) : tks.data && tks.data.tickets} owners=${ownersOf(tks.data && tks.data.tickets)} /></aside></div>
       <${DayEvents} events=${d.branch_events} />
       ${d.other && d.other.length ? html`<section class="sec" aria-labelledby="sec-other"><div class="sec-head"><h2 id="sec-other">Other work</h2><p class="sub">Repos and branches with no ticket</p></div>
         <ul class="other-list">${d.other.map((o) => html`<li key=${o.group}><span>${o.group}</span><span>${fmtMin(o.minutes)}</span></li>`)}</ul></section>` : null}

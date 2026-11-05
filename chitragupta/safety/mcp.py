@@ -73,7 +73,7 @@ ACTION_KEYS = ("action", "method")
 # mcpserver.TOOL_NAMES) so the guard never imports the server. Session profile only: internal calls never see it.
 OWN_MCP_SERVER = "plugin_cg_chitragupta"
 OWN_MCP_TOOLS = frozenset({"search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table",
-                           "list_tickets", "get_alerts"})
+                           "list_tickets", "get_alerts", "get_progress"})
 # Policy A for another plugin's MCP tools during a /cg: command: denied (a /cg: command only uses Chitragupta's tools),
 # but they're the other plugin's own background calls, not an attempt to write: logged with this category and left
 # out of the violation counts (log.summary).

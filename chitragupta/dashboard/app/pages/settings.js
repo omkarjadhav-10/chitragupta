@@ -14,6 +14,7 @@ const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const PREFIX = /^[A-Z][A-Z0-9]{1,9}$/;
 const BRANCH = /^[A-Za-z0-9*][A-Za-z0-9._\/*-]{0,99}$/;
 const MODEL_ID = /^claude-[a-z0-9][a-z0-9.-]{1,60}$/;
+const EMAIL = /^[^\s@]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const REL = { cut_from: 'is cut from', merges_into: 'merges into', syncs_from: 'syncs from' };
 function words(s) { return String(s || '').split(',').map((x) => x.trim()).filter(Boolean); }
 
@@ -36,6 +37,21 @@ function problem(it, v) {
     case 'paths': return (v || []).every((p) => /^([A-Za-z]:[\\/]|\/)/.test(p)) ? null : 'Use full paths, one per line.';
     case 'envs_narrow': return (v || []).length ? null : 'Keep at least one environment.';
     case 'name': return typeof v === 'string' && v.length <= 80 && !/[\x00-\x1f]/.test(v) ? null : 'Use one line of at most 80 characters.';
+    case 'line': return typeof v === 'string' && v.length <= (it.maxlen || 80) && !/[\x00-\x1f]/.test(v) ? null : 'Use one line of at most ' + (it.maxlen || 80) + ' characters.';
+    case 'longtext': return typeof v === 'string' && v.length <= (it.maxlen || 400) ? null : 'Use at most ' + (it.maxlen || 400) + ' characters.';
+    case 'email': return v === '' || EMAIL.test(v || '') ? null : 'Use an email address such as developer@acme.test, or leave it empty.';
+    case 'emails': {
+      const seen = new Set();
+      for (const e of v || []) {
+        if (!EMAIL.test(e)) return e + " isn't an email address.";
+        if (seen.has(e.toLowerCase())) return e + ' is listed twice.';
+        seen.add(e.toLowerCase());
+      }
+      return (v || []).length <= 20 ? null : 'Use a list of at most 20 email addresses.';
+    }
+    case 'date': return v === '' || /^\d{4}-\d{2}-\d{2}$/.test(v || '') ? null : 'Use a date such as 2026-01-31, or leave it empty.';
+    case 'tags': return (v || []).length <= 20 && (v || []).every((x) => x.length <= 40) ? null : 'Use at most 20 entries of 40 characters.';
+    case 'regexes': case 'globs': return (v || []).every((x) => x.length <= 200) ? null : 'Use one pattern of at most 200 characters per line.';
     case 'share_targets': {
       const names = new Set();
       for (let i = 0; i < (v || []).length; i++) {
@@ -69,6 +85,7 @@ function problem(it, v) {
 function show(v) {
   if (v === null || v === undefined || v === '') return '(not set)';
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
+  if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0].provider) return v.map((a) => a.provider + ' ' + (a.instance || '') + ' ' + (a.login || a.id || '')).join('; ');
   if (Array.isArray(v) && v.length && typeof v[0] === 'object') return v.map((r) => r.from + ' ' + (REL[r.rel] || r.rel) + ' ' + (r.to || []).join(', ')).join('; ');
   if (Array.isArray(v)) return v.length ? v.join(', ') : '(none)';
   if (typeof v === 'object') return Object.keys(v).map((k) => k + ': ' + [].concat(v[k]).join(', ')).join('; ');
@@ -179,8 +196,17 @@ function Control({ it, value, onChange, err }) {
     case 'share_targets': return html`<${ShareTargetsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
     case 'name':
       return html`<input type="text" ...${common} maxlength="80" value=${value || ''} onInput=${(e) => onChange(e.currentTarget.value)} />`;
+    case 'line': case 'email': case 'timezone':
+      return html`<input type=${it.type === 'email' ? 'email' : 'text'} ...${common} maxlength=${it.maxlen || 254} spellcheck="false" value=${value || ''}
+        placeholder=${it.type === 'timezone' ? "this machine's zone" : null} onInput=${(e) => onChange(e.currentTarget.value.trim())} />`;
+    case 'date':
+      return html`<input type="date" ...${common} value=${value || ''} onInput=${(e) => onChange(e.currentTarget.value)} />`;
+    case 'longtext':
+      return html`<textarea ...${common} rows="3" maxlength=${it.maxlen || 400} onInput=${(e) => onChange(e.currentTarget.value)}>${value || ''}</textarea>`;
+    case 'accounts': case 'ticket_reasons':
+      return html`<span>${show(value)} <a href="#/profile">Edit on the Profile page</a></span>`;
     case 'relations': return html`<${RelationsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
-    case 'prefixes': case 'names': case 'paths':
+    case 'prefixes': case 'names': case 'paths': case 'emails': case 'tags': case 'regexes': case 'globs': case 'repo_paths':
       return html`<textarea ...${common} rows=${Math.min(6, Math.max(2, (value || []).length + 1))} spellcheck="false"
         onInput=${(e) => onChange(e.currentTarget.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))}>${(value || []).join('\n')}</textarea>`;
     default:
@@ -192,7 +218,7 @@ function Item({ it, value, onChange, err }) {
   const id = 'set-' + it.key.replace(/[^a-z0-9]/gi, '-');
   const changed = !same(value, it.value);
   return html`<div class=${'setrow' + (changed ? ' changed' : '') + (it.type === 'relations' || it.type === 'share_targets' ? ' stack' : '')}>
-    <div class="setlab"><label for=${['days', 'envs_narrow', 'bases', 'relations', 'share_targets'].indexOf(it.type) >= 0 || !it.editable ? null : id} id=${id + '-lab'}>${it.repo ? cap(it.label.slice(it.repo.length + 2)) : it.label}</label>
+    <div class="setlab"><label for=${['days', 'envs_narrow', 'bases', 'relations', 'share_targets', 'accounts', 'ticket_reasons'].indexOf(it.type) >= 0 || !it.editable ? null : id} id=${id + '-lab'}>${it.repo ? cap(it.label.slice(it.repo.length + 2)) : it.label}</label>
       ${it.help ? html`<p class="muted small" id=${id + '-help'}>${it.help}</p>` : null}
       ${it.available === false ? html`<p class="small"><${Status} kind="off" quiet>Set this up with /cg:setup first</${Status}></p>` : null}
       ${!it.editable ? html`<p class="small muted">Change with /cg:setup.</p>` : null}</div>
@@ -230,6 +256,18 @@ function Appearance() {
       options=${[['system', 'System'], ['reduce', 'Reduce'], ['full', 'Full']]} onChange=${(v) => { appearance.setMotion(v); rerender(); }} /></section>`;
 }
 
+const IDENTITY_KEYS = ['git_author_emails', 'profile.email', 'profile.accounts', 'mcp.jira.account_id'];
+function maskOne(v) {
+  const s = String(v || '');
+  if (!s) return s;
+  if (s.indexOf('@') > 0) { const at = s.indexOf('@'); const dom = s.slice(at + 1); const tld = dom.lastIndexOf('.') > 0 ? dom.slice(dom.lastIndexOf('.')) : ''; const loc = s.slice(0, at); return s[0] + '•••' + (loc.length >= 4 ? loc.slice(-1) : '') + '@' + dom[0] + '•••' + tld; }
+  return s.length > 10 ? s.slice(0, 4) + '•••' + s.slice(-4) : s[0] + '•••';
+}
+function masked(key, v) {
+  if (IDENTITY_KEYS.indexOf(key) < 0 || v == null) return v;
+  if (Array.isArray(v)) return v.map((x) => (x && typeof x === 'object' ? Object.assign({}, x, { id: maskOne(x.id), node_id: undefined }) : maskOne(x)));
+  return maskOne(v);
+}
 function History({ rows, onUndo, busy }) {
   const mine = rows.filter((r) => r.source === 'dashboard' && !r.undo_of && r.kind !== 'action');
   return html`<section class="sec setgroup" id="g-history" aria-labelledby="h-history"><div class="sec-head"><h2 id="h-history">Change history</h2><span class="grow"></span>
@@ -238,7 +276,7 @@ function History({ rows, onUndo, busy }) {
     ${rows.length ? html`<${Scroll} label="Change history"><table><caption class="sr">Recent changes</caption>
       <thead><tr><th scope="col">When</th><th scope="col">By</th><th scope="col">Setting</th><th scope="col">Change</th></tr></thead>
       <tbody>${rows.map((r, i) => html`<tr key=${i}><td class="nowrap">${fmtTs(r.at)}</td><td>${r.undo_of ? 'undo' : r.source}</td>
-        <td class="mono small">${r.key}</td><td>${r.kind === 'action' ? r.new : show(r.old) + ' → ' + show(r.new)}</td></tr>`)}</tbody></table></${Scroll}>`
+        <td class="mono small">${r.key}</td><td>${r.kind === 'action' ? r.new : show(masked(r.key, r.old)) + ' → ' + show(masked(r.key, r.new))}</td></tr>`)}</tbody></table></${Scroll}>`
       : html`<${Empty} title="No changes recorded yet" icon="settings" />`}</section>`;
 }
 
@@ -289,7 +327,11 @@ export function SettingsPage() {
     <${PageHead} title="Settings" sub="Choose how your work is recorded and your daily worklog is prepared." />
     <p class="sr" aria-live="polite">${keys.length ? keys.length + ' unsaved changes' : ''}</p>
     <${Load} res=${res} lines=${12}>${(d) => html`
-      ${d.groups.map((g) => html`<section class="sec setgroup" key=${g.id} id=${'g-' + g.id} aria-labelledby=${'h-' + g.id}>
+      ${d.groups.map((g) => g.id === 'profile' ? html`<section class="sec setgroup" key=${g.id} id=${'g-' + g.id} aria-labelledby=${'h-' + g.id}>
+        <h2 id=${'h-' + g.id} tabindex="-1">${g.label}</h2>
+        <p>Your identity, confirmed emails and accounts, scope, time zone and progress preferences are edited on the
+          <a href="#/profile">Profile page</a>, which shows the effect of a change before saving it and keeps emails and account ids hidden unless you show them.</p></section>`
+        : html`<section class="sec setgroup" key=${g.id} id=${'g-' + g.id} aria-labelledby=${'h-' + g.id}>
         <h2 id=${'h-' + g.id} tabindex="-1">${g.label}</h2>
         ${g.items.filter((it) => !it.repo).map((it) => html`<${Item} key=${it.key} it=${it} value=${it.key in pending ? pending[it.key] : it.value}
           onChange=${(v) => set(it.key, v)} err=${errors[it.key]} />`)}

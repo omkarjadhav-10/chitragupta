@@ -20,20 +20,25 @@ def stash_commit(ref, subject):
 
 
 def scan_commits(cfg, state, since_dt):
-    """My commits in all watched repos since `since_dt`. Dedupe by sha via state['commits_seen']."""
+    """My commits in the profile's repositories since `since_dt`. Dedupe by sha via state['commits_seen'].
+    `--author` narrows git's own walk (a pattern, so it also matches look-alike addresses); every result is then
+    rechecked against the confirmed emails exactly (profile.Policy) before it is kept. No confirmed email: nothing."""
+    from . import profile
     seen = state.setdefault("commits_seen", {})
-    emails = [e for e in cfg.get("git_author_emails") or [] if e]
+    pol = profile.Policy(cfg)
+    emails = sorted(pol.emails)
     if not emails:
         return []
     prefixes = cfg.get("ticket_prefixes") or []
     out = []
-    for repo in cfg.get("watched_repos") or []:
+    for repo in pol.p["repos"]:
         if not os.path.isdir(os.path.join(repo, ".git")) and not os.path.isfile(os.path.join(repo, ".git")):
             continue
         args = ["log", "--exclude=refs/stash", "--all", "--source", "--no-merges",
                 "--since=" + since_dt.isoformat(timespec="seconds"), "--name-status",
-                "--format=" + _SEP_REC + "%H" + _SEP_FLD + "%aI" + _SEP_FLD + "%S" + _SEP_FLD + "%s" + _SEP_FLD + "%b" + _SEP_FLD]
-        args += ["--author=" + re.escape(e) for e in emails]
+                "--format=" + _SEP_REC + "%H" + _SEP_FLD + "%aI" + _SEP_FLD + "%ae" + _SEP_FLD + "%S" + _SEP_FLD + "%s" +
+                _SEP_FLD + "%b" + _SEP_FLD]
+        args += ["--regexp-ignore-case"] + ["--author=" + re.escape(e) for e in emails]
         rc, so, se = gitro.run(cfg, repo, args, timeout=60)
         if rc != 0:
             common.log("agent", "git log failed for %s: %s" % (repo, se.strip()[:300]))
@@ -42,10 +47,11 @@ def scan_commits(cfg, state, since_dt):
             if not rec.strip():
                 continue
             parts = rec.split(_SEP_FLD)
-            if len(parts) < 6:
+            if len(parts) < 7:
                 continue
-            sha, adate, ref, subject, body, files_blob = parts[0].strip(), parts[1], parts[2], parts[3], parts[4], parts[5]
-            if sha in seen or stash_commit(ref, subject):
+            sha, adate, ae, ref, subject, body, files_blob = (parts[0].strip(), parts[1], parts[2].strip().lower(),
+                                                              parts[3], parts[4], parts[5], parts[6])
+            if sha in seen or stash_commit(ref, subject) or not pol.email_mine(ae):
                 continue
             ref = re.sub(r"^refs/(heads|remotes/[^/]+)/", "", ref.strip())
             files = []
@@ -57,7 +63,7 @@ def scan_commits(cfg, state, since_dt):
             ticket = msg_tickets[0] if msg_tickets else common.ticket_from_branch(ref, prefixes)
             out.append({
                 "sha": sha, "short": sha[:8], "repo": repo, "repo_name": os.path.basename(repo.rstrip("/\\")),
-                "date": adate, "ref": ref, "subject": redact(subject.strip())[:200],
+                "date": adate, "ae": ae, "ref": ref, "subject": redact(subject.strip())[:200],
                 "files": files[:200], "ticket": ticket,
             })
     return out

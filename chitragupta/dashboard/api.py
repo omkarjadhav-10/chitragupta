@@ -153,7 +153,10 @@ def _alerts(tk):
 
 
 def tickets(q=None):
-    """All known tickets, newest activity first; `q` filters by key / title / TL;DR (case-insensitive)."""
+    """All known tickets, newest activity first; `q` filters by key / title / TL;DR (case-insensitive). Each carries
+    `ownership` from the profile's policy (assigned / included / reassigned / other / unassigned / unknown)."""
+    from .. import profile
+    pol = profile.Policy(common.load_config())
     d = common.hp("data", "tickets")
     out = []
     for fn in _listdir(d):
@@ -164,7 +167,7 @@ def tickets(q=None):
             continue
         tk = read_json_cached(os.path.join(d, fn))
         if isinstance(tk, dict):
-            out.append(ticket_summary(key, tk))
+            out.append(dict(ticket_summary(key, tk), ownership=pol.ticket_ownership(key, tk)))
     if q:
         ql = q.strip().lower()
         out = [t for t in out if ql in ("%s %s %s %s" % (t["key"], t["title"], t["title_hint"], t["tldr"])).lower()]
@@ -1248,8 +1251,13 @@ def _watch_paths(cfg):
     yield common.hp("daily", day[:4], day[5:7], day + ".md")
     from .. import plugin
     yield plugin.mcp_status_cache()
+    # the profile and progress pages: settings (identity, scope), suggestions, the evening Jira facts
+    yield common.wl("config.json")
+    yield common.wl("cache", "profile-candidates.json")
+    yield common.hp("data", "jira", "_evening", day + ".json")
     for d in (common.hp("data", "tickets"), common.hp("data", "timesheets"), common.hp("data", "qa-trace"),
-              common.hp("data", "days", day[:4]), common.wl("raw", day), common.wl("raw", day, "time")):
+              common.hp("data", "days", day[:4]), common.wl("raw", day), common.wl("raw", day, "time"),
+              common.hp("data", "activity"), common.hp("data", "reflections")):
         yield d
         for fn in _listdir(d):
             yield os.path.join(d, fn)
@@ -1311,3 +1319,236 @@ def team_note(target, rel):
     if not got:
         return None
     return {"markdown": got["markdown"], "html_file": got["html"]}
+
+
+# --------------------------------------------------------------------------- developer profile and progress
+
+PROFILE_VALUES = ("profile.display_name", "profile.focus", "profile.role", "profile.technologies", "profile.timezone",
+                  "profile.tracking_start", "profile.backfill_days", "profile.include_tickets", "profile.bot_patterns",
+                  "profile.celebrations", "profile.animations", "profile.reflection", "profile.repos",
+                  "profile.jira_projects", "progress.exclude_globs", "progress.done_statuses", "jira_worklog.workdays")
+PREVIEW_MAX = 8192
+
+
+def _ident_needles(cfg):
+    """Strings that identify you and never appear in a progress answer: confirmed emails, the primary email and long
+    account ids (short ids are left alone: "1001" also appears in ABC-1001)."""
+    from .. import profile
+    p = profile.load(cfg)
+    out = set(p["aliases"]) | ({p["email"]} if p["email"] else set())
+    for a in p["accounts"] + ([p["jira"]] if p["jira"] else []):
+        for k in ("id", "node_id"):
+            if len(str(a.get(k) or "")) >= 8:
+                out.add(str(a[k]))
+    return sorted(out, key=len, reverse=True)
+
+
+def _scrub(obj, needles):
+    """`obj` with every needle masked (defence in depth: progress answers are built without them)."""
+    if not needles:
+        return obj
+    from .. import profile
+    if isinstance(obj, str):
+        for n in needles:
+            if n.lower() in obj.lower():
+                obj = re.sub(re.escape(n), profile.mask(n), obj, flags=re.I)
+        return obj
+    if isinstance(obj, dict):
+        return {k: _scrub(v, needles) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub(v, needles) for v in obj]
+    return obj
+
+
+def _account_row(a, show):
+    return {"provider": a.get("provider"), "instance": a.get("instance") or "", "id": show(a.get("id") or ""),
+            "login": a.get("login") or "", "source": a.get("source") or "", "confirmed_at": a.get("confirmed_at") or "",
+            "legacy": bool(a.get("legacy"))}
+
+
+def profile_view(reveal=False, cfg=None):
+    """The Profile page: who you are, what is confirmed, the suggestions with their provenance, the scope, the status
+    per provider and how current the collected history is. Emails and account ids are masked unless `reveal`."""
+    from .. import activity, profile, timesheet
+    cfg = cfg if cfg is not None else common.load_config()
+    p = profile.load(cfg)
+    show = (lambda x: x) if reveal else profile.mask
+    st = profile.status(cfg)
+    cands = profile.read_candidates(cfg)
+    if not reveal:
+        cands = profile.masked_candidates(cands)
+    values = {}
+    for k in PROFILE_VALUES:
+        if k == "jira_worklog.workdays":
+            values[k] = timesheet.settings(cfg)["workdays"]
+        elif k.startswith("progress."):
+            values[k] = profile.progress_settings(cfg)[k.split(".", 1)[1]]
+        else:
+            values[k] = p["settings"][k.split(".", 1)[1]]
+    sel = {common.norm_path(r) for r in p["settings"]["repos"] if isinstance(r, str)}
+    watched = [{"path": r, "name": os.path.basename(str(r).rstrip("/\\")), "selected": common.norm_path(r) in sel}
+               for r in cfg.get("watched_repos") or [] if isinstance(r, str) and r.strip()]
+    collected, last = [], {"commits": "", "prs": ""}
+    for r in p["repos"]:
+        led = activity.load(r)
+        name = os.path.basename(str(r).rstrip("/\\"))
+        if led is None:
+            collected.append({"repo": name, "state": "not collected yet"})
+            continue
+        if led.get("profile_sig") != st["signature"]:
+            collected.append({"repo": name, "state": "updating for your changed profile"})
+            continue
+        c, pr = led.get("commits") or {}, led.get("prs") or {}
+        collected.append({"repo": name, "state": "current", "commits": c.get("status"), "commits_at": c.get("scanned_at") or "",
+                          "commits_why": c.get("why") or c.get("error") or "", "prs": pr.get("status"),
+                          "prs_at": pr.get("fetched_at") or "", "prs_why": pr.get("why") or pr.get("error") or "",
+                          "since": led.get("window_start") or ""})
+        last["commits"] = max(last["commits"], c.get("scanned_at") or "")
+        last["prs"] = max(last["prs"], pr.get("fetched_at") or "")
+    state = read_json_cached(common.wl("state.json"))
+    rec = state.get("profile_reconciled") if isinstance(state.get("profile_reconciled"), dict) else None
+    accounts = [_account_row(a, show) for a in p["accounts"]]
+    if p["jira"] and p["jira"].get("legacy"):
+        accounts.append(_account_row(p["jira"], show))
+    extra = {}
+    if reveal:  # what the page edits from: the setting exactly as stored (an edit never drops a field it didn't show)
+        extra["accounts_raw"] = [a for a in p["settings"]["accounts"] if isinstance(a, dict)]
+    return dict(extra, revealed=bool(reveal), display_name=p["display_name"], email=show(p["email"]),
+                aliases=[show(e) for e in p["aliases"]], accounts=accounts, status=st, candidates=cands, values=values,
+                watched_repos=watched, ticket_prefixes=list(cfg.get("ticket_prefixes") or []), collected=collected,
+                last=dict(last, commit_scan=state.get("last_commit_scan") or "", candidates=cands.get("at") or ""),
+                reconciled={k: rec.get(k) for k in ("at", "archived", "restored", "unverified")} if rec else None)
+
+
+def _akey(a):
+    return (a["provider"], a["instance"], a.get("id") or "", (a.get("login") or "").lower())
+
+
+def profile_preview(raw, cfg=None):
+    """What a proposed profile change would do, before it is saved: -> (answer, http status). Reads only.
+    `raw` is the JSON of the settings changes the page would PATCH."""
+    from .. import activity, configstore, profile
+    from .. import settings as S
+    cfg = cfg if cfg is not None else common.load_config()
+    if not raw or len(raw) > PREVIEW_MAX:
+        return {"error": "Give the changes as JSON (at most %d characters)." % PREVIEW_MAX}, 400
+    try:
+        changes = json.loads(raw)
+    except ValueError:
+        return {"error": "The changes aren't valid JSON."}, 400
+    if not isinstance(changes, dict) or not changes:
+        return {"error": "Give at least one change."}, 400
+    clean, errors = S.validate(changes)
+    if errors:
+        return {"ok": False, "fields": errors}, 200
+    new = json.loads(json.dumps(cfg))
+    for k, v in clean.items():
+        configstore.set_key(new, k, v)
+    old_p, new_p = profile.load(cfg), profile.load(new)
+    old_pol, new_pol = profile.Policy(cfg, old_p), profile.Policy(new, new_p)
+    m = profile.mask
+    notes = []
+    a_add = [e for e in new_p["aliases"] if e not in old_p["aliases"]]
+    a_del = [e for e in old_p["aliases"] if e not in new_p["aliases"]]
+    olda = {_akey(a): a for a in old_p["accounts"] + ([old_p["jira"]] if old_p["jira"] else [])}
+    newa = {_akey(a): a for a in new_p["accounts"] + ([new_p["jira"]] if new_p["jira"] else [])}
+    acc_add = [_account_row(a, m) for k, a in newa.items() if k not in olda]
+    acc_del = [_account_row(a, m) for k, a in olda.items() if k not in newa]
+
+    def name(r):
+        return os.path.basename(str(r).rstrip("/\\"))
+    old_repos = {common.norm_path(r): r for r in old_p["repos"]}
+    new_repos = {common.norm_path(r): r for r in new_p["repos"]}
+    repos_in = sorted(name(r) for k, r in new_repos.items() if k not in old_repos)
+    repos_out = sorted(name(r) for k, r in old_repos.items() if k not in new_repos)
+    # what is counted now and would leave: a repository out of scope, every commit when no email is left, the PRs of
+    # an account that is removed or changed; commits of a removed email are found by their recorded author
+    commits_out = prs_out = 0
+    for k, r in old_repos.items():
+        led = activity.load(r) or {}
+        items = (led.get("commits") or {}).get("items") or {}
+        if k not in new_repos or not new_p["aliases"]:
+            commits_out += sum(1 for it in items.values() if it.get("state") == "counted")
+        info = led.get("repo") or {}
+        prov, inst = info.get("provider"), info.get("instance")
+        oa = old_pol.account(prov, inst) if prov else None
+        na = new_pol.account(prov, inst) if prov else None
+        if k not in new_repos or (oa and (not na or _akey(oa) != _akey(na))):
+            prs_out += len((led.get("prs") or {}).get("items") or {})
+    d = common.hp("data", "tickets")
+    if a_del and new_p["aliases"]:
+        gone, shas = set(a_del), set()
+        for fn in _listdir(d):
+            tk = read_json_cached(os.path.join(d, fn)) if fn.endswith(".json") else None
+            for sha, c in ((tk or {}).get("commits") or {}).items() if isinstance(tk, dict) else ():
+                if str(c.get("ae") or "").lower() in gone:
+                    shas.add(sha)
+        commits_out += len(shas)
+    if a_del:
+        notes.append("Commits authored by %s leave your counts, worklog and tickets: archived, not deleted, and adding "
+                     "the email back restores them." % ", ".join(m(e) for e in a_del))
+    if a_add:
+        notes.append("Commits by %s from your history window (%s) are collected on the next background run, within "
+                     "about 5 minutes." % (", ".join(m(e) for e in a_add), profile.coverage(new)["label"]))
+    if acc_add:
+        notes.append("PRs and tickets of an added account appear after the next refresh: PRs are read hourly, Jira "
+                     "assignees with the next ticket card reads.")
+    t_in, t_out = [], []
+    for fn in _listdir(d):
+        if not fn.endswith(".json"):
+            continue
+        key = fn[:-5]
+        tk = read_json_cached(os.path.join(d, fn))
+        if not isinstance(tk, dict):
+            continue
+        a, b = old_pol.ticket_current(key, tk), new_pol.ticket_current(key, tk)
+        if a and not b:
+            t_out.append(key)
+        elif b and not a:
+            t_in.append(key)
+    old_s, new_s = profile.settings(cfg), profile.settings(new)
+    if old_s["timezone"] != new_s["timezone"] or cfg.get("day_starts_at") != new.get("day_starts_at"):
+        notes.append("Days are counted again in the new time zone, so a late commit can move to another day.")
+    if (old_s["tracking_start"], old_s["backfill_days"]) != (new_s["tracking_start"], new_s["backfill_days"]):
+        notes.append("History is collected %s from now on; records say so." % profile.coverage(new)["label"])
+    sig_change = profile.signature(cfg) != profile.signature(new)
+    if sig_change:
+        notes.append("Your progress numbers are rebuilt from the evidence for the new profile; until then they show as "
+                     "updating, never as the old numbers.")
+    return {"ok": True, "keys": sorted(clean), "signature_changes": sig_change,
+            "aliases": {"added": [m(e) for e in a_add], "removed": [m(e) for e in a_del]},
+            "accounts": {"added": acc_add, "removed": acc_del},
+            "repos": {"added": repos_in, "removed": repos_out},
+            "tickets": {"entering": sorted(t_in), "leaving": sorted(t_out)},
+            "leaving": {"commits": commits_out, "prs": prs_out}, "notes": notes}, 200
+
+
+def _progress_day(s, name):
+    if not s:
+        return None
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        raise ValueError("%s must be YYYY-MM-DD" % name)
+    _dt.date.fromisoformat(s)
+    return s
+
+
+def progress(kind, arg=None, cfg=None, now=None):
+    """The /api/progress* answers (progress.py), with your identity never in them. kind: day | week | calendar |
+    records | wins. Raises ValueError for a bad date or month."""
+    from .. import progress as P
+    cfg = cfg if cfg is not None else common.load_config()
+    if kind == "day":
+        out = P.today(cfg, now, _progress_day(arg, "date"))
+    elif kind == "week":
+        out = P.week(cfg, _progress_day(arg, "date"), now)
+    elif kind == "calendar":
+        if arg and not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", arg):
+            raise ValueError("month must be YYYY-MM")
+        out = P.month(cfg, arg or None, now)
+    elif kind == "records":
+        out = P.records_answer(cfg, now)
+    elif kind == "wins":
+        out = P.weekly_wins(cfg, _progress_day(arg, "date"), now)
+    else:
+        raise ValueError("unknown progress view")
+    return _scrub(out, _ident_needles(cfg))

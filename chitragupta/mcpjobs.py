@@ -614,9 +614,12 @@ CARD_FIELDS = "summary,issuetype,status,priority,parent,issuelinks,description,c
 
 def card_fields(cfg):
     """The fields the card job reads: the base set, plus the fix versions, assignee and configured release / UAT
-    fields when release tracking is on (same single call)."""
-    from . import release
+    fields when release tracking is on, and the assignee whenever your Jira account is confirmed (ticket ownership)
+    — all in the same single call."""
+    from . import profile, release
     extra = release.card_fields(cfg) if release.enabled(cfg) else []
+    if profile.Policy(cfg).jira_account() and "assignee" not in extra:
+        extra.append("assignee")
     return ",".join([CARD_FIELDS] + [f for f in extra if f not in CARD_FIELDS.split(",")])
 
 
@@ -647,6 +650,23 @@ def jira_card(key, cfg, health):
 
 DONE_SCHEMA = {"type": "object", "properties": {"done": {"type": "boolean"}}, "required": ["done"],
                "additionalProperties": False}
+
+
+def jira_user(email, cfg, health):
+    """One read-only job for the profile's identity suggestions: jira_get_user_profile for your primary email. Returns
+    the raw tool result (the account Jira has for that address) or {}; it is only ever a suggestion to confirm."""
+    srv = server_name(cfg, "jira")
+    task = ("Call jira_get_user_profile exactly once with user_identifier=%s and no other arguments. Then return "
+            "{\"done\": true}." % json.dumps(email))
+    res = run("jira-user", {srv: ["jira_get_user_profile"]}, [mcp_tool(srv, "jira_get_user_profile")], _writes(srv, cfg),
+              task, DONE_SCHEMA, cfg, health, max_turns=3)
+    raw = tool_results(res, "jira_get_user_profile")
+    if not raw:
+        err = next((c["result"] for c in res["calls"] if c.get("is_error")), None)
+        if err:
+            raise JobError("jira_get_user_profile: %s" % str(err)[:200])
+        return {}
+    return raw[0][1] if isinstance(raw[0][1], dict) else {}
 
 
 def jira_versions(project, cfg, health):
@@ -729,16 +749,13 @@ def jira_evening(day, tickets, cfg, health):
 
 
 def _me(cfg):
-    emails = {e.lower() for e in cfg.get("git_author_emails") or []}
-    acct = ((cfg.get("mcp") or {}).get("jira") or {}).get("account_id")
-    return emails, acct
+    """The ownership policy (profile.Policy): your confirmed Jira account and commit emails."""
+    from . import profile
+    return profile.Policy(cfg)
 
 
-def _mine(author, emails, acct):
-    a = author or {}
-    em = (a.get("email") or a.get("emailAddress") or "").lower()
-    aid = a.get("account_id") or a.get("accountId")
-    return (em and em in emails) or (acct and aid == acct)
+def _mine(author, pol):
+    return pol.person_mine(author) is True
 
 
 def _local(ts):
@@ -753,7 +770,7 @@ def _local(ts):
 
 def evening_facts(day, search, changes, cfg):
     start, end = common.day_bounds(day, cfg)
-    emails, acct = _me(cfg)
+    pol = _me(cfg)
     ids = {}
     out = {"comments": [], "worklogs": [], "status_changes": []}
     for iss in search.get("issues") or []:
@@ -761,12 +778,12 @@ def evening_facts(day, search, changes, cfg):
         ids[str(iss.get("id"))] = key
         for c in iss.get("comments") or (iss.get("comment") or {}).get("comments") or []:
             t = _local(c.get("created"))
-            if t and start <= t < end and _mine(c.get("author"), emails, acct):
+            if t and start <= t < end and _mine(c.get("author"), pol):
                 body = " ".join(str(c.get("body") or "").split())
                 out["comments"].append({"ticket": key, "time": t.isoformat(timespec="seconds"), "text": body[:300]})
         for w in (iss.get("worklog") or {}).get("worklogs") or []:
             t = _local(w.get("started"))
-            if t and start <= t < end and _mine(w.get("author"), emails, acct):
+            if t and start <= t < end and _mine(w.get("author"), pol):
                 out["worklogs"].append({"ticket": key, "started": t.isoformat(timespec="seconds"),
                                         "minutes": int(round(int(w.get("timeSpentSeconds") or 0) / 60))})
     for ch in changes or []:
@@ -779,7 +796,7 @@ def evening_facts(day, search, changes, cfg):
                 if it.get("field") == "status":
                     out["status_changes"].append({"ticket": key, "time": t.isoformat(timespec="seconds"),
                                                   "from": it.get("from_string"), "to": it.get("to_string"),
-                                                  "mine": bool(_mine(h.get("author"), emails, acct))})
+                                                  "mine": _mine(h.get("author"), pol)})
     return out
 
 

@@ -17,6 +17,12 @@ Routes
   /api/events            Server-Sent Events: "cursor" events when /api/changes would move (max 16 streams)
   /api/tickets[?q=]      ticket list
   /api/releases[?month=YYYY-MM]   my tickets by planned release date (release tracking), overdue / unresolved apart
+  /api/profile[?reveal=1]   the developer profile: identity, confirmed accounts, suggestions, scope, status per
+                         provider; emails and account ids masked unless reveal=1
+  /api/profile/preview?changes=<JSON>   what a proposed profile change would do (validated, nothing written)
+  /api/progress[?date=]  a day's authored commits, committed changes, PRs raised / merged, tickets completed, with
+                         evidence, milestones, next actions, your tickets and the reflection (never an email or id)
+  /api/progress/week?date=, /api/progress/calendar?month=YYYY-MM, /api/progress/records, /api/progress/wins?date=
   /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts, branches & PRs
   /api/tickets/<KEY>/export?mode=full|shareable   the ticket page as one self-contained HTML file (attachment;
                          built in memory, nothing is written). /api/ticket/<KEY>/export is the same.
@@ -76,6 +82,10 @@ SECURITY_HEADERS = [
 TICKET_PATH = re.compile(r"^/api/tickets/([A-Za-z0-9-]{1,20})$")
 EXPORT_PATH = re.compile(r"^/api/tickets?/([A-Za-z0-9-]{1,20})/export$")
 DAY_PATH = re.compile(r"^/api/day/(\d{4}-\d{2}-\d{2})$")
+# path -> (api.progress kind, the query parameter it takes)
+PROGRESS_ROUTES = {"/api/progress": ("day", "date"), "/api/progress/week": ("week", "date"),
+                   "/api/progress/calendar": ("calendar", "month"), "/api/progress/records": ("records", ""),
+                   "/api/progress/wins": ("wins", "date")}
 MAX_STREAMS = 16
 STREAM_POLL = 1.0       # seconds between change checks on an open event stream
 STREAM_KEEPALIVE = 25.0  # seconds of silence before a ": keep-alive" comment
@@ -516,6 +526,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/releases":
             try:
                 return self.send_json(api.releases(q("month")[:7] or None, cfg))
+            except ValueError as e:
+                return self.send_json({"error": str(e)[:200]}, 400)
+        if path == "/api/profile":
+            return self.send_json(api.profile_view(q("reveal") == "1", cfg))
+        if path == "/api/profile/preview":
+            data, status = api.profile_preview(q("changes"), cfg)
+            return self.send_json(data, status)
+        if path in PROGRESS_ROUTES:
+            kind, arg = PROGRESS_ROUTES[path]
+            try:
+                return self.send_json(api.progress(kind, q(arg)[:10] if arg else None, cfg))
             except ValueError as e:
                 return self.send_json({"error": str(e)[:200]}, 400)
         m = TICKET_PATH.match(path)

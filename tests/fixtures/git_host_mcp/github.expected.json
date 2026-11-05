@@ -12,7 +12,13 @@
   "head": "2222222222222222222222222222222222222222",
   "head_at_merge": null,
   "url": "https://github.com/acme-test/shop-api/pull/41",
-  "src": "mcp:github"
+  "src": "mcp:github",
+  "author": {
+   "id": "",
+   "node_id": "",
+   "login": "test-user",
+   "is_bot": false
+  }
  },
  {
   "number": 38,
@@ -27,7 +33,13 @@
   "head": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "head_at_merge": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "url": "https://github.com/acme-test/shop-api/pull/38",
-  "src": "mcp:github"
+  "src": "mcp:github",
+  "author": {
+   "id": "",
+   "node_id": "",
+   "login": "test-user",
+   "is_bot": false
+  }
  },
  {
   "number": 37,
@@ -42,6 +54,12 @@
   "head": "1111111111111111111111111111111111111111",
   "head_at_merge": null,
   "url": "https://github.com/acme-test/shop-api/pull/37",
-  "src": "mcp:github"
+  "src": "mcp:github",
+  "author": {
+   "id": "",
+   "node_id": "",
+   "login": "test-user",
+   "is_bot": false
+  }
  }
 ]

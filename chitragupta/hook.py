@@ -172,6 +172,12 @@ def _session_start_output(cfg, common, ev, inp):
             except OSError:
                 pass
             parts.append(ctx)
+    try:  # the developer profile line: written by the tick (profile.context_text), only read here
+        prof = common.read_text(common.wl("cache", "profile-context.md")).strip()
+    except Exception:
+        prof = ""
+    if prof:
+        parts.append(prof[:800])
     if warn:
         parts.append(warn)
     try:

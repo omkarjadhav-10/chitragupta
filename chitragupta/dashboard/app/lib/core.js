@@ -125,7 +125,7 @@ export function useApi(path, opts) {
 }
 
 // ------------------------------------------------------------------ routing (hash URLs)
-export const PAGES = ['today', 'tickets', 'timesheet', 'knowledge', 'search', 'health', 'setup', 'settings', 'day', 'db', 'team', 'releases'];
+export const PAGES = ['today', 'tickets', 'timesheet', 'knowledge', 'search', 'health', 'setup', 'settings', 'day', 'db', 'team', 'releases', 'progress', 'profile'];
 export function parseRoute(hash) {
   if (EXPORT) return { name: 'tickets', arg: String(EXPORT.key || ''), params: {} };
   const raw = (hash == null ? location.hash : hash).replace(/^#\/?/, '');
@@ -223,6 +223,9 @@ export function ago(min) {
 export function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 export function mins(hhmm) { const p = String(hhmm || '0:0').split(':'); return +p[0] * 60 + +p[1]; }
 export function isHttp(u) { return typeof u === 'string' && /^https?:\/\/[^\s"'<>]+$/i.test(u); }
+// A ticket Jira assigns to someone else (or reassigned away from you) isn't yours to act on: the same rule get_alerts
+// and the progress page follow (profile.Policy decides the state; unknown stays visible).
+export function notYours(own) { return !!own && (own.state === 'reassigned' || own.state === 'other'); }
 
 // Stable colour slot per ticket (t1…t6), so a ticket keeps its colour across the page.
 export function slotFor(keys) {

@@ -231,7 +231,8 @@ _ABS_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(?\s*)(['"])(/(?:app|vendor)
 # An export only ever shows the ticket page: these modules become stubs that keep their exported names (main.js
 # imports them) and render nothing; the ones only stubbed pages import are left out.
 _STUBBED = {"/app/pages/" + p + ".js" for p in ("today", "timesheet", "knowledge", "db", "team", "search", "health",
-                                               "setup", "settings", "releases")} | {"/app/lib/share.js"}
+                                               "setup", "settings", "releases", "profile", "progress")} | \
+    {"/app/lib/share.js"}
 _UNUSED = {"/app/lib/mcpstatus.js", "/app/lib/scheduler.js"}
 _EXPORTED = re.compile(r"^export\s+(?:function|const|let)\s+(\w+)", re.M)
 

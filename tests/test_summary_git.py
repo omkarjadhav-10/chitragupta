@@ -29,7 +29,8 @@ class LogicalChanges(BriefBase, unittest.TestCase):
         os.makedirs(os.path.join(repo, ".git"))
         cfg = dict(self.cfg(), watched_repos=[repo], git_author_emails=["test@acme.test"])
         def row(sha, ref, subject):
-            return sources._SEP_REC + sources._SEP_FLD.join([sha, "2026-09-01T10:00:00Z", ref, subject, "", "M\tsrc/Cancel.java"])
+            return sources._SEP_REC + sources._SEP_FLD.join([sha, "2026-09-01T10:00:00Z", "test@acme.test", ref, subject, "",
+                                                             "M\tsrc/Cancel.java"])
         output = row("a"*40,"refs/heads/feature/ABC-1001", "ABC-1001 release stock") + row("b"*40,"refs/stash", "ABC-1001 snapshot") + row("c"*40,"refs/heads/feature/ABC-1001", "WIP on feature/ABC-1001: temporary")
         with mock.patch.object(sources.gitro, "run", return_value=(0, output, "")) as run:
             got = sources.scan_commits(cfg, {}, dt.datetime(2026,9,1, tzinfo=dt.timezone.utc))

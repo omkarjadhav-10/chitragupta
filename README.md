@@ -9,9 +9,10 @@ Chitragupta is a Claude Code plugin that writes your worklog for you. Hooks reco
 - a local **knowledge base** of tables, APIs, integrations and branches
 - **branch tracking** per ticket: its branches and their parents, the PRs, and whether every commit reached every branch your branching strategy requires, with warnings on the ticket page, at session start, while you work and at 20:00 (see [docs/branch-tracking.md](docs/branch-tracking.md))
 - **release tracking** (opt-in): the Jira release each ticket ships in, the release branch to start from and target in each repo it touches, whether its changes reached release, QA and required UAT, UAT reminders, a planning brief at session start and a monthly Releases overview (see [docs/releases.md](docs/releases.md))
+- a **developer profile** that decides which commits, PRs and tickets are yours (confirmed identities only, never a display name or a guess) and a **My progress** view: today's authored commits, committed changes, PRs raised and merged, a calendar, personal records, weekly wins, a short reflection and next steps, with zero kept apart from unknown (see [docs/progress.md](docs/progress.md))
 - an **evening Jira-worklog summary** (8 h laid out as Jira entries), sent to you on Slack at 20:00 if Slack is connected
 - a **dashboard** on `127.0.0.1`: today (with the exact 20:00 message), any past day, tickets, timesheet, the DB map, knowledge, search, team notes and settings, with a command palette, live updates and keyboard shortcuts
-- a read-only **MCP server**, so Claude asks the worklog through 8 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`) instead of reading files; about 140 tokens per session with tool search (see [docs/mcp.md](docs/mcp.md))
+- a read-only **MCP server**, so Claude asks the worklog through 9 tools (`search`, `get_ticket`, `get_day`, `get_timesheet`, `get_branch_status`, `get_db_table`, `list_tickets`, `get_alerts`, `get_progress`) instead of reading files; about 140 tokens per session with tool search (see [docs/mcp.md](docs/mcp.md))
 
 It runs on Windows (the background job also has macOS and Linux backends; see [scheduling](docs/scheduling.md)) and uses only the Python standard library. Slack, Jira and a database MCP are optional. Everything stays on your machine unless you configure a private GitHub remote for the daily notes.
 
@@ -47,6 +48,7 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | `/cg:check [KEY]` | Fetch the watched repos and refresh branches, PRs and the delivery check now |
 | `/cg:branch link\|unlink\|abandon\|restore\|strategy …` | Fix branch tracking by hand: a wrong link, an abandoned branch, a repo's or ticket's strategy; `release-map`, `release-pick`, `release-branch`, `release-repos` and `uat` record release decisions |
 | `/cg:timesheet [week\|month] [date] [csv]` | Hours per ticket by day (week) or by ISO week (month), with leave and holidays; optional CSV |
+| `/cg:progress [today\|week\|month\|records\|wins] [date]` | Your authored commits, committed changes, PRs raised and merged and completed tickets, with unknown kept apart from zero; records and weekly wins; `reflect "…"` saves a short note on what moved forward. See [docs/progress.md](docs/progress.md) |
 | `/cg:trace <KEY>` | The ticket's DB flow (tables and columns it changes, before → after) and its QA worked example; it can fetch a fresh example if a database MCP is connected |
 | `/cg:search <words> [--rebuild]` | Search everything recorded (tickets, findings, queries, requests, branches, PRs, tables, APIs, DB links, daily notes) with filters by type, ticket, repo and date; shows the file to read for each result |
 | `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |

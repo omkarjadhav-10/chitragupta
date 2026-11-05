@@ -8,6 +8,7 @@ Everything not in the schema, and every item with `editable: False`, is refused 
 safety rules, MCP tool lists and their read/write classification, secrets, the data folder, the GitHub repo, paths,
 the Slack recipient, push paths and redaction patterns are only ever shown. /cg:setup is how those change.
 """
+import datetime as _dt
 import fnmatch
 import os
 import re
@@ -33,6 +34,9 @@ def _defaults():
                           fetch=b["fetch"])
     from . import release
     d["releases"] = release.settings(d)
+    from . import profile
+    d["profile"] = dict(profile.settings(d), accounts=(d.get("profile") or {}).get("accounts") or [])
+    d["progress"] = profile.progress_settings(d)
     return d
 
 
@@ -42,12 +46,51 @@ def _i(key, label, help_, type_, group, **kw):
     return dict(key=key, label=label, help=help_, type=type_, group=group, editable=kw.pop("editable", True), **kw)
 
 
-GROUPS = [("capture", "Capture"), ("worklog", "Daily worklog & Slack"), ("jira", "Jira"), ("database", "Database MCP"),
+GROUPS = [("profile", "Developer profile"), ("capture", "Capture"), ("worklog", "Daily worklog & Slack"), ("jira", "Jira"), ("database", "Database MCP"),
           ("branching", "Branches & PRs"), ("releases", "Releases & UAT"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
           ("models", "Models & budget"), ("data", "Data"), ("share", "Team sharing"), ("dashboard", "Dashboard"),
           ("safety", "Locked")]
 
 STATIC = [
+    _i("profile.display_name", "Display name", "How summaries greet you. Never used to match your work.", "line",
+       "profile", maxlen=80, default_value=""),
+    _i("profile.email", "Primary work email", "Shown to you only; the Jira lookup uses it. It isn't proof of authorship "
+       "by itself: commit emails are confirmed below.", "email", "profile", default_value=""),
+    _i("git_author_emails", "Confirmed commit emails", "Commits whose author email is exactly one of these are yours "
+       "(one per line). Never inferred: a repo's configured email is only a suggestion until you confirm it.", "emails",
+       "profile", affects="Which commits count as yours everywhere: worklog, tickets, progress"),
+    _i("profile.accounts", "Confirmed accounts", "Your Jira account id and Git host accounts, each scoped to its "
+       "instance. Tokens and passwords never go here.", "accounts", "profile", default_value=[],
+       affects="Which tickets and PRs count as yours"),
+    _i("profile.repos", "Repositories in scope", "Watched repositories whose work is yours to track. Empty: every "
+       "watched repository.", "repo_paths", "profile", default_value=[]),
+    _i("profile.jira_projects", "Jira projects in scope", "Empty: the ticket prefixes.", "prefixes", "profile",
+       default_value=[]),
+    _i("profile.focus", "Current focus", "Projects, responsibilities or what you are driving now. Given to Claude as "
+       "planning context.", "longtext", "profile", maxlen=400, default_value=""),
+    _i("profile.role", "Role", "Optional planning context, not ownership evidence.", "line", "profile", maxlen=80,
+       default_value=""),
+    _i("profile.technologies", "Preferred technologies", "Optional, one per line.", "tags", "profile", default_value=[]),
+    _i("profile.timezone", "Time zone", "Days and reminders follow it. Empty: this machine's zone. Or a UTC offset such "
+       "as +05:30, or a zone name this machine has data for.", "timezone", "profile", default_value=""),
+    _i("profile.tracking_start", "Tracking starts", "History before this day isn't collected. Empty: the day "
+       "Chitragupta first ran.", "date", "profile", default_value=""),
+    _i("profile.backfill_days", "Import history (days)", "At most this many days back, whatever the start.", "int",
+       "profile", min=1, max=365, default_value=90),
+    _i("profile.include_tickets", "Collaborative tickets", "Tickets assigned to someone else that you count as yours, "
+       "each with a reason. Only your own activity on them is counted.", "ticket_reasons", "profile", default_value={}),
+    _i("profile.bot_patterns", "Bot and service identities", "Patterns (one per line) that can never be one of your "
+       "identities.", "regexes", "profile"),
+    _i("profile.celebrations", "Milestone messages", "Short factual notes when you reach a personal record.", "bool",
+       "profile", default_value=True),
+    _i("profile.animations", "Animations", "Motion on the progress page (reduced motion is always respected).", "bool",
+       "profile", default_value=True),
+    _i("profile.reflection", "Daily reflection", "A short optional note on what moved forward.", "bool", "profile",
+       default_value=True),
+    _i("progress.exclude_globs", "Left out of line counts", "Lockfiles, vendored and generated files (glob patterns, "
+       "one per line). Shown separately, never hidden.", "globs", "profile"),
+    _i("progress.done_statuses", "Jira statuses that mean done", "A move into one of these (any case) counts as a "
+       "completed ticket that day.", "names", "profile"),
     _i("ticket_prefixes", "Ticket prefixes", "Jira project keys that count as tickets, for example ABC.", "prefixes", "capture",
        affects="Which branch names and messages are filed under a ticket"),
     _i("capture_scope.include_paths", "Capture only under", "If set, sessions are recorded only under these folders. "
@@ -236,9 +279,190 @@ def _by_key(cfg):
 
 # --------------------------------------------------------------------------- validation (mirrored by the page)
 
+_TOKEN_SHAPE = re.compile(r"(?<![A-Za-z0-9_./+=-])(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])"
+                          r"[A-Za-z0-9_+/=-]{32,}(?![A-Za-z0-9_./+=-])")
+_INSTANCE = re.compile(r"^[a-z0-9.-]{1,100}(?:/[A-Za-z0-9._ -]{1,80})?$")
+_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9:._@+=/-]{1,128}$")
+_TICKET = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,7}$")
+_ACCOUNT_KEYS = {"provider", "instance", "id", "node_id", "login", "source", "confirmed_at"}
+
+
+def secret_like(text, free_text=True):
+    """A reason when `text` looks like a credential (the share scan's secret rules; in free text also a long
+    token-shaped run), else None. The profile is never a place for tokens or passwords."""
+    from . import scanlib
+    for _, kind, name in scanlib.find(str(text or ""), [], scanlib.secret_rules()):
+        return "That looks like a secret (%s). Tokens and passwords never go in the profile." % name
+    if free_text and _TOKEN_SHAPE.search(str(text or "")):
+        return "That looks like a token. Tokens and passwords never go in the profile."
+    return None
+
+
+def _bot(value):
+    from . import profile
+    for p in profile.settings(common.load_config())["bot_patterns"]:
+        try:
+            if re.search(p, str(value or ""), re.I):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def _line(value, maxlen):
+    if not isinstance(value, str) or len(value) > maxlen or any(ord(c) < 32 for c in value):
+        return "Use one line of at most %d characters." % maxlen
+    return secret_like(value)
+
+
+def _check_account(i, a):
+    from . import profile
+    if not isinstance(a, dict):
+        return "Account %d: give provider, instance and id or login." % i
+    extra = set(a) - _ACCOUNT_KEYS
+    if extra:
+        return "Account %d: unknown fields %s." % (i, ", ".join(sorted(extra)))
+    prov = a.get("provider")
+    if prov not in profile.PROVIDERS:
+        return "Account %d: the provider must be one of %s." % (i, ", ".join(profile.PROVIDERS))
+    inst = a.get("instance")
+    if not isinstance(inst, str) or not _INSTANCE.match(inst):
+        return "Account %d: give the instance in lower case, for example github.com or acme.atlassian.net." % i
+    aid, nid, login = a.get("id", ""), a.get("node_id", ""), a.get("login", "")
+    if any(not isinstance(v, str) for v in (aid, nid, login)):
+        return "Account %d: id and login are text." % i
+    if not (aid or login):
+        return "Account %d: give the account id (preferred) or the login." % i
+    for v in (aid, nid):
+        if v and not _ACCOUNT_ID.match(v):
+            return "Account %d: the id may use letters, digits and : . _ @ + = / - only." % i
+    if login and (len(login) > 100 or any(ord(c) < 33 for c in login)):
+        return "Account %d: the login is one word of at most 100 characters." % i
+    if login and _bot(login):
+        return "Account %d: %s is a bot or service identity; it can't be yours." % (i, login)
+    for k in ("source", "confirmed_at"):
+        if not isinstance(a.get(k, ""), str) or len(a.get(k, "")) > 200:
+            return "Account %d: %s is text of at most 200 characters." % (i, k)
+    for v in (aid, nid, login, a.get("source", "")):
+        why = secret_like(v, free_text=False)
+        if why:
+            return "Account %d: %s" % (i, why)
+    return None
+
+
 def check(it, value, current):
     """None when `value` is acceptable for item `it`, else a sentence saying what's wrong and what is allowed."""
     t = it["type"]
+    if t == "line":
+        return _line(value, it.get("maxlen", 80))
+    if t == "longtext":
+        if not isinstance(value, str) or len(value) > it.get("maxlen", 400) or \
+                any(ord(c) < 32 and c not in "\n\t" for c in value):
+            return "Use at most %d characters." % it.get("maxlen", 400)
+        return secret_like(value)
+    if t == "email":
+        from . import profile
+        if value == "":
+            return None
+        if not isinstance(value, str) or not profile.norm_email(value):
+            return "Use an email address such as developer@acme.test, or leave it empty."
+        return "That is a bot or service address." if _bot(value) else None
+    if t == "emails":
+        from . import profile
+        if not isinstance(value, list) or len(value) > 20:
+            return "Use a list of at most 20 email addresses."
+        seen = set()
+        for e in value:
+            n = profile.norm_email(e) if isinstance(e, str) else ""
+            if not n:
+                return "%s isn't an email address." % (e if isinstance(e, str) else "A value")
+            if n in seen:
+                return "%s is listed twice." % e
+            if _bot(n):
+                return "%s is a bot or service identity; it can't be one of your aliases." % e
+            seen.add(n)
+        return None
+    if t == "accounts":
+        if not isinstance(value, list) or len(value) > 20:
+            return "Use a list of at most 20 accounts."
+        seen = set()
+        for i, a in enumerate(value, 1):
+            why = _check_account(i, a)
+            if why:
+                return why
+            k = (a["provider"], a["instance"])
+            if k in seen:
+                return "Account %d: there is already a %s account for %s." % (i, a["provider"], a["instance"])
+            seen.add(k)
+        return None
+    if t == "repo_paths":
+        cfg = common.load_config()
+        watched = {common.norm_path(r) for r in cfg.get("watched_repos") or [] if isinstance(r, str)}
+        if not isinstance(value, list) or any(not isinstance(p, str) or not p.strip() for p in value):
+            return "Enter one repository folder per line."
+        for p in value:
+            if common.norm_path(p) not in watched:
+                return "%s isn't a watched repository." % p
+        return None
+    if t == "tags":
+        if not isinstance(value, list) or len(value) > 20:
+            return "Use at most 20 entries."
+        for v in value:
+            why = _line(v, 40) if isinstance(v, str) and v.strip() else "Use one name per line."
+            if why:
+                return why
+        return None
+    if t == "timezone":
+        from . import profile
+        if not isinstance(value, str) or len(value) > 64:
+            return "Use a zone name or an offset such as +05:30."
+        try:
+            profile.zone(value)
+        except ValueError as e:
+            return str(e)[0].upper() + str(e)[1:] + "."
+        return None
+    if t == "date":
+        if value == "":
+            return None
+        try:
+            d = _dt.date.fromisoformat(value) if isinstance(value, str) and len(value) == 10 else None
+        except ValueError:
+            d = None
+        if d is None:
+            return "Use a date such as 2026-01-31, or leave it empty."
+        if d > common.now().date():
+            return "Use a day that isn't in the future."
+        return None
+    if t == "ticket_reasons":
+        if not isinstance(value, dict) or len(value) > 50:
+            return "Use at most 50 tickets, each with a reason."
+        for k, v in value.items():
+            if not _TICKET.match(str(k)):
+                return "%s isn't a ticket key such as ABC-1001." % k
+            if not isinstance(v, str) or not v.strip():
+                return "%s: say why it counts as yours." % k
+            why = _line(v, 120)
+            if why:
+                return "%s: %s" % (k, why)
+        return None
+    if t == "regexes":
+        if not isinstance(value, list) or len(value) > 20:
+            return "Use at most 20 patterns."
+        for v in value:
+            if not isinstance(v, str) or not v or len(v) > 200:
+                return "Use one pattern of at most 200 characters per line."
+            try:
+                re.compile(v)
+            except re.error as e:
+                return "%s isn't a valid pattern: %s." % (v, e)
+        return None
+    if t == "globs":
+        if not isinstance(value, list) or len(value) > 100:
+            return "Use at most 100 patterns."
+        for v in value:
+            if not isinstance(v, str) or not v.strip() or len(v) > 200 or any(ord(c) < 32 for c in v):
+                return "Use one pattern of at most 200 characters per line."
+        return None
     if t == "bool":
         return None if isinstance(value, bool) else "Choose on or off."
     if t in ("int", "number"):

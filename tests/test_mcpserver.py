@@ -1,4 +1,4 @@
-"""The read-only MCP server (chitragupta/mcpserver.py): protocol, the 8 tools on a synthetic home, size caps and
+"""The read-only MCP server (chitragupta/mcpserver.py): protocol, the 9 tools on a synthetic home, size caps and
 pages, errors, a clean stdout, nothing written, and its isolation from Chitragupta's own background calls."""
 import io
 import json
@@ -11,7 +11,7 @@ from tests import support
 from tests.test_dashboard import TICKET, Base, _w, snapshot
 
 TOOLS = ["search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table", "list_tickets",
-         "get_alerts"]
+         "get_alerts", "get_progress"]
 
 
 def srv():
@@ -385,7 +385,7 @@ class TestReadOnly(McpBase):
         replies = [json.loads(l) for l in p.stdout.decode("utf-8").splitlines()]
         self.assertEqual([r["id"] for r in replies], [1, 2, 3])
         self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-03-26")
-        self.assertEqual(len(replies[1]["result"]["tools"]), 8)
+        self.assertEqual(len(replies[1]["result"]["tools"]), len(TOOLS))
         self.assertIn("Order total is wrong", replies[2]["result"]["content"][0]["text"])
 
     def test_internal_calls_get_no_tools(self):

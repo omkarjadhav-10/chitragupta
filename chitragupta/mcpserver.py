@@ -1,4 +1,4 @@
-"""Chitragupta's read-only MCP server: Claude Code asks the worklog through 8 tools instead of reading files.
+"""Chitragupta's read-only MCP server: Claude Code asks the worklog through 9 tools instead of reading files.
 
 Started by Claude Code from the plugin's .mcp.json (bin/cg-mcp → hooks/run.py mcp). Transport: stdio,
 newline-delimited JSON-RPC 2.0; stdout carries protocol messages only (anything else printed while serving goes to
@@ -79,14 +79,21 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"name": _s("table or schema.table"), "page": _PAGE},
                      "required": ["name"]}},
     {"name": "list_tickets",
-     "description": "Known tickets, newest activity first. `release` (YYYY-MM or this-month): my tickets scheduled "
-                    "that month, with release/QA/UAT state.",
+     "description": "Known tickets, newest first, with why each is yours or not. `mine`: only your current ones. "
+                    "`release` (YYYY-MM): that month's release plan.",
      "inputSchema": {"type": "object", "properties": {
-         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "release": _s(),
+         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "release": _s(), "mine": {"type": "boolean"},
          "page": _PAGE}}},
     {"name": "get_alerts",
-     "description": "What needs attention: branch/PR delivery alerts and worklog health warnings.",
+     "description": "What needs attention: delivery alerts and release reminders of your tickets, and worklog "
+                    "health warnings.",
      "inputSchema": {"type": "object", "properties": {"page": _PAGE}}},
+    {"name": "get_progress",
+     "description": "Your recorded progress: commits, committed lines, PRs, tickets completed, records, weekly wins. "
+                    "`include_ids` adds your ids.",
+     "inputSchema": {"type": "object", "properties": {
+         "period": _s(enum=("today", "week", "month", "records", "wins")), "date": _s(_DATE),
+         "include_ids": {"type": "boolean"}, "page": _PAGE}}},
 ]
 TOOL_NAMES = [t["name"] for t in TOOLS]
 
@@ -484,18 +491,24 @@ def tool_list_tickets(args, cfg):
             raise ToolError(str(e))
     q, status, repo = _arg(args, "q"), _arg(args, "status"), _arg(args, "repo")
     since = parse_date(_arg(args, "since"), cfg, "since") if _arg(args, "since") else None
+    mine = args.get("mine")
+    if mine not in (None, "", True, False):
+        raise ToolError("`mine` must be true or false")
     ts = api.tickets(q)["tickets"]
+    if mine:
+        ts = [t for t in ts if t["ownership"]["current"]]
     if status:
         ts = [t for t in ts if status.lower() in (t["status"] or "").lower()]
     if repo:
         ts = [t for t in ts if any(repo.lower() == r.lower() for r in t["repos"])]
     if since:
         ts = [t for t in ts if (t["last"] or "") >= since]
-    L = ["# Tickets — %d" % len(ts)]
+    L = ["# %s — %d" % ("Your current tickets" if mine else "Tickets", len(ts))]
     for t in ts:
-        L.append("- %s · %s · %s · last %s · %s%s%s" % (
+        L.append("- %s · %s · %s · last %s · %s%s%s · %s" % (
             t["key"], _one(_title_or_hint(t), 90), t["status"] or "-", t["last"] or "-", _hm(t["minutes"]),
-            " · " + ", ".join(t["repos"]) if t["repos"] else "", " · ⚠ %d alert(s)" % len(t["alerts"]) if t["alerts"] else ""))
+            " · " + ", ".join(t["repos"]) if t["repos"] else "", " · ⚠ %d alert(s)" % len(t["alerts"]) if t["alerts"] else "",
+            _one(t["ownership"]["reason"], 120)))
     if not ts:
         L.append("No tickets match.")
     else:
@@ -701,18 +714,25 @@ def tool_get_alerts(args, cfg):
     from .dashboard import api
     L = ["# Alerts"]
     n = 0
-    for t in api.tickets()["tickets"]:
+    all_t = api.tickets()["tickets"]
+    # a ticket Jira assigns to someone else (or reassigned away from you) isn't yours to act on: its alerts are counted
+    yours = [t for t in all_t if t["ownership"]["state"] not in ("reassigned", "other")]
+    left_out = [t for t in all_t if t not in yours and (t["alerts"] or t.get("reminders"))]
+    for t in yours:
         for a in t["alerts"]:
             if n == 0:
                 L += ["", "## Branches and PRs"]
             n += 1
             L.append("- %s · %s%s" % (t["key"], _one(a["text"], 240), " (%s)" % a["repo"] if a.get("repo") else ""))
     rem = []
-    for t in api.tickets()["tickets"]:
+    for t in yours:
         for r in t.get("reminders") or []:
             rem.append("- %s · %s" % (t["key"], _one(r["text"], 240)))
     if rem:
         L += ["", "## Release and UAT reminders"] + rem
+    if left_out:
+        L += ["", "Left out: alerts of %d ticket(s) assigned to someone else in Jira (%s)." % (
+            len(left_out), ", ".join(t["key"] for t in left_out[:8]))]
     h = api.read_json_cached(common.wl("health.json")) or {}
     warn = []
     if os.path.exists(common.wl("PAUSED")):
@@ -743,16 +763,28 @@ def tool_get_alerts(args, cfg):
         pass
     if warn:
         L += ["", "## Worklog health"] + ["- " + w for w in warn]
-    if len(L) == 1:
-        L.append("Nothing needs attention.")
+    if len(L) == 1 or (len(L) == 3 and left_out):
+        L.insert(1, "Nothing needs attention.")
     L.append("\nHealth: %s" % common.wl("health.json"))
     return "\n".join(L)
+
+
+def tool_get_progress(args, cfg):
+    from . import progress
+    period = _arg(args, "period") or "today"
+    if period not in ("today", "week", "month", "records", "wins"):
+        raise ToolError("`period` must be today, week, month, records or wins")
+    date = parse_date(_arg(args, "date"), cfg) if _arg(args, "date") else None
+    inc = args.get("include_ids")
+    if inc not in (None, "", True, False):
+        raise ToolError("`include_ids` must be true or false")
+    return progress.markdown(period, date, cfg, include_ids=bool(inc))
 
 
 HANDLERS = {
     "search": tool_search, "get_ticket": tool_get_ticket, "get_day": tool_get_day, "get_timesheet": tool_get_timesheet,
     "get_branch_status": tool_get_branch_status, "get_db_table": tool_get_db_table, "list_tickets": tool_list_tickets,
-    "get_alerts": tool_get_alerts,
+    "get_alerts": tool_get_alerts, "get_progress": tool_get_progress,
 }
 
 
