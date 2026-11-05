@@ -17,8 +17,10 @@ from . import configstore
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MODELS = ["haiku", "sonnet", "opus"]
+MODEL_ID = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{1,60}$")  # an explicit model id pins the version
 TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PREFIX = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 -]{0,39}$")
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9*][A-Za-z0-9._/*-]{0,99}$")  # a branch name or an fnmatch pattern
 
 
@@ -29,17 +31,19 @@ def _defaults():
     b = gitcmd.settings(d)
     d["branching"] = dict(d.get("branching") or {}, guard_mode=b["guard_mode"], stale_pr_days=b["stale_pr_days"],
                           fetch=b["fetch"])
+    from . import release
+    d["releases"] = release.settings(d)
     return d
 
 
 # --------------------------------------------------------------------------- schema
-# type: bool | int | number | time | choice | days | prefixes | paths | envs_narrow | bases | relations | text
+# type: bool | int | number | time | choice | days | prefixes | names | paths | envs_narrow | bases | relations | text
 def _i(key, label, help_, type_, group, **kw):
     return dict(key=key, label=label, help=help_, type=type_, group=group, editable=kw.pop("editable", True), **kw)
 
 
 GROUPS = [("capture", "Capture"), ("worklog", "Daily worklog & Slack"), ("jira", "Jira"), ("database", "Database MCP"),
-          ("branching", "Branches & PRs"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
+          ("branching", "Branches & PRs"), ("releases", "Releases & UAT"), ("artifacts", "Requests & artifacts"), ("push", "GitHub daily push"),
           ("models", "Models & budget"), ("data", "Data"), ("share", "Team sharing"), ("dashboard", "Dashboard"),
           ("safety", "Locked")]
 
@@ -64,8 +68,15 @@ STATIC = [
        min="11:00", max="16:00"),
     _i("jira_worklog.hours_per_day", "Hours per day", "A full day's target; half days are half of it.", "number", "worklog",
        min=1, max=12),
+    _i("jira_worklog.turn_tail_minutes", "Time after a turn (minutes)", "Counted after the last event of each turn, for "
+       "reading the answer.", "int", "worklog", min=0, max=30, default_value=5),
+    _i("jira_worklog.idle_minutes", "Idle after (minutes)", "A longer gap inside a turn is not counted.", "int",
+       "worklog", min=5, max=60, default_value=15),
     _i("mcp.jira.enabled", "Use the Jira MCP", "Ticket cards and the evening facts the worklog subtracts.", "bool", "jira",
        affects="Background Jira reads (within the daily budget)"),
+    _i("jira.parent_issue_types", "Parent issue types", "Jira issue types that only group work (one per line). They "
+       "never get time or findings; the child ticket named with them, or the branch's ticket, does.", "names", "jira",
+       affects="Which ticket a prompt's time and findings go to"),
     _i("mcp.jira.cards", "Ticket cards", "Read each day's tickets from Jira (title, status, summary) for the ticket "
        "pages.", "bool", "jira", default_value=True),
     _i("mcp.jira.evening", "Evening facts", "Before the 8 PM message, read what's already logged in Jira that day so it "
@@ -84,6 +95,30 @@ STATIC = [
        "updates remote-tracking refs.", "bool", "branching"),
     _i("branching.stale_pr_days", "Stale PR after (days)", "An open PR older than this raises an alert.", "int",
        "branching", min=1, max=60),
+    _i("releases.enabled", "Track releases", "Which Jira release each ticket ships in, its release branch per repo, and "
+       "whether the changes reached release, QA and (when required) UAT. Local; the Jira reads use the daily budget.",
+       "bool", "releases", default_value=False, affects="Release plan, monthly Releases page, UAT reminders"),
+    _i("releases.stale_hours", "Refs stale after (hours)", "Older remote branches make a missing change 'unknown', "
+       "never 'missing'.", "int", "releases", min=1, max=336, default_value=24),
+    _i("releases.jira.uat_field", "Jira field: UAT required", "The custom field that says whether a ticket needs UAT, "
+       "for example customfield_10100. Empty: the requirement stays unknown unless you set it per ticket.", "name",
+       "releases", pattern=r"(customfield_\d{1,10})?", pattern_help="Use a custom field id such as customfield_10100, or "
+       "leave it empty.", default_value=""),
+    _i("releases.jira.planned_date_field", "Jira field: planned release date", "Optional custom field with a planned "
+       "date, used when the fix version has no release date.", "name", "releases", pattern=r"(customfield_\d{1,10})?",
+       pattern_help="Use a custom field id such as customfield_10200, or leave it empty.", default_value=""),
+    _i("releases.jira.uat_deployed_statuses", "Jira statuses meaning deployed to UAT", "Only these count as deployment "
+       "evidence (one per line). Empty: deployment stays unverified.", "names", "releases", default_value=[]),
+    _i("releases.jira.uat_accepted_statuses", "Jira statuses meaning UAT accepted", "Only these count as acceptance "
+       "evidence (one per line).", "names", "releases", default_value=[]),
+    _i("releases.jira.scope_refresh_hours", "Re-read my scheduled tickets every (hours)", "One Jira search for the "
+       "monthly overview.", "int", "releases", min=1, max=168, default_value=12),
+    _i("releases.scope.assigned", "My tickets: assigned to me in Jira", "Tickets Jira assigns to you count as yours on "
+       "the Releases page.", "bool", "releases", default_value=True),
+    _i("releases.scope.branches", "My tickets: my development branches", "A branch named for the ticket with my "
+       "commits. A shared integration PR alone never counts.", "bool", "releases", default_value=True),
+    _i("releases.scope.worked", "My tickets: worked on in Claude Code", "Tickets with recorded Claude Code work count "
+       "as yours.", "bool", "releases", default_value=True),
     _i("requests.enabled", "Requests", "Curate the API calls you make into Bruno requests per ticket. Off: nothing is "
        "curated or written to the Bruno folder.", "bool", "artifacts", default_value=True),
     _i("artifacts.enabled", "Artifacts", "Copy files that name a ticket into its folder. Off: they wait until it's on "
@@ -94,14 +129,29 @@ STATIC = [
        "push", default_value=True),
     _i("push_interval_minutes", "Push at most every (minutes)", "Minimum gap between pushes of the daily files.", "int",
        "push", min=5, max=1440),
-    _i("models.extract", "Model: session extraction", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.consolidate", "Model: day summary", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.curate", "Model: request curation", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.dbflow", "Model: DB flow", "", "choice", "models", choices=[[m, m] for m in MODELS]),
-    _i("models.worklog_condense", "Model: worklog condensing", "", "choice", "models", choices=[[m, m] for m in MODELS],
+    _i("models.extract", "Model: session extraction", "An alias (haiku, sonnet, opus) or an explicit model id such as "
+       "claude-haiku-4-5, which pins the version so extraction doesn't change when the alias moves.", "model", "models",
+       choices=MODELS),
+    _i("models.consolidate", "Model: day summary", "", "model", "models", choices=MODELS),
+    _i("models.curate", "Model: request curation", "", "model", "models", choices=MODELS),
+    _i("models.dbflow", "Model: DB flow", "", "model", "models", choices=MODELS),
+    _i("models.worklog_condense", "Model: worklog condensing", "", "model", "models", choices=MODELS,
        default_value="sonnet"),
+    _i("models.brief", "Model: ticket briefs", "Not set: the day-summary model.", "model", "models", choices=MODELS,
+       optional=True),
+    _i("budget.model_daily_usd", "Daily model spend cap (USD)", "When today's model spend reaches this, supersession "
+       "and ticket briefs wait until tomorrow. Extraction and the day summary always run.", "number", "models",
+       min=0, max=100, default_value=3.0),
+    _i("brief.daily_cap", "Ticket briefs per day", "At most this many brief rebuilds a day.", "int", "models",
+       min=0, max=50, default_value=8),
+    _i("brief.verified_statuses", "Jira statuses that mean QA verified", "A brief shows \"Verified by QA\" for a "
+       "ticket in one of these Jira statuses (one per line, any case) when no passing test or replay proves it.",
+       "names", "models", default_value=["QA COMPLETED", "QA PASSED", "READY FOR RELEASE", "DONE", "CLOSED",
+                                         "RESOLVED"]),
     _i("mcp.daily_call_budget", "Daily MCP job budget", "Background MCP jobs per day. Runs you ask for count separately.",
        "int", "models", min=0, max=100),
+    _i("extract_timeout_s", "Extraction timeout (seconds)", "How long one extraction call may take before it is retried "
+       "later. Large chunks can need more than 5 minutes.", "int", "models", min=120, max=1800, default_value=600),
     _i("raw_retention_days", "Keep raw events (days)", "Raw capture files older than this are pruned once processed.",
        "int", "data", min=7, max=365),
     _i("reminders.mcp", "Weekly connect reminder", "A line at session start when Slack or Jira isn't connected.", "bool",
@@ -207,6 +257,12 @@ def check(it, value, current):
         return None
     if t == "choice":
         return None if value in [c[0] for c in it["choices"]] else "Pick one of the listed options."
+    if t == "model":
+        if value == "" and it.get("optional"):
+            return None  # not set: the fallback model
+        if isinstance(value, str) and (value in it["choices"] or MODEL_ID.match(value)):
+            return None
+        return "Use %s, or a model id such as claude-haiku-4-5." % ", ".join(it["choices"])
     if t == "days":
         if not isinstance(value, list) or not value or any(d not in DAYS for d in value) or len(set(value)) != len(value):
             return "Pick at least one day."
@@ -214,6 +270,10 @@ def check(it, value, current):
     if t == "prefixes":
         if not isinstance(value, list) or any(not isinstance(p, str) or not PREFIX.match(p) for p in value):
             return "Use uppercase project keys of 2 to 10 letters or digits, starting with a letter."
+        return None
+    if t == "names":
+        if not isinstance(value, list) or len(value) > 20 or any(not isinstance(n, str) or not NAME.match(n) for n in value):
+            return "Use one name per line: letters, digits, spaces or -, at most 40 characters."
         return None
     if t == "paths":
         if not isinstance(value, list) or any(not isinstance(p, str) or not p.strip() for p in value):
@@ -254,6 +314,8 @@ def check(it, value, current):
     if t == "name":
         if not isinstance(value, str) or len(value) > 80 or any(ord(c) < 32 for c in value):
             return "Use one line of at most 80 characters."
+        if it.get("pattern") and not re.fullmatch(it["pattern"], value):
+            return it.get("pattern_help") or "That value isn't allowed here."
         return None
     if t == "share_targets":
         from .safety import commands, paths as sp

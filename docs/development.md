@@ -79,7 +79,7 @@ cd scripts/ui; npm ci; cd ../..                  # once: playwright-core, which 
 python scripts/ui/run.py [--shots <folder>]      # every page, explicit light/dark themes, 1440/1280/900 px
 ```
 
-It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
+It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
 
 The page is plain ES modules with no build step: `chitragupta/dashboard/app/` (`main.js`, `lib/`, `pages/`, `app.css`) and the vendored Preact in `third_party/preact/`. Components use a small tagged-template helper (`lib/html.js`) instead of JSX.
 
@@ -152,3 +152,7 @@ Users get the update through Claude Code's plugin update. Their next session's m
 - removes its hook entries, skill and CLAUDE.md block
 
 `--dry-run` shows the plan without changing anything. `scripts/cutover.py rollback` restores everything from the manifest. Data is never deleted.
+
+Dashboard unit and browser fixtures freeze their clock at local noon. This keeps their activity samples nonempty even when checks start in the first minute after midnight.
+
+For isolated browser runs, `CG_UI_BROWSER` can select an explicit installed browser or a disposable Playwright headless-shell executable. `CG_UI_FOCUS=alerts` runs the delivery-alert regression alone; it is also included in a full browser run. Keep browser profiles and caches in disposable folders; short paths avoid Windows cache path limits.

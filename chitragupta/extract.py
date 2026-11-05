@@ -94,6 +94,8 @@ CONTENT_IN_DIGEST = (".bru", ".http", ".rest", ".json", ".sql", ".mmd", ".puml")
 
 def _line(ev):
     t = common.hhmm(ev.get("ts")) or "--:--"
+    if ev.get("_ln"):
+        t += " L%d" % ev["_ln"]  # the raw line, so an item can point at where it came from (item "ref")
     p = ev.get("payload") or {}
     e = ev.get("event")
     if e == "user-prompt":
@@ -141,11 +143,28 @@ def event_chars(ev):
     return n + (len(json.dumps(ki, ensure_ascii=False)) if ki else 0) + (300 if p.get("outcome") else 0)
 
 
+class Digest(str):
+    """One extraction chunk: the digest text, plus `turns` [(HH:MM, ticket, src, raw line of the turn's first event)] of
+    the turns it holds and `default`,
+    the ticket of its dominant turn (an item without a ticket falls back to its turn's ticket, then to this)."""
+    turns = ()
+    default = None
+
+
+def _turn_marker(ev):
+    return "=== TURN ticket=%s (%s) at %s ===" % (ev.get("_t") or "none", ev.get("_src") or "none",
+                                                  common.hhmm(ev.get("ts")) or "--:--")
+
+
 def build_digests(events, meta, candidates, already):
-    """Chronological digest(s) of one session's pending events, chunked at ~DIGEST_CAP chars."""
+    """Chronological digest(s) of one session's pending events, chunked at ~DIGEST_CAP chars. Events attributed per
+    turn (agent.attribute: _t, _src) get a `=== TURN … ticket=<KEY> (<src>) ===` line where each turn starts; chunks
+    split at turn boundaries (inside a turn only when the turn alone exceeds the cap, repeating its TURN line).
+    Returns [Digest]."""
     header = [
         "SESSION: %s   WORK DAY: %s" % (meta.get("session", "")[:8], meta.get("day", "")),
-        "REPO: %s   BRANCH: %s" % (os.path.basename((meta.get("repo") or "").rstrip("/\\")) or "-", meta.get("branch") or "-"),
+        "REPO: %s   BRANCH (fallback only): %s" % (os.path.basename((meta.get("repo") or "").rstrip("/\\")) or "-",
+                                                  meta.get("branch") or "-"),
         "CANDIDATE TICKETS: %s" % (", ".join(candidates) if candidates else "(none detected)"),
         "ALREADY_RECORDED: " + json.dumps(already, ensure_ascii=False)[:20000],
         "CURRENT_WORKLOG_LINES: " + json.dumps(meta.get("lines") or {}, ensure_ascii=False),
@@ -153,16 +172,58 @@ def build_digests(events, meta, candidates, already):
         "=== ACTIVITY (chronological; tool outputs are never recorded) ===",
     ]
     head = redact("\n".join(header)) + "\n"
-    lines = [redact(l) for l in (_line(e) for e in events) if l]
-    chunks, cur = [], head
-    for l in lines:
-        if len(cur) + len(l) + 1 > DIGEST_CAP and cur != head:
-            chunks.append(cur)
-            cur = head + "(continued)\n"
-        cur += l + "\n"
-    if cur != head:
-        chunks.append(cur)
+    turns, cur_key = [], None  # [(marker, (hhmm, ticket, src), [lines])]
+    for e in events:
+        if "_src" in e and (e.get("event") == "user-prompt" or (e.get("_t"), e.get("_src")) != cur_key or not turns):
+            cur_key = (e.get("_t"), e.get("_src"))
+            turns.append((redact(_turn_marker(e)), (common.hhmm(e.get("ts")), e.get("_t"), e.get("_src"), e.get("_ln")), []))
+        elif not turns:
+            turns.append(("", None, []))
+        l = _line(e)
+        if l:
+            turns[-1][2].append(redact(l))
+    chunks = []
+    cur = {"text": head, "turns": [], "weights": {}}
+
+    def close():
+        if cur["text"] != head and cur["text"] != head + "(continued)\n":
+            d = Digest(cur["text"])
+            d.turns = [t for t in cur["turns"] if t]
+            w = cur["weights"]
+            d.default = max(w, key=lambda k: (w[k], k)) if w else None
+            chunks.append(d)
+        cur.update(text=head + "(continued)\n", turns=[], weights={})
+    for marker, info, lines in turns:
+        if not lines:
+            continue
+        size = len(marker) + 1 + sum(len(l) + 1 for l in lines)
+        if len(cur["text"]) + size > DIGEST_CAP and cur["turns"]:
+            close()  # the next turn starts a new chunk
+        if marker:
+            cur["text"] += marker + "\n"
+        cur["turns"].append(info)
+        for l in lines:
+            if len(cur["text"]) + len(l) + 1 > DIGEST_CAP and cur["text"] not in (head, head + "(continued)\n"):
+                close()  # one turn larger than a chunk: split inside it, the TURN line repeated
+                if marker:
+                    cur["text"] += marker + "\n"
+                cur["turns"].append(info)
+            cur["text"] += l + "\n"
+            if info and info[1]:
+                cur["weights"][info[1]] = cur["weights"].get(info[1], 0) + len(l)
+    close()
     return chunks
+
+
+def with_already(chunk, already):
+    """The chunk with its ALREADY_RECORDED header line recomputed (a later chunk sees what earlier chunks added)."""
+    line = redact("ALREADY_RECORDED: " + json.dumps(already, ensure_ascii=False)[:20000])
+    head, sep, rest = chunk.partition("\nALREADY_RECORDED: ")
+    if not sep:
+        return chunk
+    d = Digest(head + "\n" + line + "\n" + rest.split("\n", 1)[1] if "\n" in rest else head + "\n" + line)
+    d.turns, d.default = chunk.turns, chunk.default
+    return d
 
 
 def enrich_events(transcript_path, events, max_chars=20000):
@@ -268,8 +329,29 @@ class ExtractError(Exception):
         self.limit = limit
 
 
-def call_claude(kind, stdin_text, cfg, timeout=300):
-    """kind: 'extract' | 'extract_delta' | 'consolidate' | 'curate'. Returns (structured_output, cost_usd)."""
+# A purpose with no model of its own uses this one's (models.brief unset: the day-summary model).
+MODEL_FALLBACK = {"brief": "consolidate", "supersede": "consolidate"}
+
+
+def model_for(kind, cfg):
+    """The --model for a call: models.<kind>, then models.<kind's first word> ("extract_delta" -> extract), then the
+    fallback purpose's, then haiku for extraction and sonnet otherwise. A value may be an alias (haiku, sonnet, opus)
+    or an explicit model id, which pins the version."""
+    models = (cfg or {}).get("models") or {}
+    base = kind.split("_")[0]
+    fb = MODEL_FALLBACK.get(kind) or MODEL_FALLBACK.get(base)
+    return models.get(kind) or models.get(base) or (models.get(fb) if fb else None) or         ("haiku" if kind.startswith("extract") else "sonnet")
+
+
+EXTRACT_KINDS = ("extract", "extract_delta")
+
+
+def call_claude(kind, stdin_text, cfg, timeout=None):
+    """kind: 'extract' | 'extract_delta' | 'consolidate' | 'curate' | …. Returns (structured_output, cost_usd).
+    Every call that ran is noted in the model-spend ledger (modelbudget), tokens and cost, whether it succeeded or not.
+    Timeout: the caller's, else extract_timeout_s (600) for an extraction chunk, else 300 s."""
+    if timeout is None:
+        timeout = int((cfg or {}).get("extract_timeout_s") or 600) if kind in EXTRACT_KINDS else 300
     exe = resolve_claude(cfg)
     if not exe:
         raise ExtractError("claude executable not found")
@@ -278,8 +360,7 @@ def call_claude(kind, stdin_text, cfg, timeout=300):
     with open(schema_path, encoding="utf-8") as f:
         schema = json.load(f)
     schema_arg = json.dumps({k: v for k, v in schema.items() if k != "$schema"}, separators=(",", ":"))
-    models = cfg.get("models") or {}
-    model = models.get(kind) or models.get(kind.split("_")[0]) or ("haiku" if kind.startswith("extract") else "sonnet")
+    model = model_for(kind, cfg)
     cache_dir = common.env("LLM_CACHE")  # optional (backfill preview -> real run): same input, same answer
     cache_file = None
     if cache_dir:
@@ -309,6 +390,8 @@ def call_claude(kind, stdin_text, cfg, timeout=300):
     if rc != 0 or not isinstance(data, dict):
         raise ExtractError("claude rc=%s: %s" % (rc, (se or so).strip()[:400]), limit=limit)
     cost = float(data.get("total_cost_usd") or 0)
+    from . import modelbudget
+    modelbudget.note(kind, *modelbudget.usage_tokens(data), usd=cost, cfg=cfg)
     if data.get("is_error") or data.get("subtype") not in (None, "success"):
         raise ExtractError("claude error %s: %s" % (data.get("subtype"), str(data.get("result"))[:300]), limit=limit)
     out = data.get("structured_output")

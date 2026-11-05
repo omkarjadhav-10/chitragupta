@@ -5,14 +5,15 @@ import os
 import re
 
 from . import common
+from . import supersede
 from .redact import redact
-from .store import Store
+from .store import Store, display_title, jira_status, lookup
 
 NOTES_START, NOTES_END = "<!-- my-notes:start -->", "<!-- my-notes:end -->"
 NOTES_BLOCK = NOTES_START + "\n" + NOTES_END
 TAG = {"finding": "finding", "root_cause": "root cause", "how_it_works": "how it works", "fix": "fix",
        "decision": "decision", "config": "config", "error": "error", "repro_test": "repro", "reference": "reference",
-       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note"}
+       "todo": "todo", "question": "question", "blocker": "blocker", "note": "note", "risk": "risk"}
 DIALECT = {"postgresql": ("PostgreSQL", "sql"), "sqlserver": ("SQL Server", "sql"), "mongodb": ("MongoDB", "javascript"),
            "mysql": ("MySQL", "sql"), "other": ("SQL", "sql")}
 OPEN_KINDS = ("todo", "question", "blocker")
@@ -62,7 +63,9 @@ def write_view(path, body, mode="local", tail=None):
 
 def item_line(it, with_date=False):
     ev = ", ".join(code(e) for e in (it.get("evidence") or [])[:5])
-    conf = it.get("confidence") or ""
+    conf = "" if it.get("status") == "confirmed" else it.get("confidence") or ""
+    if it.get("status") == "hypothesis":
+        conf = "hypothesis"
     parts = ["`[%s]`" % TAG.get(it.get("kind"), it.get("kind")), "**%s**" % it.get("title", "").strip()]
     if with_date:
         parts.insert(0, it.get("date", ""))
@@ -79,6 +82,49 @@ def item_line(it, with_date=False):
     if tail:
         s += " _(" + "; ".join(tail) + ")_"
     return s
+
+
+def hub_item(it):
+    return "- " + item_anchor(it) + item_line(it, True)
+
+
+def item_block(items, kinds):
+    """A hub section's items (K3): the current ones; done TODOs and items a newer one replaced follow, collapsed and
+    labelled. Archived items and items waiting for review (K8) are left out here."""
+    byid = {i.get("id"): i for i in items}
+    sel = [i for i in items if i.get("kind") in kinds and not i.get("archived") and not i.get("review")]
+    cur = [i for i in sel if i.get("status") not in ("superseded", "done")]
+    done = [i for i in sel if i.get("status") == "done"]
+    sup = [i for i in sel if i.get("status") == "superseded"]
+    L = [hub_item(i) for i in sort_items(cur)]
+    if done:
+        L += ["", "<details><summary>Done (%d)</summary>" % len(done), ""]
+        L += [hub_item(i) + (" _(done: %s)_" % i["closed_by"] if i.get("closed_by") else "") for i in sort_items(done)]
+        L += ["", "</details>"]
+    if sup:
+        L += ["", "<details><summary>Superseded (%d)</summary>" % len(sup), ""]
+        for i in sort_items(sup):
+            rep = byid.get(i.get("superseded_by")) or {}
+            by = "[%s](#i-%s)" % ((rep.get("title") or "").replace("]", ")").replace("[", "("), rep["id"]) if rep                 else "a newer item"
+            L.append(hub_item(i) + " — replaced by " + by)
+        L += ["", "</details>"]
+    return L
+
+
+def needs_review(t, items):
+    """Items flagged as maybe another ticket's (K8), collapsed, each with the inbox lines that resolve it."""
+    flagged = sort_items([i for i in items if i.get("review") and not i.get("archived")])
+    if not flagged:
+        return []
+    L = ["<details><summary>Needs review (%d)</summary>" % len(flagged), "",
+         "_Recorded under %s but maybe not about it. Add a line to inbox.md: `%s: keep <id>` keeps it here, "
+         "`%s: move <id> <KEY>` copies it to that ticket and archives it here._" % (t, t, t), ""]
+    for i in flagged:
+        r = i["review"]
+        to = r.get("suggest") or "<KEY>"
+        L.append("%s — _%s_ · `%s: keep %s` · `%s: move %s %s`" % (hub_item(i), r.get("why") or "", t, i["id"], t,
+                                                                  i["id"], to))
+    return L + ["", "</details>"]
 
 
 def sort_items(items, newest_first=True):
@@ -256,7 +302,9 @@ def render_day(store, day, cfg, health):
 
     if dd.get("carried_todos"):
         L.append("## Carried over from previous day")
-        L += ["- [ ] " + t for t in dd["carried_todos"]]
+        for x in dd["carried_todos"]:
+            x = x if isinstance(x, dict) else {"text": str(x)}
+            L.append("- [x] %s _(done: %s)_" % (x.get("text"), x["closed_by"]) if x.get("closed_by") else "- [ ] " + (x.get("text") or ""))
         L.append("")
 
     # Tickets table
@@ -268,7 +316,7 @@ def render_day(store, day, cfg, health):
             tk = store.ticket(t)
             nf = len([i for i in slot.get("item_ids", []) if tk["items"].get(i, {}).get("kind") not in OPEN_KINDS])
             L.append("| [%s](../../../tickets/%s/README.md) | %s | %s | %s | %d | %d | %d |" % (
-                t, t, cell(tk.get("title")), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
+                t, t, title_cell(tk), cell(", ".join(slot.get("where", []))), fmt_time(slot.get("minutes")),
                 nf, len(slot.get("query_ids", [])), len(slot.get("api_keys", []))))
         L.append("")
         for t, slot in tickets:
@@ -365,13 +413,30 @@ def render_day(store, day, cfg, health):
     return "\n".join(L) + "\n"
 
 
+def heading(t, tk, level="#"):
+    """`# KEY — Jira title`, or just `# KEY` while the ticket has no card (a hint is never shown as the title)."""
+    title = display_title(tk)
+    return "%s %s — %s" % (level, t, title) if title else "%s %s" % (level, t)
+
+
+def title_cell(tk):
+    title = display_title(tk)
+    return cell(title) if title else ("_hint: %s_" % cell(tk["title_hint"]) if tk.get("title_hint") else "")
+
+
+def status_text(tk):
+    """'Jira: QA COMPLETED · Inferred: in_progress' (the parts that are known)."""
+    parts = [("Jira", jira_status(tk)), ("Inferred", tk.get("status_inferred") or "")]
+    return " · ".join("%s: %s" % (k, v) for k, v in parts if v) or "—"
+
+
 def fmt_time(m):
     return ("≈ " + common.fmt_minutes(m)) if m else "—"
 
 
 def ticket_section(store, dd, t, slot):
     tk = store.ticket(t)
-    L = ["### %s — %s" % (t, tk.get("title") or "(untitled)")]
+    L = [heading(t, tk, "###")]
     cons = (dd.get("consolidated") or {}).get(t) or {}
     did = cons.get("what_i_did") or []
     if did:
@@ -385,15 +450,15 @@ def ticket_section(store, dd, t, slot):
     if finds:
         L.append("- **Findings**")
         L += ["  - " + item_line(i) for i in finds]
-    tables = [tk["tables"][k]["name"] for k in slot.get("table_keys", []) if k in tk["tables"]]
-    qs = [tk["queries"][q] for q in slot.get("query_ids", []) if q in tk["queries"]]
+    tables = [r["name"] for r in _found(tk["tables"], slot.get("table_keys"))]
+    qs = [q for q in _found(tk["queries"], slot.get("query_ids")) if q.get("sent") is not False]  # never-sent SQL: data only
     if tables or qs:
         L.append("- **DB**" + (" — tables: " + ", ".join(code(x) for x in tables) if tables else ""))
         for q in qs:
             L.append("  - query: [%s](../../../tickets/%s/queries.md#q-%s) _(%s · %s)_" % (
                 cell(q.get("purpose") or common.truncate(q.get("text"), 60)), t, q["id"],
                 DIALECT.get(q.get("dialect"), ("SQL",))[0], q.get("kind")))
-    apis = [tk["apis"][k] for k in slot.get("api_keys", []) if k in tk["apis"]]
+    apis = _found(tk["apis"], slot.get("api_keys"))
     igs = [tk["integrations"][k] for k in slot.get("integration_keys", []) if k in tk["integrations"]]
     if apis or igs:
         L.append("- **APIs / integrations**")
@@ -425,6 +490,16 @@ def ticket_section(store, dd, t, slot):
             L += fallback_lines(fb)
     L.append("")
     return L
+
+
+def _found(d, keys):
+    """The records of a day slot's keys, each once (an old key resolves through the record's aliases)."""
+    out = []
+    for k in keys or []:
+        r = lookup(d, k)
+        if r is not None and not any(r is x for x in out):
+            out.append(r)
+    return out
 
 
 def other_section(dd, g, slot):
@@ -474,7 +549,7 @@ def draft_standup(store, dd):
     for t, slot in dd.get("tickets", {}).items():
         tk = store.ticket(t)
         last = sorted(slot.get("what_i_did", []), key=lambda w: w.get("time", ""))
-        y.append("%s: %s" % (t, last[-1]["text"] if last else (tk.get("title") or "worked on it")))
+        y.append("%s: %s" % (t, last[-1]["text"] if last else (display_title(tk) or "worked on it")))
         for i in slot.get("item_ids", []):
             it = tk["items"].get(i) or {}
             if it.get("kind") == "todo":
@@ -495,6 +570,10 @@ def health_footer(dd, health):
     line = "Recorder health: " + " · ".join(bits)
     if health.get("privacy") == "public":
         line += "  \n**⚠ Pushing is blocked: the GitHub repo is PUBLIC. Make it private; commits continue locally.**"
+    from . import gitsync
+    pw = gitsync.privacy_warning(health)
+    if pw and not any(pw in w for w in health.get("warnings") or []):
+        line += "  \n⚠ " + pw
     for w in health.get("warnings") or []:
         line += "  \n⚠ " + w
     return line
@@ -506,32 +585,74 @@ def total_minutes(tk):
     return sum((v or {}).get("minutes") or 0 for v in tk.get("timeline", {}).values())
 
 
-def render_ticket(store, t):
+EPIC_NOTE = "This is an Epic: its work is under its child tickets."
+
+
+def is_epic(tk):
+    from . import brief
+    return brief.kind_of(tk) == "epic"
+
+
+def render_epic(t, tk):
+    """An Epic's hub: its children (one line and status each), its days, the items archived as its children's work
+    (collapsed) and your notes. None of the knowledge sections: that work belongs to the children."""
+    items = [i for i in tk["items"].values() if isinstance(i, dict)]
+    L = [heading(t, tk), "",
+         "| Status | First worked | Last worked | ≈ Total time |", "|---|---|---|---|",
+         "| %s | %s | %s | %s |" % (status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
+                                   fmt_time(total_minutes(tk))), "", "_%s_" % EPIC_NOTE, ""]
+    L += render_ticket_brief(brief_view(tk, t), tk["items"])
+    tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
+          for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
+    if tl:
+        L += ["## Timeline"] + tl + [""]
+    old = sort_items([i for i in items if i.get("archived")])
+    if old:
+        L += ["<details><summary>Archived (%d)</summary>" % len(old), "",
+              "_Recorded under %s before it was known to be an Epic; kept here, out of every current view._" % t, ""]
+        L += [hub_item(i) for i in old] + ["", "</details>", ""]
+    L += ["## My notes", NOTES_BLOCK, ""]
+    return "\n".join(L)
+
+
+def _render_ticket_all(store, t):
     tk = store.ticket(t)
-    items = list(tk["items"].values())
-    by = lambda *kinds: sort_items([i for i in items if i.get("kind") in kinds])
-    L = ["# %s — %s" % (t, tk.get("title") or "(untitled)")]
+    if is_epic(tk):
+        return render_epic(t, tk)
+    items = [i for i in tk["items"].values() if isinstance(i, dict)]
+    by = lambda *kinds: item_block(items, kinds)
+    L = [heading(t, tk)]
     ql = quick_links(t, tk)
     if ql:
         L += [ql, ""]
-    L += ["| Status (inferred) | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
-         "| %s | %s | %s | %s | %s |" % (tk.get("status") or "—", cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
+    if not display_title(tk) and tk.get("title_hint"):
+        L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
+    L += ["| Status | Repos | First worked | Last worked | ≈ Total time |", "|---|---|---|---|---|",
+         "| %s | %s | %s | %s | %s |" % (status_text(tk), cell(", ".join(tk.get("repos", []))), tk.get("first") or "—",
                                        tk.get("last") or "—", fmt_time(total_minutes(tk))), ""]
     sec = lambda title, lines: L.extend(["## " + title] + (lines or ["_Nothing recorded yet._"]) + [""])
+    st = delivery_stage(tk)
+    if st:
+        L += ["**%s:** %s" % (stage_label(st), st["text"]), ""]
+    L += render_ticket_brief(brief_view(tk, t), tk["items"])
     L += hub_sections(t, tk)
 
-    sec("TL;DR", [tk["tldr"] + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
+    sec("TL;DR", [tldr_text(tk, st) + ("  \n_(as of %s)_" % tk["tldr_date"] if tk.get("tldr_date") else "")] if tk.get("tldr") else None)
     sec("Problem / context", [tk["problem"]] if tk.get("problem") else None)
-    sec("Root cause & key findings", ["- " + item_line(i, True) for i in by("root_cause", "finding", "note")])
-    sec("How it works", ["- " + item_line(i, True) for i in by("how_it_works")])
-    fix = ["- " + item_line(i, True) for i in by("fix")]
-    changed = [f for f in tk["files"].values() if f.get("changed")]
+    sec("Root cause & key findings", by("root_cause", "finding", "note"))
+    sec("How it works", by("how_it_works"))
+    fix = by("fix")
+    changed = [f for f in tk["files"].values() if f.get("changed") and f.get("verified") is True]
     if changed:
-        fix += ["", "Files changed:"] + ["- %s%s" % (code(f["path"]), " — " + f["role"] if f.get("role") else "") for f in sorted(changed, key=lambda f: f["path"])]
+        fix += ["", "%s changed — see the Code map below." % ("1 file" if len(changed) == 1 else "%d files" % len(changed))]
     if tk.get("commits"):
         fix += ["", "Commits:"] + ["- %s %s %s %s _(%s)_" % (c.get("date", "")[:10], c.get("repo_name"), code(c.get("short")), c.get("subject"), c.get("ref"))
                                    for c in sorted(tk["commits"].values(), key=lambda c: c.get("date", ""), reverse=True)]
     sec("Fix / changes", fix if any(x.strip() for x in fix) else None)
+    from . import release
+    rp = release.brief_lines(tk, t, relative=False)
+    if rp:
+        sec("Release plan", ["- " + x.strip() if not x.startswith("  ") else "  - " + x.strip() for x in rp[1:]])
     gs = git_section(tk)
     if gs:
         sec("Branches & PRs", gs + ["", "_All branches: [knowledge/branches.md](../../knowledge/branches.md)_"])
@@ -545,8 +666,9 @@ def render_ticket(store, t):
         db += ["| %s | %s | %s | %s | %s |" % (code(v["name"]), cell(v.get("db")), cell(v.get("purpose")),
                                               cell(", ".join(v.get("key_columns", []))), cell("; ".join(v.get("relations", []))))
                for _, v in sorted(tk["tables"].items())]
-    if tk["queries"]:
-        db += ["", "%d quer%s — see [queries.md](queries.md)." % (len(tk["queries"]), "y" if len(tk["queries"]) == 1 else "ies")]
+    nq = len(shown_queries(tk))
+    if nq:
+        db += ["", "%d quer%s — see [queries.md](queries.md)." % (nq, "y" if nq == 1 else "ies")]
     sec("Database", db)
     api = []
     if tk["apis"]:
@@ -557,21 +679,362 @@ def render_ticket(store, t):
                 for _, a in sorted(tk["apis"].items())]
     sec("APIs", api)
     sec("Integrations", ["- **%s** · %s — %s" % (g.get("system"), g.get("artifact"), g.get("notes")) for _, g in sorted(tk["integrations"].items())])
-    sec("Config & environment", ["- " + item_line(i, True) for i in by("config")])
-    sec("Errors seen", ["- " + item_line(i, True) for i in by("error")])
-    rep = ["- " + item_line(i, True) for i in by("repro_test")]
+    sec("Config & environment", by("config"))
+    sec("Errors seen", by("error"))
+    rep = by("repro_test")
     rep += ["- Bruno · %s %s — %s _(%s, last %s)_" % (b.get("method"), code(b.get("url")), b.get("name"), b.get("collection"), b.get("last"))
             for _, b in sorted(tk.get("bruno", {}).items())]
     sec("How to reproduce / test", rep)
-    sec("Decisions", ["- " + item_line(i, True) for i in by("decision")])
-    sec("Open questions · TODO · blockers", ["- " + item_line(i, True) for i in by("question", "todo", "blocker")])
-    sec("Code map", ["- %s — %s" % (code(f["path"]), f.get("role") or ("changed" if f.get("changed") else "")) for f in sorted(tk["files"].values(), key=lambda f: f["path"])])
-    sec("References consulted", ["- " + item_line(i, True) for i in by("reference")])
+    sec("Decisions", by("decision"))
+    if by("risk"):
+        sec("Risks", by("risk"))
+    sec("Open questions · TODO · blockers", by("question", "todo", "blocker"))
+    from . import offticket
+    rv = needs_review(t, items + offticket.record_reviews(tk))
+    if rv:
+        L += ["## Needs review"] + rv + [""]
+    sec("Code map", code_map(tk))
+    sec("References consulted", by("reference"))
     tl = ["- [%s](../../%s) — %s · %s" % (d, daily_rel(d), fmt_time((v or {}).get("minutes")), (v or {}).get("line") or "")
           for d, v in sorted(tk.get("timeline", {}).items(), reverse=True)]
     sec("Timeline", tl)
     L += ["## My notes", NOTES_BLOCK, ""]
     return "\n".join(L)
+
+
+def render_ticket(store, t):
+    from . import offticket, relevance, dbflow
+    tk = store.ticket(t)
+    if not relevance.focused(tk) or is_epic(tk):
+        return _render_ticket_all(store, t)
+    L = [heading(t, tk), "", quick_links(t, tk), "", "Status: " + status_text(tk), ""]
+    if not display_title(tk) and tk.get("title_hint"):
+        L += ["_hint: %s (no Jira card yet)_" % tk["title_hint"], ""]
+    # Long findings live in the recorded companion; summary evidence links remain reachable.
+    L += [line.replace("](#i-", "](all-recorded.md#i-") for line in render_ticket_brief(brief_view(tk, t), tk.get("items"))]
+    L += ["## " + relevance.heading(tk, "queries"), ""]
+    for q in relevance.query_groups(tk)[0][1][:5]:
+        L.append("- [%s](queries.md#q-%s)%s — %s" % (cell(q.get("purpose") or "Query"), q["id"],
+            " (" + q["role"] + ")" if q.get("role") else "", cell(common.truncate(q.get("revealed") or "", 220))))
+    for kind, title, cap in (("tables", "Core tables", 6), ("apis", "Core APIs", 5)):
+        L += ["", "## " + relevance.heading(tk, kind), ""]
+        for r in relevance.core(tk, kind, cap):
+            name = r.get("name") if kind == "tables" else "%s %s" % (r.get("method") or "", r.get("path") or "")
+            L.append("- %s — %s" % (code(name or ""), cell(common.truncate(r.get("purpose") or "", 220))))
+    rows = scenario_rows(tk)
+    if rows:
+        L += ["", "## Scenarios", "", "| Scenario | Trigger request | DB effect | Verify |", "|---|---|---|---|"] + rows
+    flows = dbflow.entries(tk)
+    if flows:
+        L += ["", "## Core DB flow", "", "| Scenario | Component | Operation | Table |", "|---|---|---|---|"]
+        L += ["| %s | %s | %s | %s |" % tuple(cell(e.get(f)) for f in ("scenario", "component", "operation", "table")) for e in flows[:12]]
+        L += ["", "[Flow and evidence](db-flow.md)"]
+    files = {k: f for k, f in (tk.get("files") or {}).items() if relevance.eligible(f) and f.get("changed")
+             and f.get("verified") is True and committed(tk, f) is True and f.get("relevance", "core") == "core"}
+    L += ["", "## Code map", ""] + (code_map(dict(tk, files=files)) or ["_No committed changed files recorded yet._"])
+    for kind in ("items", "queries", "tables", "apis", "files"):
+        records = tk.get(kind) or {}
+        target = "queries-recorded.md" if kind == "queries" else "all-recorded.md"
+        L += ["", "<details><summary>All recorded %s (%d)</summary>" % (kind, len(records)), "",
+              "[Open all recorded %s and evidence](%s)." % (kind, target), "", "</details>"]
+    review = needs_review(t, list((tk.get("items") or {}).values()) + offticket.record_reviews(tk))
+    if review:
+        L += ["", "## Needs review", ""] + review
+    L += ["", "## My notes", NOTES_BLOCK, ""]
+    return "\n".join(L)
+
+
+def render_recorded_ticket(store, t):
+    tk = store.ticket(t)
+    L = [_render_ticket_all(store, t)]
+    tests = [r for r in (tk.get("tests") or {}).values() if isinstance(r,dict) and r.get("id")]
+    if tests:
+        L += ["## Recorded tests", ""] + ['- <a id="i-%s"></a>%s: %s%s' % (r["id"],r.get("command") or "Test",r.get("status") or "unknown",
+             " · " + r["ref"] if r.get("ref") else "") for r in tests]
+    archived = [r for r in (tk.get("items") or {}).values() if r.get("archived")]
+    if archived:
+        L += ["## Archived findings", ""] + [hub_item(r) for r in archived]
+    rows = list((tk.get("data_flow") or {}).values()) + list((tk.get("dbflow_view") or {}).get("data_flow") or [])
+    if rows:
+        L += ["", "## Recorded DB flow", "", "| Scenario | Component | Operation | Table | Relevance | Evidence |", "|---|---|---|---|---|---|"]
+        L += ["| %s | %s | %s | %s | %s | %s |" % tuple(cell(e.get(f) or "") for f in ("scenario", "component", "operation", "table", "relevance", "evidence")) for e in rows]
+    return "\n".join(L)
+
+
+# --------------------------------------------------------------------------- the brief (FX-20), from brief.view(tk)
+
+BRIEF_ORDER = ("root_cause", "findings", "before", "after", "proposed", "fixes_made", "cons")
+BRIEF_HEAD = {"root_cause": "Root cause", "findings": "Helpful findings", "before": "How it works today",
+              "after": "How it works after the fix", "proposed": "Proposed fix", "fixes_made": "Fixes made",
+              "cons": "Possible cons"}
+CONFIDENCE = {"confirmed": "Confirmed", "likely": "Likely", "hypothesis": "Hypothesis", "none": "Not known"}
+CLAIM_LABEL = {"recorded": "Recorded", "suggested": "Suggested", "ruled-out": "Ruled out"}
+CITE_KINDS = ("commit", "pr", "jira", "query", "table", "replay", "test", "raw", "note")
+NOT_YET = "Not recorded yet"
+
+
+def brief_view(tk, t=None):
+    from . import brief
+    return brief.view(tk, t)
+
+
+def brief_sections(v):
+    """The view's sections in order, each a dict with "id" (the view may give a list or a dict by id)."""
+    s = (v or {}).get("sections") or []
+    if isinstance(s, dict):
+        keys = [k for k in BRIEF_ORDER if s.get(k)] + [k for k in s if k not in BRIEF_ORDER]
+        return [dict(s[k], id=k) for k in keys if isinstance(s[k], dict)]
+    return [x for x in s if isinstance(x, dict) and x.get("id")]
+
+
+def brief_heading(s):
+    return s.get("heading") or BRIEF_HEAD.get(s["id"]) or s["id"].replace("_", " ").capitalize()
+
+
+def brief_rows(s, key):
+    """A section's claims, steps or list rows, each text once: a view that gives the same rows as steps and as claims
+    (older views did, for the before/after sections) prints them once, as steps."""
+    rows = [c for c in s.get(key) or [] if isinstance(c, dict)]
+    if key == "claims" and s.get("steps"):
+        seen = {" ".join(str(x.get("text") or "").split()) for x in s["steps"] if isinstance(x, dict)}
+        rows = [c for c in rows if " ".join(str(c.get("text") or "").split()) not in seen]
+    return rows
+
+
+def brief_empty_text(s):
+    """What an empty section says: the view's text ("Not recorded yet", "Not started", …), never its flag."""
+    for k in ("text", "empty"):
+        if isinstance(s.get(k), str) and s[k]:
+            return s[k]
+    return NOT_YET
+
+
+def brief_empty(s):
+    return not (s.get("claims") or s.get("steps") or s.get("list") or (s.get("summary") or {}).get("text")
+                or (s.get("rejected") or {}).get("text") or (s.get("verified") or {}).get("text"))
+
+
+def cite_parts(c):
+    """(id, kind, rest, label) of one cite: an evidence id ("c607fa7d13", "commit:a1b2c3d", …) or {id, label, kind}."""
+    cid = str((c.get("id") if isinstance(c, dict) else c) or "")
+    pre, _, tail = cid.partition(":")
+    rest = tail if pre in CITE_KINDS else cid
+    kind = (c.get("kind") if isinstance(c, dict) else None) or (pre if pre in CITE_KINDS else "item")
+    label = (c.get("label") if isinstance(c, dict) else None) or {
+        "commit": "commit %s" % rest[:7], "pr": "PR #%s" % rest, "jira": rest, "query": "query", "table": rest,
+        "replay": "replay step %s" % rest, "test": "test", "raw": "session log", "note": "your note"}.get(kind) or "item %s" % rest[:10]
+    return cid, kind, rest, label
+
+
+def cite_target(kind, rest):
+    """Where a cite points from the hub README, or None (shown as text)."""
+    if kind in ("item", "note", "test"):
+        return "#i-" + rest
+    if kind == "query":
+        return "queries.md#q-" + rest
+    if kind == "replay":
+        return "requests.md"
+    return None
+
+
+def claim_texts(s):
+    """[(label or None, text, cites)] of a section's claims, steps and list rows, in order (for the plain surfaces)."""
+    out = []
+    for key in ("steps", "claims", "list"):
+        for c in brief_rows(s, key):
+            if c.get("text"):
+                out.append((CLAIM_LABEL.get(c.get("label")), c["text"].strip(), c.get("cites") or []))
+    for key in ("rejected", "summary", "verified"):
+        c = s.get(key)
+        if isinstance(c, dict) and (c.get("text") or (key == "verified" and c.get("state") == "verified")):
+            label = {"rejected": "Rejected", "summary": None}.get(key)
+            if key == "verified":
+                label = verified_label(c)
+            out.append((label, (c.get("text") or "").strip(), c.get("cites") or []))
+    return out
+
+
+def verified_label(c):
+    """"Verified", "Verified by QA (Jira: <status>)" or "Not verified": the view's label, else from the state."""
+    if c.get("state") == "verified":
+        return c.get("label") or "Verified"
+    return "Not verified"
+
+
+def render_summary(v):
+    L = ["## Ticket summary", ""]
+    for row in (v.get("summary") or {}).get("sections") or []:
+        confidence = " (%s)" % row["confidence"] if row.get("confidence") not in (None,"none") else ""
+        L += ["### " + row["heading"] + confidence, ""]
+        for c in row.get("claims") or []:
+            refs = []
+            for cid in c.get("cites") or []:
+                _, kind, rest, label = cite_parts(cid)
+                target = cite_target(kind,rest)
+                refs.append("[%s](%s)" % (cid,target) if target else "`%s`" % cid)
+            L.append("- " + c["text"] + (" [" + ", ".join(refs) + "]" if refs else ""))
+        if not row.get("claims"):
+            L.append("_%s._" % (row.get("text") or "Not recorded yet"))
+        L.append("")
+    return L
+
+
+def render_ticket_brief(v, items=None):
+    if not v.get("summary"):
+        return render_brief(v,items)
+    return render_summary(v) + ["<details><summary>Full brief</summary>", ""] + render_brief(v,items) + ["</details>", ""]
+
+
+def render_brief(v, items=None):
+    """`## Brief` for the hub README: each section with its claims, evidence as footnotes ([^n]) that point at the
+    items' anchors (#i-<id>), queries.md or requests.md. `items`: the ticket's items, to label bare item ids."""
+    v = v or {}
+    items = items or {}
+    notes, order = {}, []
+
+    def refs(cites):
+        out = ""
+        for c in cites or []:
+            cid, kind, rest, label = cite_parts(c)
+            it = items.get(rest) if kind in ("item", "note", "test") and not isinstance(c, dict) else None
+            if it:
+                label = ", ".join(x for x in (TAG.get(it.get("kind"), it.get("kind") or "item"), it.get("date") or "") if x)
+            if not cid:
+                continue
+            if cid not in notes:
+                order.append(cid)
+                notes[cid] = (len(order), kind, rest, label)
+            out += "[^%d]" % notes[cid][0]
+        return out
+
+    def line(label, text, cites):
+        if label and not (text or "").strip():
+            return "**%s**" % label + refs(cites)
+        return ("**%s:** " % label if label else "") + (text or "").strip() + refs(cites)
+
+    h = v.get("header") or {}
+    key = v.get("key") or h.get("key") or ""
+    L = ["## Brief", ""]
+    meta = [x for x in ("Generated %s" % h["updated"][:16].replace("T", " ") if h.get("updated") else "",
+                        "Jira: %s" % h["jira_status"] if h.get("jira_status") else "",
+                        "Inferred: %s" % h["status_inferred"] if h.get("status_inferred") else "") if x]
+    if meta and v.get("has_brief"):
+        L += ["_%s_" % " · ".join(meta), ""]
+    if v.get("stale") and v.get("has_brief"):
+        L += ["> **New findings since %s.** Refresh the brief with `/cg:ticket %s --brief` or *Refresh brief* in the "
+              "dashboard." % (str(v["stale"].get("since") or "")[:16].replace("T", " "), key), ""]
+    if v.get("epic"):
+        L += ["### Child tickets", ""]
+        L += ["- [%s](../%s/README.md)%s%s%s" % (c.get("key"), c.get("key"), " — " + c["title"] if c.get("title") else "",
+                                                 " _(%s)_" % c["status"] if c.get("status") else "",
+                                                 ": " + (c.get("summary_line") or c["line"]) if c.get("summary_line") or c.get("line") else "")
+              for c in v.get("children") or []] or ["_No child tickets recorded yet._"]
+        L.append("")
+    elif not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        conf = CONFIDENCE.get(rc.get("confidence"), rc.get("confidence"))
+        L += ["_No brief yet: it is written at day close, or now with `/cg:ticket %s --brief`. Until then, the current "
+              "root cause:_" % key, "", "### Root cause" + (" (%s)" % conf if conf else ""), "",
+              line(None, rc["text"], rc.get("cites")) if rc.get("text") else "_%s._" % NOT_YET, ""]
+    else:
+        for s in brief_sections(v):
+            head = "### " + brief_heading(s)
+            if s["id"] == "root_cause" and s.get("confidence") and not brief_empty(s):
+                head += " (%s)" % CONFIDENCE.get(s["confidence"], s["confidence"])
+            if s["id"] == "fixes_made":
+                head += " _(%s)_" % (s.get("source") or "from git and PRs")
+            if s.get("override"):
+                head += " _(your correction)_"
+            L += [head, ""]
+            if brief_empty(s):
+                L += ["_%s._" % brief_empty_text(s).rstrip("."), ""]
+                continue
+            L += ["%d. %s" % (n, line(None, x.get("text"), x.get("cites"))) for n, x in enumerate(brief_rows(s, "steps"), 1)]
+            L += [("" if s["id"] == "root_cause" else "- ") + line(CLAIM_LABEL.get(c.get("label")), c.get("text"), c.get("cites"))
+                  for c in brief_rows(s, "claims")]
+            L += ["- " + line(None, f.get("text"), f.get("cites")) for f in s.get("list") or []]
+            for key_, label in (("rejected", "Rejected"), ("summary", None), ("verified", None)):
+                c = s.get(key_)
+                if isinstance(c, dict) and (c.get("text") or (key_ == "verified" and c.get("state") == "verified")):
+                    if key_ == "verified":
+                        label = verified_label(c)
+                    L += ["", line(label, c.get("text"), c.get("cites"))]
+            L.append("")
+    for cid in order:
+        n, kind, rest, label = notes[cid]
+        target = cite_target(kind, rest)
+        L.append("[^%d]: %s" % (n, "[%s](%s)" % (label.replace("]", ")"), target) if target
+                                else "%s (`%s`)" % (label, cid) if label != cid else "`%s`" % cid))
+    if order:
+        L.append("")
+    return L
+
+
+def item_anchor(i):
+    """`<a id="i-<id>"></a>` (and one per alias) so the brief's footnotes and the dashboard can point at an item."""
+    return "".join('<a id="i-%s"></a>' % x for x in [i.get("id")] + list(i.get("aliases") or []) if x)
+
+
+def committed(tk, f):
+    """True when a commit of the ticket changed file record `f`, False when none did, None when not known yet (a
+    commit whose file list wasn't read yet)."""
+    if f.get("committed") or f.get("verified_by") == "commit":
+        return True
+    commits = [c for c in (tk.get("commits") or {}).values() if isinstance(c, dict)]
+    if any(f.get("path") in (c.get("files") or ()) for c in commits):
+        return True
+    if f.get("committed") is False or all(isinstance(c.get("files"), list) for c in commits):
+        return False
+    return None
+
+
+def change_label(tk, f):
+    """The code map's Changed cell: "yes" for a file a commit changed (or not known yet), "edited, not committed"
+    for one only a session's Edit/Write tool call changed, "—" for one that wasn't changed."""
+    if not f.get("changed"):
+        return "—"
+    if f.get("verified_by") == "edit" and committed(tk, f) is False:
+        return "edited, not committed"
+    return "yes"
+
+
+def code_map(tk):
+    """One table of the ticket's verified files (edited, committed or found in git), changed ones first, each listed
+    once; paths only the model named, and that git hasn't confirmed, go under a collapsed list."""
+    files = sorted(tk.get("files", {}).values(), key=lambda f: (not f.get("changed"), f.get("path") or ""))
+    if not files:
+        return None
+    ok = [f for f in files if f.get("verified") is True]
+    rest = [f for f in files if f.get("verified") is not True]
+    L = []
+    if ok:
+        L += ["| File | Role | Changed |", "|---|---|---|"]
+        L += ["| %s | %s | %s |" % (code(f["path"]), cell(f.get("role")), change_label(tk, f)) for f in ok]
+    if rest:
+        L += ["", "<details><summary>Unverified paths (%d)</summary>" % len(rest), "",
+              "_Named in the notes but not (yet) found in the repo: not edited in a session, not in a commit._", ""]
+        L += ["- %s%s%s" % (code(f["path"]), " — " + cell(f.get("role")) if f.get("role") else "",
+                            " _(pending check)_" if f.get("verified") is None else "") for f in rest]
+        L += ["", "</details>"]
+    return L
+
+
+def delivery_stage(tk):
+    from . import delivery
+    return delivery.stage(tk.get("git") or {})
+
+
+def stage_label(st):
+    return "Delivery (computed from git and PRs%s)" % (", checked " + st["checked_at"][:10] if st.get("checked_at") else "")
+
+
+def tldr_text(tk, st, md=True):
+    """The model's TL;DR with every sentence that contradicts the computed delivery stage marked outdated."""
+    from . import delivery
+    out = []
+    for s, note in delivery.check_tldr(tk.get("tldr"), st):
+        out.append(s if not note else ("_%s:_ ~~%s~~" % (note, s) if md else "(%s) %s" % (note, s)))
+    return " ".join(out)
 
 
 def quick_links(t, tk):
@@ -613,8 +1076,12 @@ def scenario_rows(tk):
     for n in view_names or [e.get("scenario") for e in flows]:
         if n and n not in names:
             names.append(n)
+    from . import relevance
+    if relevance.focused(tk):
+        active = {e.get("scenario") or "main" for e in flows}
+        names = [n for n in names if n in active]
     names = names[:6]
-    if not names and final:
+    if not names and final and not relevance.focused(tk):
         names = [""]
     triggers = [s for s in final if not s.get("repeat") and not re.search(r"(?i)login|token|auth", s.get("name") or "")]
     # unlabelled steps (e.g. your own folder.bru order) go to the one scenario they share the most words with
@@ -671,22 +1138,67 @@ def hub_sections(t, tk):
     return L
 
 
-def render_queries(store, t):
+def _render_queries_all(store, t):
     tk = store.ticket(t)
     L = ["# %s — Queries" % t, ""]
-    qs = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    if is_epic(tk):
+        return "\n".join(L + ["_%s_" % EPIC_NOTE]) + "\n"
+    allq = sorted(tk["queries"].values(), key=lambda q: (q.get("date", ""), q.get("time", "")), reverse=True)
+    qs = [q for q in allq if q.get("sent") is not False]
     if not qs:
         L.append("_No queries recorded yet._")
     for q in qs:
         lang = DIALECT.get(q.get("dialect"), ("SQL", "sql"))
-        L += ['<a id="q-%s"></a>' % q["id"],
-              "## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query")]
+        L += ['<a id="q-%s"></a>' % x for x in [q["id"]] + list(q.get("aliases") or [])]
+        L.append("## %s %s · %s · %s — %s" % (q.get("date"), q.get("time") or "", lang[0], q.get("kind"), q.get("purpose") or "query"))
         if q.get("tables"):
             L.append("Tables: " + ", ".join(code(x) for x in q["tables"]))
         if q.get("revealed"):
             L.append("Revealed: " + q["revealed"])
+        if q.get("ref"):
+            L.append("Sent: " + code(q["ref"]))
+        elif q.get("sent") is None and q.get("evidence"):
+            L.append("Saved in: " + ", ".join(code(e) for e in q["evidence"][:2]))
         L += ["```" + lang[1], fence_safe(q.get("text")).rstrip(), "```", ""]
+    hidden = len(allq) - len(qs)
+    if hidden:
+        L += ["_%d more quer%s the notes mention %s never found among the SQL sent; kept in the data, not listed "
+              "here (dashboard: Not run)._" % (hidden, "y" if hidden == 1 else "ies", "was" if hidden == 1 else "were"), ""]
     return "\n".join(L) + "\n"
+
+
+def render_recorded_queries(store, t):
+    tk = store.ticket(t)
+    L = ["# %s — All recorded queries" % t, ""]
+    for key, q in sorted((tk.get("queries") or {}).items()):
+        L += ['<a id="q-%s"></a>' % key, "", "## " + (q.get("purpose") or "Query"), "",
+              "%s%s" % (q.get("relevance") or "core", " · " + q["hidden_reason"] if q.get("hidden_reason") else ""),
+              "Variant of: " + q["variant_of"] if q.get("variant_of") else "", q.get("revealed") or "",
+              "Sent: %s%s" % (q.get("sent"), " · " + q["ref"] if q.get("ref") else ""),
+              "```sql", fence_safe(q.get("text") or ""), "```", ""]
+    return "\n".join(L)
+
+
+def render_queries(store, t):
+    from . import relevance
+    tk = store.ticket(t)
+    if not relevance.focused(tk) or is_epic(tk):
+        return _render_queries_all(store, t)
+    L = ["# %s — %s" % (t, relevance.heading(tk, "queries")), ""]
+    for title, rows in relevance.query_groups(tk):
+        L += ["## " + title, ""]
+        for q in rows:
+            L += ['<a id="q-%s"></a>' % q["id"], "", "### " + cell(q.get("purpose") or "Query"), "",
+                  "Role: " + (q.get("role") or "not selected yet"), cell(q.get("revealed") or ""),
+                  "```sql", fence_safe(q.get("text") or ""), "```", ""]
+    L += ["<details><summary>All recorded (%d)</summary>" % len(tk.get("queries") or {}), "",
+          "[Open every query by relevance, including variants and unrun SQL](queries-recorded.md).", "", "</details>", ""]
+    return "\n".join(L)
+
+
+def shown_queries(tk):
+    """The ticket's queries that were sent (or saved by you, or recorded before sending was checked): sent != False."""
+    return [q for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False]
 
 
 def render_index(store):
@@ -697,7 +1209,7 @@ def render_index(store):
         rows.append((tk.get("last") or "", t, tk))
     for _, t, tk in sorted(rows, reverse=True):
         L.append("| [%s](%s/README.md) | %s | %s | %s | %s | %s | %s |" % (
-            t, t, cell(tk.get("title")), tk.get("status") or "—", tk.get("first") or "—", tk.get("last") or "—",
+            t, t, title_cell(tk), status_text(tk), tk.get("first") or "—", tk.get("last") or "—",
             fmt_time(total_minutes(tk)), cell(common.truncate(tk.get("tldr"), 220))))
     if not rows:
         L.append("| — | _No tickets yet_ | | | | | |")
@@ -709,7 +1221,8 @@ def _tlinks(ts):
 
 
 def render_catalogs(store):
-    cat = store.catalog()
+    from . import relevance
+    cat = relevance.catalog_view(store.catalog(), store.ticket)
     tb = ["# Database tables & collections", "", "| Table/collection | DB | Purpose | Key columns | Tickets | Last seen |", "|---|---|---|---|---|---|"]
     tb += ["| %s | %s | %s | %s | %s | %s |" % (code(v["name"]), cell(v.get("db")), cell(v.get("purpose")), cell(", ".join(v.get("key_columns", []))),
                                               _tlinks(v.get("tickets")), v.get("last_seen", "")) for _, v in sorted(cat["tables"].items())]
@@ -746,12 +1259,37 @@ def render_context(store, t):
     tk = store.ticket(t)
     path = os.path.join(common.home(), "tickets", t, "README.md")
     al = alert_line(t, tk)
-    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + tk["title"] if tk.get("title") else "", path),
-         "Status (inferred): %s. First worked %s, last worked %s, about %s in total." % (
-             tk.get("status") or "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
+    title = display_title(tk)
+    L = ([al] if al else []) + ["Worklog facts recorded automatically for %s%s (full file: %s)." % (t, " — " + title if title else "", path),
+         "Status: %s. First worked %s, last worked %s, about %s in total." % (
+             status_text(tk) if status_text(tk) != "—" else "unknown", tk.get("first"), tk.get("last"), common.fmt_minutes(total_minutes(tk)))
          if tk.get("first") else "No Claude Code activity recorded for it yet."]
+    st = delivery_stage(tk)
+    if st:
+        L.append("%s: %s." % (stage_label(st), st["text"]))
+    from . import release
+    L += release.brief_lines(tk, t, relative=False)
+    v = brief_view(tk, t)
+    L += brief_context_lines(v)
+    if v.get("epic"):
+        return redact(common.truncate("\n".join(L + [EPIC_NOTE]), CONTEXT_MAX))
+    from . import relevance
+    if relevance.focused(tk) or v.get("summary"):
+        for title, rows in relevance.query_groups(tk):
+            L.append(title + ": " + "; ".join("%s [%s]" % (q.get("purpose") or "Query", q["id"]) for q in rows))
+        L += [relevance.heading(tk, "tables") + ": " + ", ".join(r.get("name") or "" for r in relevance.core(tk, "tables", 6)),
+              relevance.heading(tk, "apis") + ": " + "; ".join("%s %s" % (r.get("method") or "", r.get("path") or "") for r in relevance.core(tk, "apis", 5))]
+        from . import dbflow
+        if dbflow.summary_line(tk):
+            L.append(dbflow.summary_line(tk))
+        return redact(common.truncate("\n".join(L), CONTEXT_MAX))
+    cur = [i for i in current_items(tk) if isinstance(i, dict)]
+    opens = sort_items([i for i in cur if i.get("kind") in OPEN_KINDS])[:6]
+    if opens:
+        L.append("Open TODOs / questions:")
+        L += ["- %s" % common.truncate(i["title"], 200) for i in opens]
     if tk.get("tldr"):
-        L.append("TL;DR: " + tk["tldr"])
+        L.append("TL;DR: " + tldr_text(tk, st, md=False))
     final = (tk.get("replay") or {}).get("final") or []
     if final:
         L.append("Saved requests (bash tickets/%s/replay.sh qa; Bruno folder bruno/%s): %s." % (
@@ -773,19 +1311,90 @@ def render_context(store, t):
                 continue
             L.append("- %s (%s): from %s, %s%s" % (b["branch"], name, b.get("parent") or "?", b["status"],
                                                  "; PR " + ", ".join("#%s" % n for n in b["prs"]) if b.get("prs") else ""))
-    finds = sort_items([i for i in tk["items"].values() if i.get("kind") not in OPEN_KINDS])[:8]
-    if finds:
-        L.append("Recent findings:")
+    # the newest findings fill what is left of the 4000 characters, whole lines only
+    txt = common.truncate("\n".join(L), CONTEXT_MAX)
+    finds = sort_items([i for i in cur if i.get("kind") not in OPEN_KINDS])[:40]
+    if finds and len(txt) + 20 < CONTEXT_MAX:
+        rows = []
         for i in finds:
             ev = "; ".join((i.get("evidence") or [])[:2])
-            L.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
-                                        " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
-    opens = sort_items([i for i in tk["items"].values() if i.get("kind") in OPEN_KINDS])[:6]
-    if opens:
-        L.append("Open TODOs / questions:")
-        L += ["- %s" % i["title"] for i in opens]
-    txt = "\n".join(L)
-    return redact(common.truncate(txt, 4000))
+            rows.append("- [%s] %s%s%s" % (TAG.get(i["kind"], i["kind"]), i["title"],
+                                           " — " + common.truncate(i.get("detail"), 220) if i.get("detail") else "", " (" + ev + ")" if ev else ""))
+        add = "\nRecent findings:"
+        for r in rows:
+            if len(txt) + len(add) + 1 + len(r) > CONTEXT_MAX:
+                break
+            add += "\n" + r
+        if add != "\nRecent findings:":
+            txt += add
+    return redact(common.truncate(txt, CONTEXT_MAX))
+
+
+CONTEXT_MAX = 4000
+CONTEXT_CLAIM = 300
+
+
+def current_items(tk):
+    """The ticket's current items: the brief engine's definition when it has one, else not archived, not superseded,
+    not flagged for review, and (files) not unverified / (queries) not unsent."""
+    from . import brief
+    fn = getattr(brief, "current_items", None)
+    if fn:
+        return fn(tk)
+    return [i for i in (tk.get("items") or {}).values() if isinstance(i, dict) and not i.get("archived")
+            and (i.get("status") or "current") != "superseded" and not i.get("review")
+            and i.get("verified") is not False and i.get("sent") is not False]
+
+
+def _cite_ids(cites, n=3):
+    ids = [cite_parts(c)[0] for c in cites or []]
+    ids = [x for x in ids if x][:n]
+    return " [%s]" % ", ".join(ids) if ids else ""
+
+
+def brief_context_lines(v):
+    """The brief for the SessionStart context: root cause, fixes made and possible cons, each claim with its first
+    evidence ids; the fallback's root cause until there is a brief; an Epic's children."""
+    v = v or {}
+    if v.get("epic"):
+        ch = v.get("children") or []
+        if any(c.get("summary_line") for c in ch):
+            lines = ["Epic. Child tickets:"]
+            for c in ch:
+                line = "%s: %s" % (c["key"],c.get("summary_line") or c.get("line") or "")
+                if sum(len(s)+1 for s in lines) + len(line) > 2800:
+                    lines.append("More children: open the ticket hub.")
+                    break
+                lines.append(line)
+            return lines
+        return ["Epic. Child tickets: %s." % "; ".join("%s %s%s" % (c.get("key"), common.truncate(c.get("title"), 80) or "",
+                                                                     " (%s)" % c["status"] if c.get("status") else "") for c in ch[:12])] if ch else []
+    if v.get("summary"):
+        from . import summary
+        return summary.text_lines(v["summary"])
+    if not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        if not rc.get("text"):
+            return []
+        return ["Root cause (%s; no brief yet): %s%s" % (rc.get("confidence") or "unknown", common.truncate(rc["text"], CONTEXT_CLAIM),
+                                                         _cite_ids(rc.get("cites")))]
+    by = {s["id"]: s for s in brief_sections(v)}
+    out = ["Brief (generated %s%s; evidence ids in brackets, get_ticket section=brief has them all):" % (
+        ((v.get("header") or {}).get("updated") or "?")[:16].replace("T", " "),
+        "; new findings since %s" % str(v["stale"].get("since") or "")[:16].replace("T", " ") if v.get("stale") else "")]
+    rc = by.get("root_cause")
+    if rc and not brief_empty(rc):
+        out.append("Root cause (%s): %s" % (rc.get("confidence") or "unknown", " ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(rc))))
+    fm = by.get("fixes_made")
+    if fm and not brief_empty(fm):
+        out.append("Fixes made (%s): %s" % (fm.get("source") or "from git and PRs", "; ".join(
+            common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites) for _l, text, cites in claim_texts(fm))))
+    cons = by.get("cons")
+    if cons and not brief_empty(cons):
+        out.append("Possible cons: %s" % "; ".join(("%s: " % lab if lab else "") + common.truncate(text, CONTEXT_CLAIM) + _cite_ids(cites)
+                                                   for lab, text, cites in claim_texts(cons)))
+    return out if len(out) > 1 else []
 
 
 def example_ticket(cfg):
@@ -952,6 +1561,13 @@ def render_all(store, cfg, health, days=None, tickets=None, everything=False):
         if common.write_text(q, render_queries(store, t)):
             changed.append(q)
         tk = store.ticket(t)
+        from . import relevance
+        if relevance.focused(tk):
+            for name, body in (("all-recorded.md", render_recorded_ticket(store, t)),
+                               ("queries-recorded.md", render_recorded_queries(store, t))):
+                path = os.path.join(h, "tickets", t, name)
+                if (write_view(path, redact(body)) if name == "all-recorded.md" else common.write_text(path, redact(body))):
+                    changed.append(path)
         dfp = os.path.join(h, "tickets", t, "db-flow.md")
         if tk.get("data_flow") or os.path.exists(dfp):
             from . import dbflow

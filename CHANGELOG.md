@@ -4,8 +4,165 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Release tracking (`releases.enabled`, off by default; [docs/releases.md](docs/releases.md)): each ticket's Jira release (fix version identity, planned date, the date in its name kept as a separate fact) resolved per repository to a release branch (your mapping, an unambiguous structured link, else suggestions to confirm) with source, confidence and verification time recorded. Ambiguous fix versions and unconfirmed branches stay visible and never yield a development base.
+- Per affected repository: development branches and their recorded start, PRs per destination (follow-up, closed and superseded PRs kept; a shared QA integration PR linked to every ticket whose commits it carries), release / QA / UAT stages from the delivery check's evidence (present, partial, missing, unknown, not started, not applicable), wrong-base and wrong-target flags, a moved release kept in history with old targets flagged, and one next step following the repository's strategy.
+- UAT as `required` / `not_required` / `unknown` from a configured Jira field or label or your choice; the UAT destination and promotion path per repository; branch inclusion, deployment and acceptance tracked separately (deployment and acceptance only from configured Jira statuses). Reminders are recomputed from evidence every tick and never cleared by being shown.
+- A planning brief per repository in the session context (with the cached context's age), `/cg:branches <KEY>` and `get_branch_status`; the monthly release overview through `/cg:branches [YYYY-MM]`, `list_tickets(release=...)` and the dashboard's Releases page, with overdue and unresolved-date groups and per-repo detail. Release and UAT reminders also appear in `get_alerts`.
+- Dashboard: a **Releases** page (`#/releases?month=YYYY-MM`) and, on a ticket, a *Release:* line in the header and a **Release plan** section at the top of Branches & PRs; a reminder count on the ticket list. Shareable exports drop the release plan's PR links like the other PR links.
+- Built-in strategy `release-then-qa-sync`: a QA integration branch cut from `qa` merges the release branch, then PRs into `qa`.
+- `/cg:branch release-map|release-unmap|release-pick|release-branch|release-repos|uat`, applied through `inbox.md`; a *Releases & UAT* group on the Settings page.
+- Jira: the card job also reads fix versions, assignee and the configured release / UAT fields (same call); two budgeted read-only jobs read the scope search for the monthly overview and each project's versions catalog (`jira_get_project_versions`, added to the Jira read allowlist).
+
 ### Changed
-- Redesign the local dashboard with the quiet Mix layout: top navigation, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Dark Night ink is the default; saved theme choices remain respected. Fonts are bundled locally and embedded with their licenses in standalone ticket exports.
+- The delivery check uses the release branch confirmed for the ticket's Jira release as its release target when release tracking is on, and checks the UAT branch when UAT is required.
+- The branch guard also warns when a new ticket branch is cut from, or a PR targets, another release branch than the one confirmed for the ticket's Jira release.
+
+### Fixed
+- MCP jobs on macOS and Linux read a large tool result that Claude Code saved to a file (a POSIX path); only Windows drive paths were recognised before.
+- Tests no longer assume the machine's clock is UTC+05:30 (fixtures use the local timezone), and the Windows-only path-guard tests are skipped elsewhere, so CI passes on its UTC runners.
+
+## [0.5.1] - 2026-10-25
+
+### Added
+- Briefs select up to five key queries and three context queries. Default query views keep both groups visible; short dated SQL candidates help preserve early cause evidence.
+
+- Gzip negotiation for dashboard JSON responses, including explicit identity and HEAD handling.
+- Monotonic per-step tick timings and a Health warning for background runs over 60 seconds.
+- A grounded six-question summary and concrete next action alongside the preserved full brief, with a backed migration and the existing single-call budget/triggers. Jira, grouped git changes and actual verification facts win over model wording; only owner provenance overrides the cause.
+- Additive record/scenario relevance, explanations and literal-query variants retain all evidence while separating core work from supporting context and noise; a backed migration covers existing tickets.
+- A learning guide maps captured events, ticket knowledge, time, delivery and the interface to the project's code and documentation.
+
+### Changed
+- Ticket pages, hubs, exports and SessionStart lead with six cited answers; Full brief preserves the previous explanation behind one disclosure. Epic child rows answer the same six questions, and verification chips open recorded proof.
+- Migrated tickets show capped core lists with meaningful pre-pick ordering and honest not-yet-ranked labels. Full evidence stays behind All recorded and generated companions; the dashboard loads heavy tabs, archives and hub text on demand. Global DB maps filter noise and unresolved reviews.
+- The existing brief call also selects validated core query, table, API and scenario ids. DB-flow consolidation receives the problem and current cause/fix without adding a relevance model call.
+- The quiet Mix dashboard has primary navigation and More pages, a Day Line and worklog ledger, ticket evidence margins, a monthly timesheet, concise Health summaries and a sticky settings review bar. Night ink is the default; saved choices remain respected. Fonts and licenses are embedded in ticket exports.
+
+### Fixed
+- Focused Epic query files, SessionStart and core API lists keep retained child evidence under the children instead of presenting it as Epic knowledge.
+
+- Summary citations open and focus supporting query evidence even when its lazy response takes longer than one animation cycle.
+
+- Cache empty branch commit facts and invalidate them when the remote tip moves, avoiding repeated unchanged-ticket rewrites.
+- Make path verification converge with fair ticket budgets, committed-file cache priority, and terminal unknown-repo results.
+- Stagger background fetches across ticks, with at most two due repositories and fair rotation after failures.
+- Batch host CLI pull-request refreshes once per repository and reuse open-PR checks until due.
+- Reuse one off-ticket record profile per ticket during merges and migrations, retaining self-evidence exclusion.
+- Six-question summaries show the newest logical changes and count earlier groups; fallback unknowns prioritize current blockers, questions and risks while preserving grounded model choices first.
+- Ticket change facts group cherry-picked copies by delivery patch id and preserve old SHA citation aliases; stash snapshots are excluded from commit capture and summary changes.
+- Focused hubs retain labelled title hints and core scenario effects; SessionStart retains the core DB summary and recorded query companions show sent/raw provenance.
+- Ordinary owner notes beginning with keep/move and unresolved review commands remain inbox notes; only successfully resolved commands are consumed.
+- Record review flags appear in Needs review with copyable inbox keep/move commands for query ids, table keys and API keys; moves copy additively and archive the original.
+- K8 reviews queries, tables and APIs as well as findings, preserving records and owner decisions; existing tickets receive flags through a backed-up migration.
+- Multi-ticket prompts prefer a named work-branch key, retaining first-own-words and last-breadcrumb behavior otherwise. Configured shared hotfix bases remain excluded from branch attribution.
+- Follow-ups continue the immediately previous turn within thirty minutes: notifications inherit any source, while unnamed typed prompts of at most twelve words inherit only an own-words chain. Branch-decided questions end that chain; tools do not renew its window.
+- Queries, tables, APIs and files follow their own turn and carry their own timestamp, with trusted raw/SQL times preferred over model or chunk times.
+- Parallel tickets use separate Day Line tracks; Jira entries without a start time remain in the ledger with an explanation.
+- Older media-query APIs keep appearance setup working, including saved density and motion choices.
+- Finding evidence no longer creates repeated landmarks, More references an existing menu, and j/k opens the ticket switcher before moving visible focus.
+- Printed dashboard pages and standalone exports force light colors so ink stays visible when backgrounds are omitted, including before the appearance script runs.
+- Ticket Overview renders delivery alerts and their accessible alert region once.
+- Supersession skips a final singleton when no comparison context fits, avoiding a model call that cannot supersede anything.
+- Rebuild and interrupted migration retries do not duplicate archived history versions.
+- Brief rendering reads passing evidence directly and retains older passing-test citations beyond the recent-facts window.
+- Rebuild restoration unions prior and re-extracted histories, preserving both through compaction.
+- Terse re-mentions preserve richer explanations and do not promote confidence. Identical updates are no-ops; brief freshness ignores whitespace and case.
+- Item history uses content deduplication, chronological snapshots without evidence, and a five-version inline bound. Older versions remain in an additive archive; existing data is backed up before migration.
+- Extracted notes accept corrections; only inbox/user provenance protects owner wording. Identical owner-note retries do not count as updates, and evidence is capped at ten.
+- Recompute Jira-only verification in both directions when status or configuration changes.
+- Resolve an exact current-item citation with an item: prefix while rejecting unknown or historical ids.
+- Keep dashboard activity fixtures deterministic around midnight.
+- Wrap long brief method names and owner corrections on phones, keep ticket actions below the heading, and lead with generated content without repeating the legacy summary.
+
+
+### Security
+- Allow guarded names-only `ls-tree` reads for path verification; reject output-file and repository-redirect options. Document existing `ls-files` reads alongside the safety red-team coverage.
+
+### Migration
+- Backed `kb51-record-review`, `kb51-relevance` and `kb51-summary` steps add review/relevance fields and six-section summaries while preserving canonical evidence and the previous brief.
+- `kb51-record-provenance` backs up tickets/catalog before marking unknown historical origins as legacy, without moving records or inventing times.
+- `kb51-history-compact` backs up canonical tickets and existing history archives, then retains the first and newest four snapshots inline. Older versions remain in additive, content-deduplicated `data/history/<KEY>.jsonl` files.
+
+## [0.5.0] - 2026-10-24
+
+Knowledge you can trust, and a one-minute brief per ticket. Work is filed under the ticket you name, old conclusions
+are superseded instead of piling up, file paths and queries are checked against what really happened, time is counted
+once, and every ticket page opens on a short, evidenced brief. Includes a data migration (backed up first).
+
+### Added
+- **Ticket brief.** Each ticket gets a short brief (`tk["brief"]`, `chitragupta/brief.py`): Root cause (or "Why this
+  change" for a Story or Task), Helpful findings, How it works today, Proposed fix, Fixes made, How it works after the
+  fix and Possible cons (*Recorded* or *Suggested*), about 400 words. One JSON-schema model call (`models.brief`, else
+  `models.consolidate`) over the ticket's current items and deterministic facts, never raw events. Every claim must
+  cite an evidence id (an item, `commit:`, `pr:`, `jira:`, `query:`, `table:`, `replay:`, `test:`); claims that cite
+  nothing, a missing or superseded id, or a path, table, endpoint or class the ticket's verified records don't contain
+  are dropped and listed. "Fixes made" and the statuses come from git, PR and Jira data, never from model text. Your
+  inbox correction (`ABC-1001: root cause: …`, `fix: …`, `cons: …`) replaces the model's wording and survives
+  regeneration. Written at day close when its inputs changed, by `/cg:ticket <KEY> --brief`, and by the dashboard's
+  **Refresh brief** (new allowlisted action `brief-refresh`); "New findings since …" shows when it is out of date.
+- The ticket page, the hub `README.md`, the single-file export, the SessionStart context and the MCP server's
+  `get_ticket` (new section `brief`) lead with the brief; everything extracted stays one click away under
+  *All findings*. An Epic (any `jira.parent_issue_types`) gets no brief: its page lists its child tickets.
+  `docs/design.md` documents the dashboard's tokens and the brief's components.
+- **`agent rebuild <KEY...> | --all`** rebuilds tickets' knowledge from the raw events on disk under the current rules.
+  `--dry-run` prices it from the spend ledger and writes nothing; a real run takes the agent lock, refuses over
+  `rebuild.cap_usd`, backs up first, archives the old extracted items (never deletes them; your notes stay current),
+  re-extracts, recomputes minutes (keeping `minutes_before_rebuild`), runs supersession and the brief, and re-renders
+  hubs and INDEX. Daily files are not touched.
+- **Model spend ledger and daily cap.** Every internal model call records tokens and cost per day and purpose
+  (`health.model_usage`). `budget.model_daily_usd` ($3) gates supersession and briefs (never extraction);
+  `brief.daily_cap` (8). Health, doctor and the dashboard show today's spend against the cap. `models.*` accept
+  explicit model ids.
+- Extraction inputs for the brief: raw line numbers (items keep `ref: raw/<day>/<session>.jsonl:<line>`), how-it-works
+  `phase` (before / after / both), fix `state` (proposed / applied when an edit or commit touches a file it names), a
+  `risk` item kind, deterministic test-run records, and the Jira card's description and last 10 comments (redacted).
+- `jira.parent_issue_types` (Epic, Initiative), `turn_tail_minutes`, `idle_minutes`, `rebuild.*` settings.
+
+### Changed
+- **Ticket attribution (K1, K2).** Each turn's ticket is decided once, for time and knowledge alike: the ticket named
+  in the prompt (or a pasted Jira title) → the work branch of the session's own repo (never release/, environment or
+  base branches) → the last ticket named in the session. Raw events record `ticket_src`. A pasted breadcrumb gives its
+  last id; an id typed in your own words beats one in pasted text; a parent issue never receives time or items.
+- **Time (K10).** Minutes are turn intervals (prompt → last event of the turn, + `turn_tail_minutes` 5, split at
+  `idle_minutes` 15), counted once across parallel sessions and split between their tickets. Session start/end events
+  no longer count; commits and Bruno runs count as the 15 minutes before them; Bruno file times count only today.
+- **Supersession (K3).** At day close one per-ticket call (budget-gated) marks older root causes, decisions and
+  findings on the same subject as superseded (kept, collapsed, linked to their replacement); text is never rewritten
+  and your notes are never superseded. Git-action TODOs (rebase, push, open a PR, merge, cherry-pick) close from
+  branch and PR data. The extractor's "already recorded" list is split per ticket and refreshed per chunk.
+- **Titles and status (K4, K9).** A title comes only from the Jira card or you; guesses are kept as a labelled hint
+  and the key is shown until then. The Jira status and the inferred status are stored and shown apart. A delivery
+  stage computed from branch and PR data leads the hub, dashboard and SessionStart context; a TL;DR sentence that
+  contradicts it is marked outdated.
+- **Verified specifics (K6).** Changed files come only from edits and commits; other paths are checked with read-only
+  `git rev-parse <sha>:<path>` and hidden until verified. `queries.md` lists only SQL that was actually sent, each
+  with its raw line; SQL that was only mentioned stays in the data under *Not run*.
+- **One record per thing (K7).** APIs (method + path template), tables (schema-qualified), queries (normalised SQL) and
+  files are deduplicated; merged records keep every source and old ids as aliases; one Code map.
+- **Off-ticket items (K8)** are flagged under *Needs review*, never moved or deleted; inbox `KEY: keep <id>` /
+  `KEY: move <id> OTHER` resolve them (a move copies and archives).
+- **Jira cards (K5)** are fetched for every ticket active in the last 7 days whose card is missing or stale.
+- **Replay safety (K11).** Steps that change a shared record are flagged in `requests.md` and need `--yes` in
+  `replay.sh` outside local; a restore step only when the before-state was captured; repeat steps get their own
+  `.bru` so `bru run` matches `replay.sh`.
+- Schema cards (O2): writer detection is one ordered, schema-aware catalog query per table; a routine is a writer only
+  when its source writes the table; known writers are never dropped by a failed or empty run.
+- Raw capture older than `raw_retention_days` is pruned once processed on every install, not only after a push (O7).
+
+### Fixed
+- The home folder itself is captured time-only (O1); raw events from folders that are now ignored are never
+  extracted (O5); extraction state survives copying or moving the data home (O4).
+- A privacy check that returns unknown now pauses the push and says so, as `docs/privacy.md` promised (O6).
+- Doctor and Health show the security log's counts and layer breakdown from the same window, with other plugins'
+  entries apart (O3).
+- `docs/architecture.md` says what uninstall removes and keeps (O9).
+
+### Migration
+Forward-only steps, each backing up what it changes to `.worklog/backups/chitragupta-<step>-<time>/` first, run by
+the next tick or `migrate`: `raw-relative-keys`, `kb5-db-schema-writers`, `kb5-dedupe-keys`, `kb5-title-status`,
+`kb5-paths-verified`, `kb5-queries-sent`, `kb5-todo-objects`, `kb5-schema-version` (`data/meta.json` 4 → 5). Nothing
+is deleted. Existing hubs keep their old content until you run `agent rebuild`.
 
 ## [0.4.1] - 2026-10-20
 

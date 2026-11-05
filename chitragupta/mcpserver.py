@@ -28,7 +28,7 @@ INSTRUCTIONS = ("Chitragupta is the user's automatic worklog: tickets (findings,
                 "branches), days, timesheets and a database/API knowledge base. Use these tools before reading "
                 "worklog files; open the file paths they return only for more detail.")
 
-SECTIONS = ("findings", "requests", "queries", "dbflow", "branches", "artifacts", "timeline", "notes")
+SECTIONS = ("brief", "findings", "requests", "queries", "dbflow", "branches", "artifacts", "timeline", "notes")
 SEARCH_TYPES = ("ticket", "finding", "query", "artifact", "api", "table", "integration", "day", "request", "branch")
 PERIODS = ("week", "month", "day")
 
@@ -59,7 +59,8 @@ TOOLS = [
          "q": _s(), "type": _s(enum=SEARCH_TYPES), "ticket": _s(), "repo": _s(), "from": _s(_DATE), "to": _s(_DATE),
          "limit": _s(kind="integer"), "page": _PAGE}, "required": ["q"]}},
     {"name": "get_ticket",
-     "description": "One ticket: summary and counts; `section` returns one part in full.",
+     "description": "One ticket: its brief first, then summary and counts; `section` returns one part in full "
+                    "(`brief`: with its evidence).",
      "inputSchema": {"type": "object", "properties": {
          "key": _s("e.g. ABC-1234"), "section": _s(enum=SECTIONS), "page": _PAGE}, "required": ["key"]}},
     {"name": "get_day",
@@ -70,16 +71,19 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "period": _s(enum=PERIODS), "from": _s(_DATE), "to": _s(_DATE), "page": _PAGE}, "required": ["period"]}},
     {"name": "get_branch_status",
-     "description": "A ticket's branches, PRs, delivery to each target branch, and alerts.",
+     "description": "A ticket's release plan (release branch per repo, release/QA/UAT state, next step), branches, PRs, "
+                    "delivery per target, alerts.",
      "inputSchema": {"type": "object", "properties": {"key": _s(), "repo": _s(), "page": _PAGE}, "required": ["key"]}},
     {"name": "get_db_table",
      "description": "A database table from the knowledge base: columns, links, code that writes it, tickets, queries.",
      "inputSchema": {"type": "object", "properties": {"name": _s("table or schema.table"), "page": _PAGE},
                      "required": ["name"]}},
     {"name": "list_tickets",
-     "description": "Known tickets, newest activity first, one line each.",
+     "description": "Known tickets, newest activity first. `release` (YYYY-MM or this-month): my tickets scheduled "
+                    "that month, with release/QA/UAT state.",
      "inputSchema": {"type": "object", "properties": {
-         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "page": _PAGE}}},
+         "q": _s(), "status": _s(), "repo": _s(), "since": _s(_DATE), "release": _s(),
+         "page": _PAGE}}},
     {"name": "get_alerts",
      "description": "What needs attention: branch/PR delivery alerts and worklog health warnings.",
      "inputSchema": {"type": "object", "properties": {"page": _PAGE}}},
@@ -274,12 +278,35 @@ def _ticket_record(key):
     return api.read_json_cached(_home("data", "tickets", key + ".json"))
 
 
+def _title_or_hint(t):
+    """The Jira (or your) title; a model or branch guess only labelled as a hint."""
+    return t["title"] or ("hint: " + t["title_hint"] if t.get("title_hint") else "(no title)")
+
+
 def _summary_lines(t):
     c = t["counts"]
-    L = ["# %s — %s" % (t["key"], t["title"] or "(no title)"),
+    L = ["# %s — %s" % (t["key"], _title_or_hint(t)),
          " · ".join(x for x in ("status " + t["status"] if t["status"] else "", "first %s" % t["first"] if t["first"] else "",
                                 "last %s" % t["last"] if t["last"] else "", "time " + _hm(t["minutes"]),
                                 "repos " + ", ".join(t["repos"]) if t["repos"] else "") if x)]
+    from .render import brief_context_lines
+    bl = brief_context_lines(t.get("brief"))
+    if bl:
+        L += [""] + bl
+    if t.get("focused") or (t.get("brief") or {}).get("summary"):
+        qs = t.get("queries") or []
+        if (t.get("core_ranked") or {}).get("queries"):
+            groups = [("Key queries", [q for q in qs if q.get("role") != "context"][:5]),
+                      ("Also used", [q for q in qs if q.get("role") == "context"][:3])]
+        else:
+            groups = [("Recorded queries (not yet ranked)", qs[:8])]
+        for label, rows in groups:
+            if rows:
+                L += [label + ":"] + ["- %s [%s]" % (_one(q.get("purpose") or "Query", 180), q["id"]) for q in rows]
+        for kind, label in (("tables", "Core tables"), ("apis", "Core APIs")):
+            label = label if (t.get("core_ranked") or {}).get(kind) else "Recorded %s (not yet ranked)" % kind
+            L += [label + ": " + "; ".join(r.get("name") or (r.get("method") or "") + " " + (r.get("path") or "") for r in (t.get("core") or {}).get(kind) or [])]
+        return L
     if t.get("tldr"):
         L += ["", "TL;DR: " + _one(t["tldr"], 600)]
     if t.get("problem"):
@@ -293,6 +320,63 @@ def _summary_lines(t):
     return L
 
 
+def _brief_section(t):
+    """The whole brief as plain text: every section with its claims and their evidence ids, then what each id is."""
+    from . import render
+    v = t.get("brief") or {}
+    items = {f.get("id"): f for f in t.get("findings") or []}
+    queries = {q.get("id"): q for q in t.get("queries") or []}
+    seen, L = [], []
+
+    def ids(cites):
+        out = []
+        for c in cites or []:
+            cid = render.cite_parts(c)[0]
+            if cid:
+                out.append(cid)
+                if cid not in [s[0] for s in seen]:
+                    seen.append((cid, c))
+        return " [%s]" % ", ".join(out) if out else ""
+    h = v.get("header") or {}
+    if v.get("stale") and v.get("has_brief"):
+        L.append("New findings since %s: the brief may be behind (/cg:ticket %s --brief, or Refresh brief on the "
+                 "dashboard)." % (str(v["stale"].get("since") or "")[:16].replace("T", " "), t["key"]))
+    if h.get("updated"):
+        L.append("Generated %s." % h["updated"][:16].replace("T", " "))
+    if v.get("epic"):
+        L.append("An Epic: its child tickets instead of a brief.")
+        L += ["- %s %s%s%s" % (c.get("key"), _one(c.get("title"), 120) if c.get("title") else "", " (%s)" % c["status"] if c.get("status") else "",
+                               " · " + _one(c.get("summary_line") or c["line"], 1000) if c.get("summary_line") or c.get("line") else "") for c in v.get("children") or []] or ["No child tickets recorded yet."]
+    elif not v.get("has_brief"):
+        rc = (v.get("fallback") or {}).get("root_cause") or {}
+        L.append("No brief yet (written at day close, or /cg:ticket %s --brief)." % t["key"])
+        L.append("Root cause (%s): %s%s" % (rc.get("confidence") or "unknown", _one(rc["text"], 700), ids(rc.get("cites")))
+                 if rc.get("text") else "Root cause: not recorded yet.")
+    else:
+        for s in render.brief_sections(v):
+            head = render.brief_heading(s)
+            if s["id"] == "root_cause" and s.get("confidence"):
+                head += " (%s)" % s["confidence"]
+            if s["id"] == "fixes_made":
+                head += " (%s)" % (s.get("source") or "from git and PRs")
+            if s.get("override"):
+                head += " (your correction)"
+            L += ["", "### " + head]
+            rows = render.claim_texts(s)
+            L += ["- %s%s%s" % (lab + ": " if lab else "", _one(text, 700), ids(cites)) for lab, text, cites in rows] or \
+                 ["- " + render.brief_empty_text(s)]
+    if seen:
+        L += ["", "Evidence:"]
+        for cid, c in seen:
+            _cid, kind, rest, label = render.cite_parts(c)
+            f = items.get(rest) if kind in ("item", "note", "test") else None
+            q = queries.get(rest) if kind == "query" else None
+            what = ("[%s] %s (%s)" % (f.get("kind"), _one(f.get("title"), 160), f.get("date") or "") if f
+                    else "query: %s" % _one(q.get("purpose") or "", 160) if q else label)
+            L.append("- %s: %s" % (cid, what))
+    return L
+
+
 def _notes(readme):
     from .render import NOTES_START, NOTES_END
     if NOTES_START in readme and NOTES_END in readme:
@@ -303,7 +387,10 @@ def _notes(readme):
 def _section(key, t, tk, section):
     p = t["paths"]
     L = ["", "## %s" % section.capitalize()]
-    if section == "findings":
+    if section == "brief":
+        L += _brief_section(t)
+        L.append("\nFile: %s" % p.get("readme", _home("tickets", key, "README.md")))
+    elif section == "findings":
         for f in t["findings"]:
             L.append("- [%s] **%s**%s%s" % (f.get("kind"), _one(f.get("title"), 200),
                                            " (%s)" % f["confidence"] if f.get("confidence") else "",
@@ -327,11 +414,12 @@ def _section(key, t, tk, section):
             if p.get(k):
                 L.append("%s: %s" % (label, p[k]))
     elif section == "queries":
-        for q in t["queries"]:
+        sent = [q for q in t["queries"] if q.get("sent") is not False]  # SQL never sent stays out (K6b)
+        for q in sent:
             L.append("- %s%s · %s%s" % (_one(q.get("purpose") or "query", 160), " (%s)" % q["dialect"] if q.get("dialect") else "",
                                        q.get("date") or "", " · tables " + ", ".join(q["tables"][:8]) if q.get("tables") else ""))
             L += ["```sql", (q.get("text") or "").strip()[:1500], "```"]
-        if not t["queries"]:
+        if not sent:
             L.append("No saved queries.")
         if p.get("queries"):
             L.append("File: %s" % p["queries"])
@@ -375,6 +463,8 @@ def tool_get_ticket(args, cfg):
         raise ToolError("No ticket %s in the worklog (list_tickets shows the known ones)." % key)
     L = _summary_lines(t)
     if section:
+        if t.get("focused") and section in api.DETAIL_SECTIONS:
+            t.update(api.ticket_detail(key, section) or {})
         L += _section(key, t, _ticket_record(key) or {}, section)
     else:
         L += ["", "Sections (get_ticket section=…): " + ", ".join(SECTIONS),
@@ -384,6 +474,14 @@ def tool_get_ticket(args, cfg):
 
 def tool_list_tickets(args, cfg):
     from .dashboard import api
+    rel = _arg(args, "release")
+    if rel:
+        from . import release
+        m = None if rel.strip().lower() in ("this-month", "this month", "month", "now") else rel.strip()
+        try:
+            return "\n".join(release.overview_lines(release.month_overview(m, cfg)))
+        except ValueError as e:
+            raise ToolError(str(e))
     q, status, repo = _arg(args, "q"), _arg(args, "status"), _arg(args, "repo")
     since = parse_date(_arg(args, "since"), cfg, "since") if _arg(args, "since") else None
     ts = api.tickets(q)["tickets"]
@@ -396,7 +494,7 @@ def tool_list_tickets(args, cfg):
     L = ["# Tickets — %d" % len(ts)]
     for t in ts:
         L.append("- %s · %s · %s · last %s · %s%s%s" % (
-            t["key"], _one(t["title"] or "(no title)", 90), t["status"] or "-", t["last"] or "-", _hm(t["minutes"]),
+            t["key"], _one(_title_or_hint(t), 90), t["status"] or "-", t["last"] or "-", _hm(t["minutes"]),
             " · " + ", ".join(t["repos"]) if t["repos"] else "", " · ⚠ %d alert(s)" % len(t["alerts"]) if t["alerts"] else ""))
     if not ts:
         L.append("No tickets match.")
@@ -609,6 +707,12 @@ def tool_get_alerts(args, cfg):
                 L += ["", "## Branches and PRs"]
             n += 1
             L.append("- %s · %s%s" % (t["key"], _one(a["text"], 240), " (%s)" % a["repo"] if a.get("repo") else ""))
+    rem = []
+    for t in api.tickets()["tickets"]:
+        for r in t.get("reminders") or []:
+            rem.append("- %s · %s" % (t["key"], _one(r["text"], 240)))
+    if rem:
+        L += ["", "## Release and UAT reminders"] + rem
     h = api.read_json_cached(common.wl("health.json")) or {}
     warn = []
     if os.path.exists(common.wl("PAUSED")):

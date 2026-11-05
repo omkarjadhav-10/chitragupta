@@ -184,7 +184,7 @@ class MergeRenderTests(HomeCase):
         self.assertEqual(len(tk["items"]), 2)
         self.assertEqual(len(tk["queries"]), 1)
         self.assertEqual(len(st.day("2026-10-14")["activity"]), 1)
-        self.assertEqual(tk["title"], "Duplicate SMS on retry")
+        self.assertEqual((tk["title"], tk["title_hint"]), ("", "Duplicate SMS on retry"))  # a hint is never the title
         self.assertEqual(len(st.catalog()["tables"]), 1)
 
     def test_updates_replaces(self):
@@ -233,7 +233,11 @@ class MergeRenderTests(HomeCase):
         self.assertIn("remember: ask QA about UAT", rd(readme))
         self.assertEqual(rd(daily), first)
         q = rd(os.path.join(self.home, "tickets", "ABC-1234", "queries.md"))
-        self.assertIn("```sql", q)
+        self.assertIn("All recorded (1)", q)
+        recorded = rd(os.path.join(self.home, "tickets", "ABC-1234", "queries-recorded.md"))
+        self.assertIn("```sql", recorded)
+        self.assertIn("needs review", recorded)
+        self.assertIn("duplicates only after gateway timeout", recorded)
         ctxf = rd(os.path.join(self.home, ".worklog", "cache", "context", "ABC-1234.md"))
         self.assertLessEqual(len(ctxf), 4000)
         self.assertIn("Retry job never persists retry_count", ctxf)

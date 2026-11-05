@@ -16,10 +16,17 @@ import threading
 
 from .. import common
 from .. import configstore
+from .. import store
+from .. import supersede
 
 TICKET_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,6}$")
-FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "config", "repro_test", "reference",
+FINDING_KINDS = ["root_cause", "finding", "how_it_works", "fix", "decision", "risk", "config", "repro_test", "reference",
                  "blocker", "question", "todo"]
+
+# what the ticket page shows of an item; the stage-2 fields (status, superseded_by, review, archived, ref, ...) are
+# optional and None when an older record lacks them
+ITEM_FIELDS = ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence", "status", "superseded_by",
+               "subject", "closed_by", "review", "archived", "ref", "sent", "phase", "state")
 
 _cache = {}
 _cache_lock = threading.Lock()
@@ -101,8 +108,8 @@ def _ticket_minutes(tk):
 def _counts(tk):
     items = (tk.get("items") or {}).values()
     return {
-        "findings": sum(1 for i in items if i.get("kind") not in ("todo", "question")),
-        "queries": len(tk.get("queries") or {}),
+        "findings": sum(1 for i in items if i.get("kind") not in ("todo", "question") and supersede.is_current(i)),
+        "queries": sum(1 for q in (tk.get("queries") or {}).values() if isinstance(q, dict) and q.get("sent") is not False),
         "requests": len(((tk.get("replay") or {}).get("final")) or []),
         "artifacts": len(tk.get("artifacts") or {}),
         "dbflow": len(tk.get("data_flow") or {}),
@@ -111,11 +118,29 @@ def _counts(tk):
 
 def ticket_summary(key, tk):
     return {
-        "key": key, "title": tk.get("title") or "", "status": tk.get("status") or ((tk.get("jira") or {}).get("status") or ""),
+        "key": key, "title": store.display_title(tk), "title_hint": tk.get("title_hint") or "",
+        "status": store.status_of(tk) or tk.get("status") or "", "jira_status": store.jira_status(tk),
+        "status_inferred": tk.get("status_inferred") or "",
         "first": tk.get("first") or "", "last": tk.get("last") or "", "minutes": _ticket_minutes(tk),
         "tldr": tk.get("tldr") or "", "repos": [os.path.basename(str(r).rstrip("/\\")) for r in tk.get("repos") or []],
         "counts": _counts(tk), "branches": _linked_branches(tk)[:5], "alerts": _alerts(tk),
+        "reminders": _reminders(tk), "release": _release_line(tk),
     }
+
+
+def _reminders(tk):
+    """Release tracking's open reminders (recomputed from evidence by every tick; showing one never clears it)."""
+    rel = tk.get("release") if isinstance(tk.get("release"), dict) else {}
+    return [{"id": r.get("id") or "", "kind": r.get("kind") or "", "text": r.get("text") or "", "repo": r.get("repo") or "",
+             "severity": r.get("severity") or "info"} for r in rel.get("reminders") or [] if isinstance(r, dict)]
+
+
+def _release_line(tk):
+    rel = tk.get("release") if isinstance(tk.get("release"), dict) else {}
+    if not rel.get("v"):
+        return None
+    from .. import release
+    return {"label": release.release_label(rel), "ready": bool((rel.get("readiness") or {}).get("ready"))}
 
 
 def _alerts(tk):
@@ -142,7 +167,7 @@ def tickets(q=None):
             out.append(ticket_summary(key, tk))
     if q:
         ql = q.strip().lower()
-        out = [t for t in out if ql in ("%s %s %s" % (t["key"], t["title"], t["tldr"])).lower()]
+        out = [t for t in out if ql in ("%s %s %s %s" % (t["key"], t["title"], t["title_hint"], t["tldr"])).lower()]
     out.sort(key=lambda t: (t["last"], t["key"]), reverse=True)
     return {"tickets": out, "count": len(out), "q": q or ""}
 
@@ -152,7 +177,7 @@ def _items(tk):
                    key=lambda i: (i.get("date") or "", i.get("time") or ""), reverse=True)
     out = []
     for i in items:
-        out.append({k: i.get(k) for k in ("id", "kind", "title", "detail", "date", "time", "confidence", "evidence")})
+        out.append({k: i.get(k) for k in ITEM_FIELDS})
     order = {k: n for n, k in enumerate(FINDING_KINDS)}
     out.sort(key=lambda i: order.get(i.get("kind"), 99))
     return out
@@ -162,7 +187,9 @@ def _queries(tk):
     qs = sorted((tk.get("queries") or {}).items(), key=lambda kv: (kv[1].get("date") or "", kv[1].get("time") or ""),
                 reverse=True)
     return [{"id": k, "dialect": v.get("dialect"), "kind": v.get("kind"), "purpose": v.get("purpose"), "text": v.get("text") or "",
-             "tables": v.get("tables") or [], "revealed": v.get("revealed"), "date": v.get("date"), "time": v.get("time")}
+             "tables": v.get("tables") or [], "revealed": v.get("revealed"), "date": v.get("date"), "time": v.get("time"),
+             "sent": v.get("sent"), "ref": v.get("ref") or "", "evidence": v.get("evidence") or [],
+             **{f: v.get(f) for f in ("review", "review_kept", "archived", "relevance", "hidden_reason", "variant_of", "role")}}
             for k, v in qs]
 
 
@@ -332,16 +359,86 @@ def ticket(key):
         return None
     tk = tk or {}
     out = ticket_summary(key, tk)
+    from .. import relevance
+    focus = relevance.focused(tk)
+    from ..render import change_label
     out.update({
         "problem": tk.get("problem") or "", "title_source": tk.get("title_source") or "",
         "branches": _linked_branches(tk), "jira": tk.get("jira") or {},
-        "findings": _items(tk), "queries": _queries(tk), "requests": _requests(key, tk, paths),
-        "dbflow": _dbflow(key, paths), "artifacts": _artifacts(key, tk),
+        "findings": [dict(i, detail="", evidence=[]) for i in _items(tk) if not i.get("archived") and i.get("status") not in ("done", "superseded")] if focus else _items(tk),
+        "queries": _queries(dict(tk, queries={q["id"]: q for q in relevance.listed_queries(tk)})) if focus else _queries(tk),
+        "requests": {"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0} if focus else _requests(key, tk, paths),
+        "dbflow": {"markdown": "", "qa_trace": None} if focus else _dbflow(key, paths),
+        "artifacts": [] if focus else _artifacts(key, tk),
         "timeline": [{"day": d, "minutes": int((v or {}).get("minutes") or 0), "line": (v or {}).get("line") or ""}
                      for d, v in sorted((tk.get("timeline") or {}).items(), reverse=True)],
-        "files": sorted(((tk.get("files") or {}).values()), key=lambda f: f.get("last") or "", reverse=True)[:60],
-        "paths": paths, "git": _git(tk), "readme": _read_capped(paths.get("readme")),
+        "files": [dict(f, change=change_label(tk, f)) for f in sorted(
+            (f for f in (tk.get("files") or {}).values() if isinstance(f, dict)),
+            key=lambda f: f.get("last") or "", reverse=True)[:60]],
+        "paths": paths, "git": {"repos": {}, "alerts": _alerts(tk)} if focus else _git(tk),
+        "readme": "" if focus else _read_capped(paths.get("readme")),
     })
+    from .. import brief, delivery
+    out["brief"] = brief.view(tk, key)
+    from .. import offticket
+    out["record_reviews"] = [{k: r.get(k) for k in ("id", "kind", "title", "review", "date")} for r in offticket.record_reviews(tk)]
+    out["focused"], out["lazy"] = focus, focus
+    out["core"] = {kind: [dict(r, id=next(k for k, v in (tk.get(kind) or {}).items() if v is r))
+                             for r in relevance.core(tk, kind, cap)] for kind, cap in (("tables", 6), ("apis", 5))}
+    if focus:
+        queries = {q["id"]: q for q in out["queries"]}
+        out["queries"] = [queries[q["id"]] for q in relevance.listed_queries(tk)]
+    out["core_ranked"] = {kind: relevance.ranked(tk, kind) for kind in ("queries", "tables", "apis")}
+    out["record_counts"] = {kind: len(tk.get(kind) or {}) for kind in ("items", "queries", "tables", "apis", "files")}
+    out["record_counts"]["branches"] = sum(len(x.get("branches") or []) for x in ((tk.get("git") or {}).get("repos") or {}).values())
+    if out["brief"].get("epic"):  # an Epic's knowledge is its children's: the tabs say so instead of showing it
+        from ..render import EPIC_NOTE
+        out.update(epic=True, epic_note=EPIC_NOTE, tldr="", problem="", queries=[], files=[], core={"tables": [], "apis": []},
+                   requests={"steps": [], "setup": "", "scenarios": [], "dropped": 0, "captured": 0,
+                             "bruno_folder": None},
+                   dbflow={"markdown": "", "qa_trace": None})
+    out["delivery"] = delivery.stage(tk.get("git") or {})
+    from .. import release
+    out["release_plan"] = release.view(tk, key)
+    out["release_brief"] = release.brief_lines(tk, key) if out["release_plan"] else []
+    out["tldr_check"] = [{"text": s, "outdated": n} for s, n in delivery.check_tldr(tk.get("tldr"), out["delivery"])]
+    return out
+
+
+DETAIL_SECTIONS = ("findings", "queries", "tables", "apis", "files", "notes", "requests", "dbflow", "artifacts", "branches")
+
+
+def releases(month=None, cfg=None):
+    """The monthly release overview (release.month_overview): read-only, computed from the stored records."""
+    from .. import release
+    return release.month_overview(month or None, cfg)
+
+
+def ticket_detail(key, section):
+    """Heavy evidence is fetched only after the relevant tab or recorded list opens."""
+    if not TICKET_RE.fullmatch(key or "") or section not in DETAIL_SECTIONS:
+        return None
+    tk = read_json_cached(common.hp("data", "tickets", key + ".json"))
+    if not isinstance(tk, dict):
+        return None
+    paths = ticket_paths(key)
+    out = {"key": key, "section": section}
+    if section == "findings":
+        out["findings"] = _items(tk)
+    elif section == "queries":
+        out["queries"] = _queries(tk)
+    elif section in ("tables", "apis", "files"):
+        out["records"] = [dict(r, id=k) for k, r in (tk.get(section) or {}).items()]
+    elif section == "notes":
+        out["readme"] = _read_capped(paths.get("readme"))
+    elif section == "requests":
+        out["requests"] = _requests(key, tk, paths)
+    elif section == "dbflow":
+        out["dbflow"] = _dbflow(key, paths)
+    elif section == "artifacts":
+        out["artifacts"] = _artifacts(key, tk)
+    elif section == "branches":
+        out["git"] = _git(tk)
     return out
 
 
@@ -371,7 +468,7 @@ def day_data(day):
 
 def _title(key):
     tk = read_json_cached(common.hp("data", "tickets", key + ".json"))
-    return (tk or {}).get("title") or ""
+    return store.display_title(tk or {})
 
 
 def saved_worklog(day):
@@ -765,7 +862,9 @@ def _link_matches(a, b, links):
 def knowledge():
     """The knowledge base the tick builds from sessions: tables (with columns from the QA schema cards), relations
     (verified = confirmed by the QA link map), the code that writes each table, APIs and integrations."""
-    cat = read_json_cached(common.hp("data", "catalog.json")) or {}
+    from .. import relevance
+    cat = relevance.catalog_view(read_json_cached(common.hp("data", "catalog.json")) or {},
+        lambda t: read_json_cached(common.hp("data", "tickets", t + ".json")))
     lm = read_json_cached(common.hp("data", "db-schema", "_linkmap.json")) or {}
     full, bare = _schema_columns()
     tables = []
@@ -908,6 +1007,12 @@ def _mcp(h, cfg, today_day):
             "last_skip_reason": m.get("last_skip_reason") or "", "live": mcp_live()}
 
 
+def _models(h, cfg, today_day):
+    """Today's model spend against budget.model_daily_usd, by purpose (extract, consolidate, mcp, …)."""
+    from .. import modelbudget
+    return modelbudget.summary(h, cfg, day=today_day)
+
+
 def mcp_live():
     """The last `claude mcp list` check as setup / doctor / maintenance cached it (never run from here):
     {"checked_at", "probed", "servers": [{"role", "server", "status", "detail"}]}, or None before the first check."""
@@ -978,7 +1083,8 @@ def _safety(cfg):
         s = safety_status.status(cfg)
         return {"enforced": s["enforced"], "problems": s["problems"], "checks": s["checks"],
                 "blocks_24h": s["blocks_24h"], "blocks_7d": s["blocks_7d"], "by_layer": s["by_layer"],
-                "skipped_7d": s.get("skipped_7d", 0),
+                "by_layer_24h": s["by_layer_24h"], "by_layer_7d": s["by_layer_7d"],
+                "skipped_7d": s.get("skipped_7d", 0), "skipped_24h": s.get("skipped_24h", 0),
                 "recent": [{"at": e.get("at"), "layer": e.get("layer"), "what": _cut(e.get("what") or "", 300),
                             "reason": _cut(e.get("reason") or "", 300)} for e in s["last"]],
                 "database_read_only": s["database_read_only"], "fetch": s["fetch"], "log": s["log"]}
@@ -1004,8 +1110,9 @@ def status(cfg=None, now=None, server=None):
                  "error": h.get("last_push_error"), "remote_set": bool(cfg.get("github_remote"))},
         "slack": _slack(h, cfg),
         "mcp": _mcp(h, cfg, today_day),
+        "models": _models(h, cfg, today_day),
         "today": h.get("today") if (h.get("today") or {}).get("day") == today_day else {"day": today_day},
-        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now)] if w],
+        "warnings": list(h.get("warnings") or []) + [w for w in [_stale(h, now), _slow_tick(now)] if w],
         "errors_total": h.get("errors_total") or 0,
         "errors": recent_errors(h),
         "dashboard": server or {},
@@ -1032,6 +1139,14 @@ def _stale(h, now):
         from .. import ticklog
         return ticklog.stale_warning(h, now)
     except Exception:  # noqa: BLE001 - the rest of the page still shows
+        return ""
+
+
+def _slow_tick(now):
+    try:
+        from .. import ticklog
+        return ticklog.slow_warning(now)
+    except Exception:
         return ""
 
 
@@ -1066,6 +1181,8 @@ _SETUP_ROWS = {
     "Slack": ("slack", "Slack (evening worklog DM)", "warn", "slash", "/cg:setup"),
     "Jira": ("jira", "Jira MCP", "warn", "slash", "/cg:setup"),
     "database MCP": ("database", "Database MCP", "warn", "slash", "/cg:setup"),
+    "model spend": ("model-spend", "Model spend today", "warn", "none",
+                    "Supersession and briefs resume tomorrow; raise budget.model_daily_usd in Settings to allow more"),
     "recent errors": ("errors", "Recent errors", "warn", "slash", "/cg:doctor"),
 }
 _MCP_ROLE = {"Slack": "slack", "Jira": "jira", "database MCP": "database"}

@@ -97,28 +97,112 @@ def table(rows):
     return out
 
 
-# --------------------------------------------------------------------------- blocks from activity points
+# --------------------------------------------------------------------------- the time model: turns, union, blocks
 
-def build_blocks(points, gap_minutes=20):
-    """points: [{ts: datetime, ticket|None, dur: minutes (0 = instant event, 15 = commit/Bruno/Jira comment)}].
-    Per ticket, events less than gap apart form one block; each block counts (end - start) + 1 minute.
-    Returns blocks ordered by start, consecutive same-ticket blocks merged."""
+TURN_TAIL_MINUTES = 5
+IDLE_MINUTES = 15
+
+
+def time_params(cfg):
+    """(turn_tail_minutes, idle_minutes) from jira_worklog; idle falls back to block_gap_minutes when only that is set."""
+    jw = (cfg or {}).get("jira_worklog") or {}
+    tail = jw.get("turn_tail_minutes")
+    idle = jw.get("idle_minutes") or jw.get("block_gap_minutes") or IDLE_MINUTES
+    return (TURN_TAIL_MINUTES if tail is None else int(tail)), int(idle)
+
+
+def _dt_of(ts):
+    if isinstance(ts, _dt.datetime):
+        return ts
+    from . import common
+    return common.parse_ts(ts)
+
+
+def active_intervals(events, tail=TURN_TAIL_MINUTES, idle=IDLE_MINUTES, key=None):
+    """Active time of a day's events as [(start, end, ticket)]. A turn runs from a user prompt to the last event before
+    that session's next prompt (events before a session's first prompt form a turn of their own); it is split at gaps
+    longer than `idle` minutes, and each piece ends `tail` minutes after its last event (reading the answer).
+    session-start and session-end are not activity. The ticket is the turn's (the prompt event's `_t`, see
+    agent.attribute), or key(prompt event) when `key` is given."""
+    key = key or (lambda e: e.get("_t"))
     per = {}
-    for p in sorted(points, key=lambda p: p["ts"]):
-        t = p.get("ticket")
-        end = p["ts"] + _dt.timedelta(minutes=p.get("dur") or 0)
+    for e in events:
+        if e.get("event") in ("session-start", "session-end"):
+            continue
+        ts = _dt_of(e.get("ts"))
+        if ts:
+            per.setdefault(e.get("session_id"), []).append((ts, e))
+    out = []
+    gap, tl = _dt.timedelta(minutes=idle), _dt.timedelta(minutes=tail)
+    for lst in per.values():
+        lst.sort(key=lambda x: x[0])
+        turns = []
+        for ts, e in lst:
+            if e.get("event") == "user-prompt" or not turns:
+                turns.append((key(e), [ts]))
+            else:
+                turns[-1][1].append(ts)
+        for t, st in turns:
+            a = prev = st[0]
+            for x in st[1:]:
+                if x - prev > gap:
+                    out.append((a, prev + tl, t))
+                    a = x
+                prev = x
+            out.append((a, prev + tl, t))
+    return out
+
+
+def union_minutes(intervals, segments=False):
+    """Minutes per ticket of [(start, end, ticket)]: overlapping time counts once and is split evenly between the
+    tickets active then (two intervals of one ticket overlap without splitting). With segments=True also returns the
+    pieces [(start, end, [tickets])]."""
+    pts = []
+    for a, b, t in intervals:
+        if b > a:
+            pts += [(a, 1, t), (b, -1, t)]
+    pts.sort(key=lambda p: (p[0], p[1]))
+    active, out, segs, prev = {}, {}, [], None
+    for x, d, t in pts:
+        if prev is not None and active and x > prev:
+            keys = sorted(active, key=str)
+            span = (x - prev).total_seconds() / 60
+            for k in keys:
+                out[k] = out.get(k, 0.0) + span / len(keys)
+            segs.append((prev, x, keys))
+        active[t] = active.get(t, 0) + d
+        if active[t] <= 0:
+            del active[t]
+        prev = x
+    return (out, segs) if segments else out
+
+
+def interval_blocks(intervals, join_minutes=IDLE_MINUTES):
+    """Blocks for the timesheet from [(start, end, ticket)]: per ticket, its intervals less than join_minutes apart
+    form one block; a block's minutes are that ticket's share of the union (union_minutes), so the day's blocks add up
+    to wall-clock time: [{ticket, start, end, minutes, spans, lines}] ordered by start."""
+    _, segs = union_minutes(intervals, segments=True)
+    per = {}
+    for a, b, t in sorted(intervals, key=lambda i: i[0]):
         bl = per.setdefault(t, [])
-        if bl and (p["ts"] - bl[-1]["end"]).total_seconds() < gap_minutes * 60:
-            bl[-1]["end"] = max(bl[-1]["end"], end)
+        if bl and (a - bl[-1]["end"]).total_seconds() < join_minutes * 60:
+            bl[-1]["end"] = max(bl[-1]["end"], b)
         else:
-            bl.append({"ticket": t, "start": p["ts"], "end": end})
+            bl.append({"ticket": t, "start": a, "end": b, "minutes": 0.0})
+    for a, b, keys in segs:
+        share = (b - a).total_seconds() / 60 / len(keys)
+        for k in keys:
+            for blk in per.get(k) or []:
+                if blk["start"] <= a and b <= blk["end"]:
+                    blk["minutes"] += share
+                    break
     out = []
     for bl in per.values():
         for b in bl:
-            b["minutes"] = (b["end"] - b["start"]).total_seconds() / 60 + 1
-            b["spans"] = [(b["start"], b["end"])]
-            b["lines"] = []
-            out.append(b)
+            if b["minutes"] > 0:
+                b["spans"] = [(b["start"], b["end"])]
+                b["lines"] = []
+                out.append(b)
     out.sort(key=lambda b: b["start"])
     return out
 

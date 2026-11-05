@@ -64,7 +64,10 @@ def status(cfg=None, claude_detail=None):
     day = log.summary(days=1)
     return {"enforced": not problems, "problems": problems, "checks": st.get("checks", 0),
             "skills_checked": sk is not None, "blocks_7d": s["recent"], "blocks_24h": day["recent"],
-            "by_layer": s["by_layer"], "last": s["last"], "log": log.path(), "skipped_7d": s.get("other_plugin", 0),
+            # each breakdown comes from the same window as its count
+            "by_layer": s["by_layer"], "by_layer_7d": s["by_layer"], "by_layer_24h": day["by_layer"],
+            "last": s["last"], "log": log.path(), "skipped_7d": s.get("other_plugin", 0),
+            "skipped_24h": day.get("other_plugin", 0),
             "database_read_only": database_read_only(cfg),
             "fetch": (cfg.get("git") or {}).get("allow_fetch", True) is not False}
 
@@ -75,13 +78,14 @@ def doctor_rows(cfg=None, claude_detail=None):
              "detail": ("enforced (%d guard checks%s; git fetch %s)" % (
                  s["checks"], ", every /cg: skill guarded" if s["skills_checked"] else "", "on" if s["fetch"] else "off"))
              if s["enforced"] else "NOT enforced: " + "; ".join(s["problems"])}]
+    other = "; %d other-plugin tool call(s) skipped during /cg: commands in 7 days (not violations)" % s["skipped_7d"]         if s["skipped_7d"] else ""
     if s["blocks_24h"]:
-        rows.append({"name": "security log", "ok": False, "detail": "%d blocked action(s) in the last 24 h (%s) — see %s"
-                     % (s["blocks_24h"], ", ".join("%s %d" % kv for kv in sorted(s["by_layer"].items())), s["log"])})
+        rows.append({"name": "security log", "ok": False, "detail": "%d blocked action(s) in the last 24 h (%s)%s — see %s"
+                     % (s["blocks_24h"], ", ".join("%s %d" % kv for kv in sorted(s["by_layer_24h"].items())), other,
+                        s["log"])})
     else:
         rows.append({"name": "security log", "ok": True, "detail": "no blocked actions in the last 24 h (%d in 7 days)%s"
-                     % (s["blocks_7d"], "; %d other-plugin tool call(s) skipped during /cg: commands (not violations)"
-                        % s["skipped_7d"] if s["skipped_7d"] else "")})
+                     % (s["blocks_7d"], other)})
     if s["database_read_only"] is False:
         rows.append({"name": "database login", "ok": False, "detail": "the database MCP's read-only login isn't confirmed: "
                      "give it a read-only login, then set mcp.database.read_only_login to true"})

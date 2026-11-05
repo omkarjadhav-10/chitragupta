@@ -28,6 +28,7 @@ A minimal config after setup:
 | `github_remote` | string | `""` | The only push target, for example `https://github.com/you/worklog`. Empty means nothing is pushed. A local folder or `file://` remote also works. It must be a **private** GitHub repo; see [privacy.md](privacy.md). |
 | `ticket_prefixes` | list of strings | `[]` | Jira project keys, for example `["ABC", "OPS"]`. Grows by itself when a branch names a new UPPERCASE prefix, but only in captured work: never from a folder outside the capture scope, one with `.worklog-ignore` (here or above), the system temp folder, or Chitragupta's own folders (data home, runtime, plugin). |
 | `placeholder_tickets` | list of strings | `[]` | Example ticket keys that are never work, for example `["ABC-0000"]`. Together with `render.example_ticket` and `jira_worklog.example_ticket` they are never detected as tickets (in prompts, branches, the inbox or extraction results), never get time in the evening worklog, never get a ticket hub and never cause a Jira call. The built-in default example `ABC-1234` counts only when listed here. |
+| `jira.parent_issue_types` | list of strings | `["Epic","Initiative"]` | Jira issue types that only group work. When a ticket's Jira card (`data\jira\<KEY>.json`) has one of these types, or another named ticket's card lists it as its parent, it never gets time or extracted items: the child named in the same prompt, the branch's ticket or the carried ticket gets them instead. A pasted Jira breadcrumb (`ABC-1000 / ABC-1001`, or the id lines at the top of a pasted card) always counts as its **last** id, and an id typed in your own words beats one inside pasted text. |
 | `capture_scope.include_paths` | list of paths | `[]` | If not empty, capture happens only under these folders. Empty means everywhere. |
 | `capture_scope.exclude_paths` | list of paths | `[]` | Never capture under these folders. The data home itself is always time-only (see [privacy.md](privacy.md)). |
 | `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from captured sessions, with the same limits as `ticket_prefixes`. |
@@ -40,7 +41,8 @@ A minimal config after setup:
 | `day_starts_at` | `"HH:MM"` | `"04:00"` | Work-day boundary. Work before this time counts as the previous day. |
 | `push_enabled` | bool | `true` | `false` keeps the daily commits on this machine; they are pushed once it's `true` again. |
 | `push_interval_minutes` | int | `30` | Minimum gap between pushes. A push also happens when a session ends or a day closes. |
-| `raw_retention_days` | int | `30` | Raw event files older than this are pruned, but only after they have been processed. |
+| `extract_timeout_s` | int | `600` | How long one extraction call (`claude -p`) may take before it fails and is retried later. Other model calls keep 300 s (the evening condense 180 s). |
+| `raw_retention_days` | int | `30` | Raw event files older than this are pruned once they have been fully read and extracted, whether or not a GitHub remote is set (raw is never pushed). Unprocessed raw is never pruned. |
 | `extract_triggers.min_new_chars` | int | `1500` | A session is extracted once it has at least this much new text, **and** one of the next two triggers fires or the session has ended. |
 | `extract_triggers.idle_minutes` | int | `10` | Extract after this many idle minutes. |
 | `extract_triggers.max_interval_minutes` | int | `20` | Extract at least this often while a session is active. |
@@ -53,7 +55,7 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `branching.strategies` | object | `release-then-qa`, `qa-only`, `qa-cherry-pick` | `{name: {"targets": [roles], "steps": [{"from", "pr_into", "brings"?}]}}`, merged over the built-in three. |
+| `branching.strategies` | object | `release-then-qa`, `release-then-qa-sync`, `qa-only`, `qa-cherry-pick` | `{name: {"targets": [roles], "steps": [{"from", "pr_into", "brings"?}]}}`, merged over the four built-in ones. |
 | `branching.repos.<repo>.strategy` | string | none | The repo's default strategy. Repos without an entry are tracked but get no delivery check. |
 | `branching.repos.<repo>.bases` | object role → name / pattern / list | `release/*`, `qa`, `uat`, `staging`, `main`/`master` | This repo's branch names for each role, e.g. `{"qa": "develop-qa", "release": ["release/*", "*-hotfix"]}`. |
 | `branching.repos.<repo>.rules` | list | `[]` | `[{"jira_parent": "OPS-*", "strategy": "qa-only"}]`: a ticket whose Jira parent matches uses that strategy. |
@@ -67,9 +69,36 @@ Branch tracking: strategies, per-repo base names, the guard and fetching. Full d
 | `branching.fetch` | object | `{"enabled": true, "every_minutes": 30, "active_days": 14, "before_send_minutes": 20}` | When the tick fetches. |
 | `branching.pr_refresh_minutes` | int | `60` | How often open PRs are re-read. |
 
+Built-in strategies also include `release-then-qa-sync`: branch from the release branch and PR into it, then a QA integration branch cut from `qa` merges the release branch and PRs into `qa`. A step's `"of_role": "release"` says the step brings the whole release branch.
+
+## `releases`
+
+Release tracking: the ticket's Jira release, its release branch per repo, release / QA / UAT stages and reminders. Off by default. Full description in [releases.md](releases.md).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `releases.enabled` | bool | `false` | Turn release tracking on. Local computation; the Jira reads below use the daily MCP budget. |
+| `releases.stale_hours` | int | `24` | Refs fetched longer ago than this (or a failed fetch) make a "missing" change `unknown`. |
+| `releases.repos.<repo>.branches` | object release → branch | `{}` | Which branch ships a Jira release in this repo, keyed by version id or exact name. Usually set with `/cg:branch release-map`. |
+| `releases.repos.<repo>.uat` | object | none | `{"branch": "uat", "promotion": {"kind": "pr" \| "sync" \| "unspecified", "from"?, "brings"?, "sync_from"?}}`: the UAT destination and how changes get there. Absent: taken from a strategy step into `uat`, else not configured. |
+| `releases.repos.<repo>.naming` | object | see below | Suggested branch names: `dev`, `qa`, `uat`, with `{ticket}`, `{dev}`, `{release_branch}`, `{release_tail}`, `{release_key}`. |
+| `releases.naming` | object | `{"dev": "feature/{ticket}", "qa": "{dev}-qa", "uat": "{dev}-uat"}` | The default for every repo. Suggestions only; nothing is created. |
+| `releases.jira.uat_field` | string | `""` | Custom field id saying whether UAT is needed. Empty: the requirement stays `unknown` unless set per ticket or by label. |
+| `releases.jira.uat_values` | object | `required`: yes, required, true, y · `not_required`: no, not required, false, n, n/a, na, none | Field values (case-insensitive) for each state; anything else is `unknown`. |
+| `releases.jira.uat_labels` | object | `{"required": [], "not_required": []}` | Jira labels that settle the requirement. |
+| `releases.jira.planned_date_field` | string | `""` | Custom date field used when the fix version has no release date. |
+| `releases.jira.uat_deployed_statuses` | list | `[]` | Jira statuses that count as deployed to UAT. Empty: deployment stays unverified. |
+| `releases.jira.uat_accepted_statuses` | list | `[]` | Jira statuses that count as UAT accepted. |
+| `releases.jira.exclude_statuses` | list | cancelled, canceled, won't do, wont do, rejected, duplicate | Tickets in these statuses are left out of the monthly overview. |
+| `releases.jira.scope_jql` | string | `assignee = currentUser() AND fixVersion is not EMPTY AND updated >= -120d` | The scope search behind the monthly overview. |
+| `releases.jira.scope_refresh_hours` | int | `12` | How often the scope search runs. |
+| `releases.jira.scope_limit` | int | `50` | Issues read per scope search (at most 100). |
+| `releases.jira.versions_refresh_hours` | int | `24` | How often each project's versions catalog is re-read. |
+| `releases.scope` | object | `{"assigned": true, "branches": true, "worked": true}` | What makes a ticket yours for the overview: Jira assignment, a branch named for it with your commits, Claude Code work on it. |
+
 ## `models`
 
-Model aliases passed to `claude -p --model`.
+Models passed to `claude -p --model`: an alias (`haiku`, `sonnet`, `opus`) or an explicit model id such as `claude-haiku-4-5`. An alias follows whatever model it currently points at; an id pins the version, so extraction keeps behaving the same when the alias moves. Pinning `models.extract` is recommended.
 
 | Key | Default | Used for |
 |---|---|---|
@@ -78,8 +107,31 @@ Model aliases passed to `claude -p --model`.
 | `models.curate` | `"sonnet"` | Picking the minimal replayable request set for a ticket |
 | `models.dbflow` | `"sonnet"` | The DB-flow view (scenarios, conflicts, unknowns) |
 | `models.worklog_condense` | not set, so `"sonnet"` | Condensing the evening-worklog descriptions in one batched call |
+| `models.brief` | not set, so `models.consolidate` | Ticket briefs |
+| `models.supersede` | not set, so `models.consolidate` | The per-ticket supersession call at day close (which items a newer one replaced) |
 
 Slack sends and MCP jobs always use `haiku`.
+
+## `budget` and `brief`
+
+Every internal model call (extraction, day summary, curation, DB flow, worklog condensing, MCP jobs, and so on) is recorded with its input and output tokens and its cost in `health.json` under `model_usage.<day>`: totals plus `by_purpose`, kept 30 days next to `cost_by_day`. Health, `/cg:doctor` ("model spend") and the dashboard show today's spend against the cap.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `budget.model_daily_usd` | number | `3.0` | When today's model spend reaches this, supersession and ticket briefs wait until tomorrow (each skip is logged in `agent.log` and counted under `model_usage.<day>.skipped`). Extraction, the day summary and the other purposes are never stopped by it. |
+| `brief.daily_cap` | int | `8` | At most this many ticket-brief calls a day, whatever the spend. |
+| `brief.verified_statuses` | list of strings | `["QA COMPLETED","QA PASSED","READY FOR RELEASE","DONE","CLOSED","RESOLVED"]` | Jira statuses that mean QA verified the fix. A brief whose ticket has no passing test or replay but whose Jira status is one of these (any case) shows "Verified by QA (Jira: <status>)", cited `jira:<KEY>`. |
+
+A ticket brief (see "The ticket brief" in [architecture.md](architecture.md)) is one call with `models.brief` (unset: `models.consolidate`). Its tokens and cost are recorded on the brief itself (`brief.tokens`, `brief.cost_usd`) and in the ledger under `by_purpose.brief`. A brief skipped for the cap waits for the next day close, `/cg:ticket <KEY> --brief` or the dashboard's Refresh brief.
+
+## `rebuild`
+
+`agent rebuild <KEY…> | --all` (see "Rebuilding a ticket from raw" in [architecture.md](architecture.md)) prices itself before it starts and refuses when the estimate is over the cap.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `rebuild.cap_usd` | number | `8` | The most one rebuild may spend. A real run whose estimate is higher changes nothing; one that reaches it mid-run stops cleanly and continues when run again. `--cap-usd N` overrides it for one run. |
+| `rebuild.est_usd_per_chunk` | number | `0.02` | The cost per extraction chunk used in the estimate when the spend ledger has no recent `extract` calls (with calls, their average is used). |
 
 ## `paths`
 
@@ -131,8 +183,10 @@ These settings control the 20:00 message: your day laid out as Jira worklog entr
 | `jira_worklog.workdays` | list | `["Mon","Tue","Wed","Thu","Fri"]` | Normal working days. |
 | `jira_worklog.unassigned_time` | string | `"distribute"` | Time with no ticket: `"distribute"` spreads it across the day's tickets; a ticket key such as `"ABC-1000"` books it there. |
 | `jira_worklog.leave_ticket` | string or null | `null` | On a leave day, book the full day here (`null` means nothing is sent for leave). |
-| `jira_worklog.block_gap_minutes` | int | `20` | Activity less than this far apart counts as one block. |
-| `jira_worklog.point_minutes` | int | `15` | Time credited to a single point event, such as one of your Jira comments. |
+| `jira_worklog.turn_tail_minutes` | int | `5` | Time counted after the last event of a turn (reading the answer, thinking). A turn runs from your prompt to the last event before your next prompt in that session. |
+| `jira_worklog.idle_minutes` | int | `15` | A gap longer than this inside a turn is idle and not counted. When unset, `block_gap_minutes` is used if you set it. |
+| `jira_worklog.block_gap_minutes` | int | `20` | A ticket's worklog lines and activity less than this far apart belong to one block. Also the fallback for `idle_minutes`. |
+| `jira_worklog.point_minutes` | int | `15` | Time credited **before** a single point event: a commit, a Bruno run, one of your Jira comments (the work that led to it). |
 | `jira_worklog.late_days` | int | `3` | Unsent days up to this many days back are still sent late, with an age header. |
 | `jira_worklog.correction_debounce_minutes` | int | `15` | Wait this long after a change to an already-sent day before sending one "Corrected update". |
 | `jira_worklog.example_ticket` | string | `"ABC-1234"` | Ticket key in the "nothing tracked today" nudge. A value you set is a placeholder: it never gets time (see `placeholder_tickets`). |
@@ -141,6 +195,7 @@ These settings control the 20:00 message: your day laid out as Jira worklog entr
 
 One builder makes the 20:00 message: blocks of activity (plus your Jira comments of the day), the allocation to your target, time already logged in Jira subtracted, condensed descriptions, the closing note, the delivery check and, for a changed day, the "Corrected update" header. The sender and every preview (`/cg:today`, `agent worklog-show`) call it, so a preview made from the same inputs is the message, character for character.
 
+- **How time is counted.** The day's ticket minutes, the hub timeline and the evening worklog use one model: each turn counts from your prompt to its last event plus `turn_tail_minutes`, split at gaps over `idle_minutes`; session start and end are not activity. Turns from all sessions are combined, so time counts once: when sessions on different tickets overlap, those minutes are split evenly between them. Commits, Bruno runs and your Jira comments add the `point_minutes` before them (overlap counted once). Bruno file change times count only for today.
 - **Jira data.** At 20:00 the sender reads Jira once (one read-only job). When the Slack send fails, the next tries (up to 4 attempts, `why: retry` in the day's history) reuse that Jira data if it was fetched within the last 30 minutes, instead of reading Jira again. A preview uses the latest copy of that data (`data\jira\_evening\<day>.json`) and says "Jira data as of HH:MM". It never calls Jira by itself; *Refresh from Jira* (`agent worklog-show --jira`) runs the one read job within `mcp.daily_call_budget`, keeping the 20:00 calls in reserve.
 - **Condensed descriptions.** Lines that need condensing go to one batched model call, and each result is cached (`.worklog\cache\condense\<day>.json`, kept 14 days, keyed by a hash of that entry's notes and Jira facts). A preview uses the cached lines and marks the others "condensed at 20:00". *Preview exactly* (`agent worklog-show --exact`) condenses them now, within the same budget; the sender then reuses them.
 
@@ -172,7 +227,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 |---|---|---|---|
 | `mcp.daily_call_budget` | int | `10` | Maximum background MCP jobs per day. Only a job that made at least one MCP tool call counts; jobs that made none (a server down) are counted apart under a cap of the same size. Runs you ask for are counted separately. |
 | `mcp.jira.enabled` | bool | `false` | Run the Jira jobs: ticket cards, and the evening facts used by the worklog. |
-| `mcp.jira.cards` | bool | `true` | With Jira on, read the day's tickets (title, status, summary) for the ticket pages. |
+| `mcp.jira.cards` | bool | `true` | With Jira on, read the cards (title, type, status, summary) of the tickets worked in the last 7 days whose card is missing or older than their last active day: missing first, then the oldest, at most 2 per tick and never from the evening worklog's reserve. A key Jira recently said doesn't exist is skipped for a week. |
 | `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. The read allowlist entry and the server's own read-only mode (`READ_ONLY_MODE`, `ENABLED_TOOLS`) follow this name. |
 | `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
@@ -305,7 +360,7 @@ Chitragupta counts as set up only when the resolved home has a `.worklog\config.
 
 ## Prompt overrides
 
-The prompts for model calls ship with the plugin (`chitragupta/prompts/*.md`, with JSON schemas in `prompts/schemas/`). To change one, put a file with the same name in `<home>\.worklog\prompts\`, for example `<home>\.worklog\prompts\extract.md` or `<home>\.worklog\prompts\schemas\extract.json`, and it wins over the packaged copy. The prompt files are:
+The prompts for model calls ship with the plugin (`chitragupta/prompts/*.md`, with JSON schemas in `prompts/schemas/`). To change one, put a file with the same name in `<home>\.worklog\prompts\`, for example `<home>\.worklog\prompts\extract.md` or `<home>\.worklog\prompts\schemas\extract.json`, and it wins over the packaged copy. An override schema written for an older version (one that lacks a field the packaged schema requires, such as the per-item `line` of `extract`) is ignored together with the prompt of the same name, and `agent.log` says so once: copy the packaged files again and re-apply your change. The prompt files are:
 
 - `extract`
 - `extract_delta`

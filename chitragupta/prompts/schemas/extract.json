@@ -53,7 +53,8 @@
               "reference",
               "todo",
               "question",
-              "blocker"
+              "blocker",
+              "risk"
             ]
           },
           "ticket": {
@@ -91,6 +92,24 @@
               "string",
               "null"
             ]
+          },
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "before",
+              "after",
+              "both",
+              null
+            ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -101,7 +120,9 @@
           "evidence",
           "confidence",
           "time",
-          "updates"
+          "updates",
+          "phase",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -150,6 +171,14 @@
           },
           "revealed": {
             "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -159,7 +188,8 @@
           "purpose",
           "tables",
           "kind",
-          "revealed"
+          "revealed",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -195,6 +225,14 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -203,7 +241,8 @@
           "purpose",
           "key_columns",
           "relations",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -255,6 +294,14 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
@@ -266,7 +313,8 @@
           "request_fields",
           "response_fields",
           "auth_type",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -327,13 +375,22 @@
               "string",
               "null"
             ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Raw line this record comes from."
           }
         },
         "required": [
           "path",
           "role",
           "changed",
-          "ticket"
+          "ticket",
+          "line"
         ],
         "additionalProperties": false
       }

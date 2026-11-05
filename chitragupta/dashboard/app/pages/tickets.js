@@ -6,13 +6,15 @@ import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT,
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { ShareButton } from '../lib/share.js';
+import { Brief, BriefMeta } from './brief.js';
+import { ReleasePlan, ReleaseLine } from '../lib/release.js';
 
 // ------------------------------------------------------------------ list
 const SINCE = [['', 'Any time'], ['7', '7 days'], ['30', '30 days'], ['90', '90 days']];
 function sinceDay(n) { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); }
 function filterTickets(list, p) {
   const q = (p.q || '').trim().toLowerCase();
-  return list.filter((t) => (!q || (t.key + ' ' + t.title + ' ' + t.tldr).toLowerCase().indexOf(q) >= 0)
+  return list.filter((t) => (!q || (t.key + ' ' + t.title + ' ' + (t.title_hint || '') + ' ' + t.tldr).toLowerCase().indexOf(q) >= 0)
     && (!p.status || (t.status || 'No status') === p.status)
     && (!p.repo || (t.repos || []).indexOf(p.repo) >= 0)
     && (!p.alerts || (t.alerts || []).length)
@@ -46,9 +48,10 @@ export function TicketsPage({ route }) {
   const all = (res.data && res.data.tickets) || [];
   const shown = useMemo(() => filterTickets(all, p), [all, p.q, p.status, p.repo, p.alerts, p.since]);
   const cols = [
-    { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}` },
-    { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || '—'}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
-    { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${Chip}>${t.status}</${Chip}>` : html`<span class="muted">No status</span>`}
+    { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}
+      ${(t.reminders || []).length ? html`<div><${Chip} icon="release" title=${t.reminders.map((r) => r.text).join(' | ')}>${plural(t.reminders.length, 'reminder')}</${Chip}></div>` : null}` },
+    { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || html`<${Hint} t=${t} />`}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
+    { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${StatusChips} t=${t} />` : html`<span class="muted">No status</span>`}
       ${(t.repos || []).length ? html`<div class="muted small" style="margin-top:4px;overflow-wrap:anywhere">${t.repos.join(', ')}</div>` : null}` },
     { id: 'last', label: 'Last active', hideSm: true, value: (t) => t.last || '', render: (t) => html`<span class="nowrap">${t.last ? fmtDay(t.last, true) : '—'}</span>` },
     { id: 'minutes', label: 'Time', num: true, value: (t) => t.minutes, render: (t) => fmtMin(t.minutes) },
@@ -143,40 +146,140 @@ function GitTab({ g }) {
       <${GitMatrix} e=${e} /><${GitBranches} e=${e} /><${GitPrs} e=${e} /></div>`; })}`;
 }
 
+// A guessed title (the model's or the branch name's) is never shown as the title, only labelled as a hint.
+function Hint({ t }) {
+  return t.title_hint ? html`<span class="muted small" title="A guess from the work or the branch name, not the Jira title">hint: ${t.title_hint}</span>` : '—';
+}
+// The Jira status and the status inferred from the work, each labelled; never one passed off as the other.
+function StatusChips({ t }) {
+  const js = t.jira_status, inf = t.status_inferred;
+  if (!js && !inf) return t.status ? html`<${Chip} title="Status">${t.status}</${Chip}>` : null;
+  return html`${js ? html`<${Chip} title="Jira status">Jira: ${js}</${Chip}>` : null}
+    ${inf ? html`<${Chip} title="Inferred from the recorded work at day close">Inferred: ${inf}</${Chip}>` : null}`;
+}
+
 // ------------------------------------------------------------------ ticket tabs
 const KIND = { root_cause: 'Root cause', finding: 'Findings', how_it_works: 'How it works', fix: 'Fix', decision: 'Decisions', config: 'Config',
   repro_test: 'Repro and tests', reference: 'References', blocker: 'Blockers', question: 'Open questions', todo: 'To do' };
 const KIND_ICON = { root_cause: 'warn', blocker: 'bad', fix: 'ok', decision: 'check', question: 'info', todo: 'wait' };
-function Finding({ i }) {
-  return html`<li class="finding-row"><div class="finding-copy"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}</div>
-    <aside class="finding-evidence" aria-label="Recorded evidence"><div>${[i.date, i.time].filter(Boolean).join(' ')}</div>
-      ${i.confidence ? html`<div>${i.confidence} confidence</div>` : null}
-      ${[].concat(i.evidence || []).map((e, n) => html`<p key=${n}>${e}</p>`)}</aside></li>`;
+function Finding({ i, byId }) {
+  const rep = i.status === 'superseded' && byId ? byId[i.superseded_by] : null;
+  const conf = i.status === 'hypothesis' ? 'hypothesis' : i.status === 'confirmed' ? 'confirmed' : i.confidence;
+  return html`<li class="finding-row" id=${'i-' + i.id} tabindex="-1"><div class="finding-copy"><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+    ${i.review ? html`<div class="m"><strong>Needs review:</strong> ${i.review.why || 'maybe not this ticket'}${i.review.suggest ? ' (suggested: ' + i.review.suggest + ')' : ''}</div>` : null}
+    ${i.status === 'superseded' ? html`<div class="m">Replaced by ${rep ? html`<a href=${'#i-' + rep.id} onClick=${(e) => { e.preventDefault(); const el = document.getElementById('i-' + rep.id); if (el) { for (let d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true; el.scrollIntoView({ block: 'center' }); el.focus({ preventScroll: true }); } }}>${rep.title}</a>` : 'a newer item'}</div>` : null}</div>
+    <div class="finding-evidence" aria-label="Recorded evidence"><div>${[i.date, i.time].filter(Boolean).join(' ')}</div>
+      ${conf ? html`<div>${conf} confidence</div>` : null}${i.closed_by ? html`<div>Done: ${i.closed_by}</div>` : null}
+      ${[].concat(i.evidence || []).map((e, n) => html`<p key=${n}>${e}</p>`)}${i.ref ? html`<p class="mono">${i.ref}</p>` : null}</div></li>`;
 }
-function Overview({ t }) {
-  const groups = {};
-  t.findings.forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
+// Current items per kind; done TODOs and items a newer one replaced are collapsed under each kind (K3).
+function KindItems({ list, byId }) {
+  const cur = list.filter((i) => i.status !== 'superseded' && i.status !== 'done');
+  const done = list.filter((i) => i.status === 'done'), sup = list.filter((i) => i.status === 'superseded');
+  return html`${cur.length ? html`<ul class="findings">${cur.map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul>` : null}
+    ${done.length ? html`<details class="more"><summary>Done (${done.length})</summary><ul class="findings">${done.map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></details>` : null}
+    ${sup.length ? html`<details class="more"><summary>Superseded (${sup.length})</summary><ul class="findings">${sup.map((i) => html`<${Finding} key=${i.id} i=${i} byId=${byId} />`)}</ul></details>` : null}`;
+}
+// Items out of the current view stay one click away (archived ones: copied to another ticket or kept from a rebuild).
+function Collapsed({ title, list, byId }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>${title} (${list.length})</summary>
+    <ul class="findings">${list.map((i) => html`<${Finding} key=${i.id} i=${i} byId=${byId} />`)}</ul></details>`;
+}
+// Everything extracted, one click away from the brief: current items per kind, done and superseded collapsed under
+// each kind (K3), items that may be another ticket's under Needs review (K8), archived ones last.
+function AllFindings({ t }) {
+  const [opened, setOpened] = useState(false);
+  const detail = useApi(opened && t.lazy ? '/api/tickets/' + encodeURIComponent(t.key) + '?section=findings' : null);
+  const findings = detail.data && detail.data.key === t.key ? detail.data.findings : t.findings;
+  const groups = {}, byId = {};
+  findings.forEach((i) => { byId[i.id] = i; });
+  const live = findings.filter((i) => !i.archived), archived = findings.filter((i) => i.archived);
+  live.filter((i) => !i.review).forEach((i) => { (groups[i.kind] = groups[i.kind] || []).push(i); });
   const order = Object.keys(KIND).filter((k) => groups[k]).concat(Object.keys(groups).filter((k) => !KIND[k]));
-  return html`${t.problem ? html`<p class="lede">${t.problem}</p>` : null}
+  const count = (k) => groups[k].filter((i) => i.status !== 'superseded' && i.status !== 'done').length;
+  return html`<details class="more allfind" id="all-findings" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All findings (${(t.record_counts || {}).items || findings.length})</summary>
     ${order.length ? order.map((k) => html`<section class="kindgroup" key=${k} aria-labelledby=${'kg-' + k}>
-      <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${groups[k].length}</span></h2>
-      <ul class="findings">${groups[k].map((i) => html`<${Finding} key=${i.id} i=${i} />`)}</ul></section>`)
-      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}`;
+      <h2 id=${'kg-' + k}><${Icon} name=${KIND_ICON[k] || 'info'} size=${17} />${KIND[k] || k}<span class="tabcount">${count(k)}</span></h2>
+      <${KindItems} list=${groups[k]} byId=${byId} /></section>`)
+      : html`<${Empty} title="Nothing recorded for this ticket yet">Findings, root causes and decisions appear here as you work on it with Claude Code.</${Empty}>`}
+    <${NeedsReview} t=${t} list=${live.filter((i) => i.review).concat(t.record_reviews || [])} />
+    <${Collapsed} title="Archived" list=${archived} byId=${byId} /></details>`;
+}
+function RecordedKind({ t, kind }) {
+  const [opened, setOpened] = useState(false);
+  const detail = useApi(opened && t.lazy ? '/api/tickets/' + encodeURIComponent(t.key) + '?section=' + kind : null);
+  const rows = detail.data && detail.data.key === t.key ? detail.data.records || [] : [];
+  return html`<details class="more" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All recorded ${kind} (${(t.record_counts || {})[kind] || 0})</summary>
+    ${detail.loading ? html`<p class="muted">Loading recorded evidence…</p>` : null}
+    ${detail.error ? html`<p class="muted">${detail.error.message}</p>` : null}
+    <ul class="findings">${rows.map((r) => html`<li key=${r.id}><div class="t"><code>${r.name || (r.method ? r.method + ' ' : '') + (r.path || r.id)}</code></div>
+      <div class="d">${r.purpose || r.role || ''}</div><div class="m">${r.relevance || 'core'}${r.hidden_reason ? ' · ' + r.hidden_reason : ''}</div></li>`)}</ul></details>`;
+}
+function queryGroups(t, qs) {
+  if (!(t.core_ranked || {}).queries) return [['Recorded queries (not yet ranked)', qs.slice(0, 8)]];
+  return [['Key queries', qs.filter(q => q.role !== 'context').slice(0, 5)],
+    ['Also used', qs.filter(q => q.role === 'context').slice(0, 3)]];
+}
+function CoreRecords({ t, jump, tabHref }) {
+  const core = t.core || {}, ranked = t.core_ranked || {};
+  return html`${queryGroups(t, t.queries || []).filter(([, rows]) => rows.length).map(([title, rows]) => html`<section class="bsec" key=${title}><h2>${title}</h2><ul class="findings">${rows.map((q) => html`<li key=${q.id}>
+      <a href=${tabHref('queries')} onClick=${(e) => { e.preventDefault(); jump('queries', 'q-' + q.id); }}>${q.purpose || 'Query'}</a>${q.role ? ' · ' + q.role : ''}</li>`)}</ul></section>`)}
+    ${['tables', 'apis'].map((kind) => html`<section class="bsec" key=${kind}><h2>${ranked[kind] ? (kind === 'tables' ? 'Core tables' : 'Core APIs') : 'Recorded ' + (kind === 'tables' ? 'tables' : 'APIs') + ' (not yet ranked)'}</h2>
+      <ul class="findings">${(core[kind] || []).map((r) => html`<li key=${r.id}><div class="t"><code>${r.name || (r.method || '') + ' ' + (r.path || '')}</code></div><div class="d">${r.purpose || ''}</div></li>`)}</ul>
+      ${!EXPORT ? html`<${RecordedKind} t=${t} kind=${kind} />` : null}</section>`)}
+    ${!EXPORT ? html`<${RecordedKind} t=${t} kind="files" />` : null}`;
+}
+function Overview({ t, jump, tabHref }) {
+  return html`<${Brief} t=${t} jump=${jump} tabHref=${tabHref} />
+    ${t.focused ? html`<${CoreRecords} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
+    ${!(EXPORT && t.focused) ? html`<${AllFindings} t=${t} />` : null}`;
+}
+// Items recorded under this ticket that may be another ticket's (K8): never moved, resolved with an inbox line.
+function NeedsReview({ t, list }) {
+  if (!list.length) return null;
+  return html`<details class="more"><summary>Needs review (${list.length})</summary>
+    <p class="muted small">Recorded under ${t.key} but maybe not about it. A line in inbox.md resolves each: <span class="mono">${t.key}: keep &lt;id&gt;</span> keeps it, <span class="mono">${t.key}: move &lt;id&gt; &lt;KEY&gt;</span> copies it to that ticket and archives it here.</p>
+    <ul class="findings">${list.map((i) => { const keep = t.key + ': keep ' + i.id, move = t.key + ': move ' + i.id + ' ' + (i.review.suggest || '<KEY>');
+      return html`<li key=${i.id}><div class="t">${i.title}</div>${i.detail ? html`<div class="d">${i.detail}</div>` : null}
+        <div class="m">${i.review.why}</div><div class="m"><span class="mono">${keep}</span> <${CopyButton} text=${keep} what="the keep line" /> · <span class="mono">${move}</span> <${CopyButton} text=${move} what="the move line" /></div></li>`; })}</ul></details>`;
 }
 function Requests({ rq }) {
   if (!rq.steps.length) return html`<${Empty} title=${'No saved requests' + (rq.captured ? ' (' + rq.captured + ' captured calls, not curated yet)' : '')} icon="api">Ask Claude to save the essential requests for this ticket to the worklog.</${Empty}>`;
   return html`${rq.setup ? html`<p class="muted small">Run these in Git Bash from the data home; the first block loads base URLs and secrets from bruno/.env.</p><${CodeBlock} code=${rq.setup} label="Setup" what="the setup block" />` : null}
-    ${rq.steps.map((s) => html`<div class="step" key=${s.n}><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
+    ${rq.steps.map((s) => html`<div class="step" key=${s.n} id=${'rq-' + s.n} tabindex="-1"><div class="step-head"><strong>${s.n}. ${s.name}</strong>${s.method ? html`<span class="method">${s.method}</span>` : null}
       ${s.url ? html`<span class="url">${s.url}</span>` : null}<span class="grow"></span>${s.curl ? html`<${CopyButton} text=${s.curl} label="Copy as curl" what=${'for step ' + s.n} />` : null}</div>
       <div class="small muted">Expected: ${s.expected || '2xx'}${s.owner === 'user' ? ' · yours' : ''}${s.executed === false ? ' · not yet executed' : ''}${s.critical_fields && s.critical_fields.length ? ' · critical: ' + s.critical_fields.join(', ') : ''}</div>
       ${s.curl ? html`<details class="more"><summary>Show the curl command</summary><pre tabindex="0"><code>${s.curl}</code></pre></details>` : null}</div>`)}
     <p class="small muted">${rq.dropped ? rq.dropped + ' other captured calls left out. ' : ''}${rq.bruno_folder ? html`Bruno folder: <span class="mono">${rq.bruno_folder}</span> <${CopyButton} text=${rq.bruno_folder} label="Copy path" what="Bruno folder path" />` : null}</p>`;
 }
-function Queries({ qs }) {
-  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
-  return qs.map((q) => html`<div class="step" key=${q.id}><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
+function Query({ q }) {
+  return html`<div class="step" id=${'q-' + q.id} tabindex="-1"><div class="step-head"><strong>${q.purpose || 'Query'}</strong><span class="muted small">${[q.date, q.time].filter(Boolean).join(' ')} · ${[q.dialect, q.kind].filter(Boolean).join(' · ')}</span><span class="grow"></span><${CopyButton} text=${q.text} what="query" /></div>
     ${q.tables && q.tables.length ? html`<div class="small muted">Tables: ${q.tables.map((x, i) => html`<code key=${i}>${x}</code> `)}</div>` : null}
-    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}<pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`);
+    ${q.revealed ? html`<div class="small">Revealed: ${q.revealed}</div>` : null}
+    ${q.ref ? html`<div class="small muted">Sent: <span class="mono">${q.ref}</span></div>` : q.sent === null && q.evidence && q.evidence.length ? html`<div class="small muted">Saved in: <span class="mono">${q.evidence[0]}</span></div>` : null}
+    <pre tabindex="0" style="margin-top:8px"><code>${q.text}</code></pre></div>`;
+}
+// Only SQL that was sent (or a script you saved) is listed; SQL the notes mention but never sent stays collapsed.
+function Queries({ qs, t }) {
+  const [opened, setOpened] = useState(false);
+  const detail = useApi(opened && t.lazy ? '/api/tickets/' + encodeURIComponent(t.key) + '?section=queries' : null);
+  if (t.focused) {
+    const all = detail.data && detail.data.key === t.key ? detail.data.queries : qs;
+    // Keep the server's role order when the date-ordered full evidence arrives.
+    const byId = new Map(all.map(q => [q.id, q]));
+    const core = qs.filter(q => q.sent !== false && !q.review && !q.archived && q.relevance === 'core' && !q.variant_of).map(q => byId.get(q.id) || q);
+    const ids = new Set(core.map(q => q.id)), rest = all.filter(q => !ids.has(q.id));
+    return html`${queryGroups(t, core).filter(([, rows]) => rows.length).map(([title, rows]) => html`<section key=${title}><h2>${title}</h2>${rows.map(q => html`<${Query} key=${q.id} q=${q} />`)}</section>`)}
+      ${!EXPORT ? html`<details id="all-queries" class="more" onToggle=${(e) => { if (e.currentTarget.open) setOpened(true); }}><summary>All recorded (${(t.record_counts || {}).queries || all.length})</summary>
+        <p class="muted small">Key queries are shown above; other evidence remains recorded below.</p>
+        ${detail.loading ? html`<p class="muted">Loading recorded queries…</p>` : null}
+        ${rest.map((q) => html`<div key=${q.id}><p class="small muted">${q.relevance || 'supporting'}${q.hidden_reason ? ' · ' + q.hidden_reason : ''}${q.review ? ' · Needs review: ' + q.review.why : ''}</p><${Query} q=${q} /></div>`)}</details>` : null}`;
+  }
+  const run = qs.filter((q) => q.sent !== false), notRun = qs.filter((q) => q.sent === false);
+  if (!qs.length) return html`<${Empty} title="No queries recorded" icon="db">Queries you run while working on the ticket are kept here.</${Empty}>`;
+  return html`${run.length ? run.map((q) => html`<${Query} key=${q.id} q=${q} />`) : html`<${Empty} title="No queries sent" icon="db">The notes mention SQL that was never sent; it is kept below.</${Empty}>`}
+    ${notRun.length ? html`<details class="more"><summary>Not run (${notRun.length})</summary><p class="muted small">Written or reworded in the notes, but not found among the SQL sent in the session.</p>${notRun.map((q) => html`<${Query} key=${q.id} q=${q} />`)}</details>` : null}`;
 }
 function Artifacts({ list }) {
   const cols = [
@@ -196,10 +299,13 @@ function Timeline({ days }) {
 }
 function Notes({ t }) {
   const paths = Object.keys(t.paths || {});
+  const files = (t.files || []).filter((f) => f.verified === true);
+  const unverified = (t.files || []).filter((f) => f.verified !== true);
   return html`${t.readme ? html`<${Markdown} text=${t.readme} />` : html`<${Empty} title="No notes file yet" icon="file">The ticket's README.md is written by the background tick.</${Empty}>`}
     ${paths.length ? html`<h2 style="margin:24px 0 8px">Files in the data home</h2><ul class="findings">${paths.map((k) => html`<li key=${k} style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <${Chip}>${k}</${Chip}><span class="mono small" style="flex:1;min-width:0;overflow-wrap:anywhere">${t.paths[k]}</span><${CopyButton} text=${t.paths[k]} label="Copy path" what=${k} /></li>`)}</ul>` : null}
-    ${(t.files || []).length ? html`<details class="more"><summary>Code files touched (${t.files.length})</summary><ul class="findings">${t.files.map((f, i) => html`<li key=${i} class="mono small">${f.path || f.file || JSON.stringify(f)}</li>`)}</ul></details>` : null}`;
+    ${files.length ? html`<details class="more"><summary>Code files touched (${files.length})</summary><ul class="findings">${files.map((f, i) => html`<li key=${i} class="mono small">${f.path || f.file || JSON.stringify(f)}${f.changed ? html` <span class="muted">${f.change === 'edited, not committed' ? f.change : 'changed'}</span>` : null}</li>`)}</ul></details>` : null}
+    ${unverified.length ? html`<details class="more"><summary>Unverified paths (${unverified.length})</summary><p class="muted small">Named in the notes but not found in the repo: not edited in a session, not in a commit.</p><ul class="findings">${unverified.map((f, i) => html`<li key=${i} class="mono small">${f.path || ''}</li>`)}</ul></details>` : null}`;
 }
 function DbFlow({ df }) {
   if (!df.markdown) return html`<${Empty} title="No DB flow traced yet" icon="db">Ask Claude to map this ticket's DB flow, or run /cg:trace for a QA worked example.</${Empty}>`;
@@ -242,21 +348,46 @@ export function TicketPage({ route }) {
   const tab = EXPORT ? expTab : TABS.indexOf(route.params.tab) >= 0 ? route.params.tab : 'overview';
   const setTab = EXPORT ? setExpTab : (id) => setParams({ tab: id === 'overview' ? '' : id });
   useEffect(() => { document.title = key + ' · Chitragupta'; }, [key]);
+  // An evidence chip or an "All details" link: switch tab, then show the element (opening the details around it).
+  const tabHref = (id) => (EXPORT ? '#' : href('tickets', key, Object.assign({}, route.params, { tab: id === 'overview' ? '' : id })));
+  const jump = (id, el) => {
+    setTab(id);
+    const deadline = performance.now() + 5000;
+    const show = () => {
+      const e = el ? document.getElementById(el) : document.getElementById('tk-panel');
+      if (!e) {
+        if (id === 'queries' && el && el.startsWith('q-')) {
+          const recorded = document.getElementById('all-queries');
+          if (recorded) recorded.open = true;
+        }
+        if (performance.now() < deadline) requestAnimationFrame(show);
+        return;
+      }
+      for (let d = e.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+      if (e.tagName === 'DETAILS') e.open = true;
+      e.scrollIntoView({ block: el ? 'center' : 'start' });
+      if (el) { e.classList.add('hit'); setTimeout(() => e.classList.remove('hit'), 2000); }
+      e.focus({ preventScroll: true });
+    };
+    requestAnimationFrame(show);
+  };
   useEffect(() => {
     const k = {};
     TABS.forEach((id, i) => { k[String(i + 1)] = { label: 'Ticket tab ' + (i + 1), run: () => setTab(id) }; });
     pageKeys.set(k);
     return () => pageKeys.set({});
   }, [key]);
-  const t = res.data;
+  const loadTab = res.data && res.data.lazy && !EXPORT && ['branches', 'dbflow', 'requests', 'artifacts', 'notes'].includes(tab);
+  const detail = useApi(loadTab ? '/api/tickets/' + encodeURIComponent(key) + '?section=' + tab : null);
+  const t = res.data && detail.data && detail.data.key === key && detail.data.section === tab ? Object.assign({}, res.data, detail.data) : res.data;
   const g = (t && t.git) || {};
   const nb = Object.values(g.repos || {}).reduce((a, e) => a + (e.branches || []).length, 0);
   const tabs = t ? [
-    { id: 'overview', label: 'Overview', count: t.findings.length || null },
-    { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 },
+    { id: 'overview', label: 'Overview', count: t.findings.filter((i) => !i.archived && !i.review && i.status !== 'superseded' && i.status !== 'done').length || null },
+    { id: 'branches', label: 'Branches & PRs', count: nb || null, alert: (g.alerts || []).length > 0 || ((t.release_plan || {}).reminders || []).some((r) => r.severity === 'alert') },
     { id: 'dbflow', label: 'DB flow', count: t.dbflow.markdown ? null : 0 },
     { id: 'requests', label: 'Requests', count: t.requests.steps.length },
-    { id: 'queries', label: 'Queries', count: t.queries.length },
+    { id: 'queries', label: 'Queries', count: t.queries.filter((q) => q.sent !== false).length },
     { id: 'artifacts', label: 'Artifacts', count: t.artifacts.length },
     { id: 'timeline', label: 'Timeline', count: t.timeline.length },
     { id: 'notes', label: 'Notes' },
@@ -265,20 +396,21 @@ export function TicketPage({ route }) {
   const rq = railQ.trim().toLowerCase();
   const rail = EXPORT ? null : html`<div class="rail-tools"><label class="sr" for="tk-rail-q">Filter the ticket list</label>
       <input id="tk-rail-q" type="search" placeholder="Filter tickets" value=${railQ} onInput=${(e) => setRailQ(e.currentTarget.value)} autocomplete="off" /></div>
-    <ul class="rlist">${all.filter((x) => !rq || (x.key + ' ' + x.title).toLowerCase().indexOf(rq) >= 0).map((x) => html`<li key=${x.key}>
+    <ul class="rlist">${all.filter((x) => !rq || (x.key + ' ' + x.title + ' ' + (x.title_hint || '')).toLowerCase().indexOf(rq) >= 0).map((x) => html`<li key=${x.key}>
       <a href=${'#/tickets/' + encodeURIComponent(x.key)} aria-current=${x.key === key ? 'page' : null}><span class="sw" style=${{ background: x.key === key ? 'var(--accent)' : 'var(--rule)' }}></span>
-        <span><span class="k">${x.key}${(x.alerts || []).length ? html`<${Icon} name="warn" size=${14} label="has delivery alerts" />` : null}</span><span class="t">${x.title}</span></span><span class="m">${fmtMin(x.minutes)}</span></a></li>`)}</ul>`;
+        <span><span class="k">${x.key}${(x.alerts || []).length ? html`<${Icon} name="warn" size=${14} label="has delivery alerts" />` : null}</span><span class="t">${x.title || (x.title_hint ? 'hint: ' + x.title_hint : '')}</span></span><span class="m">${fmtMin(x.minutes)}</span></a></li>`)}</ul>`;
   const Wrap = EXPORT ? Plain : Desk;
   return html`<${Wrap} className="ticket-desk">
-    <${Load} res=${res} lines=${10}>${(t) => html`
+    <${Load} res=${res} lines=${10}>${() => html`
       <div class="tkhead"><div class="tkhead-row"><div>
         ${EXPORT ? null : html`<details class="ticket-switcher"><summary>Tickets / switch ticket</summary>${rail}</details>`}
         <h1 id="page-title" tabindex="-1"><span class="tk-key">${t.key}</span>${t.title ? html`<span class="title">${t.title}</span>` : null}</h1>
+        ${!t.title && t.title_hint ? html`<p class="muted small" style="margin:0 0 6px"><${Hint} t=${t} /> · no Jira card yet</p>` : null}
+        <${BriefMeta} t=${t} />
+        <${ReleaseLine} plan=${t.release_plan} href=${tabHref('branches')} onOpen=${() => jump('branches', 'release-plan')} />
         <div class="chips">
-          ${t.status ? html`<${Chip} title="Jira status">${t.status}</${Chip}>` : null}
-          ${(t.repos || []).map((r) => html`<${Chip} key=${'r' + r} icon="branch" title="Repo">${r}</${Chip}>`)}
-          ${(t.branches || []).slice(0, 2).map((b) => html`<${Chip} key=${'b' + b} title=${'Branch ' + b}><span class="mono">${b}</span></${Chip}>`)}
-          ${(t.branches || []).length > 2 ? html`<${Chip} title=${t.branches.slice(2).join(', ')}>+${t.branches.length - 2} branches</${Chip}>` : null}
+          ${(t.repos || []).length > 1 ? html`<${Chip} icon="branch" title=${'Repos ' + t.repos.join(', ')}>+${plural(t.repos.length - 1, 'repo')}</${Chip}>` : null}
+          ${(t.branches || []).length > 1 ? html`<${Chip} title=${t.branches.slice(1).join(', ')}>+${plural(t.branches.length - 1, 'branch', 'branches')}</${Chip}>` : null}
           <${Chip} icon="today" title="Time recorded">${fmtMin(t.minutes)}</${Chip}>
           <${Chip} title="Active">${(t.first || '—') + ' to ' + (t.last || '—')}</${Chip}>
           ${(g.alerts || []).length ? html`<${Status} kind="warn">${plural(g.alerts.length, 'delivery alert')}</${Status}>` : null}
@@ -288,15 +420,16 @@ export function TicketPage({ route }) {
             <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a>
             <${ShareButton} k=${t.key} /></div>`}
         </div></div>
-      ${t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
+      ${!(t.brief && (t.brief.has_brief || t.brief.summary)) && t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
       ${tab === 'branches' ? null : html`<${GitAlerts} g=${t.git} />`}
       <${TicketBar} t=${t} tabs=${tabs} tab=${tab} setTab=${setTab} />
       <${TabPanel} idBase="tk" active=${tab}>
-        ${tab === 'overview' ? html`<${Overview} t=${t} />` : null}
-        ${tab === 'branches' ? html`<${GitTab} g=${t.git} />` : null}
-        ${tab === 'dbflow' ? html`<${DbFlow} df=${t.dbflow} />` : null}
-        ${tab === 'requests' ? html`<${Requests} rq=${t.requests} />` : null}
-        ${tab === 'queries' ? html`<${Queries} qs=${t.queries} />` : null}
+        ${tab === 'overview' ? html`<${Overview} t=${t} jump=${jump} tabHref=${tabHref} />` : null}
+        ${tab === 'branches' ? html`<${ReleasePlan} plan=${t.release_plan} brief=${t.release_brief} k=${t.key} /><${GitTab} g=${t.git} />` : null}
+        ${t.epic && (tab === 'dbflow' || tab === 'requests' || tab === 'queries') ? html`<${Empty} title=${t.epic_note} icon="info">Open a child ticket from the Overview for its DB flow, requests and queries.</${Empty}>` : null}
+        ${tab === 'dbflow' && !t.epic ? html`<${DbFlow} df=${t.dbflow} />` : null}
+        ${tab === 'requests' && !t.epic ? html`<${Requests} rq=${t.requests} />` : null}
+        ${tab === 'queries' && !t.epic ? html`<${Queries} qs=${t.queries} t=${t} />` : null}
         ${tab === 'artifacts' ? html`<${Artifacts} list=${t.artifacts} />` : null}
         ${tab === 'timeline' ? html`<${Timeline} days=${t.timeline} />` : null}
         ${tab === 'notes' ? html`<${Notes} t=${t} />` : null}

@@ -16,6 +16,7 @@ Routes
   /api/setup             a read-only setup checklist (doctor's fast mode, cached 60 s)
   /api/events            Server-Sent Events: "cursor" events when /api/changes would move (max 16 streams)
   /api/tickets[?q=]      ticket list
+  /api/releases[?month=YYYY-MM]   my tickets by planned release date (release tracking), overdue / unresolved apart
   /api/tickets/<KEY>     one ticket: findings, requests (+ curl), DB flow, queries, artifacts, branches & PRs
   /api/tickets/<KEY>/export?mode=full|shareable   the ticket page as one self-contained HTML file (attachment;
                          built in memory, nothing is written). /api/ticket/<KEY>/export is the same.
@@ -26,6 +27,7 @@ Routes
   /api/shutdown?token=T  stops the server (token from the user folder; used by `dashboard stop` / ensure)
 """
 import hashlib
+import gzip
 import hmac
 import json
 import os
@@ -311,7 +313,26 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def send_json(self, obj, code=200):
-        self._send(code, _json_bytes(obj), "application/json; charset=utf-8")
+        body = _json_bytes(obj)
+        extra = [("Vary","Accept-Encoding")]
+        encodings = {}
+        for value in self.headers.get_all("Accept-Encoding",[]):
+            for part in value.split(","):
+                bits = [b.strip().lower() for b in part.split(";")]
+                quality = 1.0
+                for param in bits[1:]:
+                    if param.startswith("q="):
+                        try:
+                            quality = float(param[2:])
+                        except ValueError:
+                            quality = 0.0
+                encodings[bits[0]] = quality
+        if len(body) >= 512 and encodings.get("gzip",encodings.get("*",0)) > 0:
+            packed = gzip.compress(body,compresslevel=5,mtime=0)
+            if len(packed) < len(body):
+                body = packed
+                extra.append(("Content-Encoding","gzip"))
+        self._send(code,body,"application/json; charset=utf-8",extra)
 
     def send_file(self, path, ctype, cache):
         try:
@@ -492,12 +513,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(api.setup())
         if path == "/api/tickets":
             return self.send_json(api.tickets(q("q")[:200]))
+        if path == "/api/releases":
+            try:
+                return self.send_json(api.releases(q("month")[:7] or None, cfg))
+            except ValueError as e:
+                return self.send_json({"error": str(e)[:200]}, 400)
         m = TICKET_PATH.match(path)
         if m:
             key = m.group(1).upper()
             if not api.TICKET_RE.match(key):
                 return self.send_json({"error": "bad ticket key"}, 400)
-            data = api.ticket(key)
+            section = q("section")
+            if section and section not in api.DETAIL_SECTIONS:
+                return self.send_json({"error": "unknown ticket section"}, 400)
+            data = api.ticket_detail(key, section) if section else api.ticket(key)
             return self.send_json(data) if data else self.send_json({"error": "unknown ticket", "key": key}, 404)
         m = EXPORT_PATH.match(path)
         if m:

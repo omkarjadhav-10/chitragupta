@@ -116,11 +116,24 @@ def push_row(cfg, health):
         return _row("last push", True, "no GitHub remote configured (local only)")
     if health.get("privacy") == "public":
         return _row("last push", False, "the GitHub repo is public, so pushes are blocked")
+    if health.get("privacy") == "unknown":
+        from . import gitsync
+        return _row("last push", False, gitsync.privacy_warning(health))
     pf = health.get("push_failing_since")
     if pf:
         return _row("last push", False, "pushes failing since %s" % pf)
     a = _age(health.get("last_push"))
     return _row("last push", True, _fmt_age(a) if a is not None else "nothing pushed yet")
+
+
+def model_row(health, cfg):
+    """Today's model spend against budget.model_daily_usd (over it: supersession and briefs wait for tomorrow)."""
+    from . import modelbudget
+    m = modelbudget.summary(health or {}, cfg)
+    detail = "today $%.2f of $%.2f cap, %d call(s), %d tokens in, %d out" % (m["usd"], m["cap"], m["calls"], m["in"], m["out"])
+    if m["over"]:
+        detail += "; cap reached: supersession and briefs wait until tomorrow (extraction continues)"
+    return _row("model spend", not m["over"], detail)
 
 
 def errors_row(health):
@@ -227,6 +240,7 @@ def run(probe=True, task_expected=True, mcp=None):
     rows.append(hooks_row())
     rows.append(tick_row(health, task_expected))
     rows.append(push_row(cfg, health))
+    rows.append(model_row(health, cfg))
     rt = runtime.status()
     rows.append(_row("runtime", rt["current_ok"] and rt["launcher_exists"],
                      "%s current=%s, package %s%s" % (rt["path"], rt["current"], __version__,

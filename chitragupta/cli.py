@@ -2,7 +2,7 @@
 
   where [--json]                         data home, user folder, runtime, version, set up or not
   today [--date D] [--no-preview]        time per ticket so far + tonight's Jira-worklog preview
-  ticket <KEY> [--json]                  a ticket's files and a short summary
+  ticket <KEY> [--json] [--brief]        a ticket's files and a short summary; --brief writes its brief now
   trace <KEY>                            the ticket's DB flow and its QA worked example
   hours [--week|--month] [--date D] [--csv]   hours per ticket for a week (by day) or a month (by ISO week)
   search <query…> [--type T] [--ticket K] [--repo R] [--from D] [--to D] [--limit N] [--json] [--rebuild]
@@ -271,6 +271,17 @@ def cmd_ticket(a):
         path = export.export_to_file(key, a.mode)
         out("Exported %s (%s): %s" % (key, a.mode, path))
         return 0
+    if getattr(a, "brief", False):
+        from . import brief
+        res = brief.refresh(key, wait_s=60)
+        sk = res.get("skipped")
+        if sk == "unchanged":
+            out("Brief unchanged: nothing new since it was written.")
+        elif sk and not res.get("epic"):
+            out("No new brief: %s." % ("today's brief cap or model budget is used up" if sk == "budget" else sk))
+        if res.get("view"):
+            out("\n".join(brief.text_lines(res["view"])))
+        return 0
     s = ticket_summary(key, tk or {})
     if a.json:
         s["files"] = dict(files)
@@ -306,11 +317,15 @@ SYM = {"in": "✓", "same": "✓", "squash": "✓", "open": "⏳", "missing": "�
 
 def branches_report(key, tk):
     """Compact chat view of tk['git']: strategy, branches, PRs, delivery per target, alerts."""
-    from . import render
+    from . import release, render
     g = tk.get("git") or {}
+    plan = release.brief_lines(tk, key)
     if not g.get("repos"):
-        return ["No branches recorded for %s yet (the background agent links them within one tick of seeing them)." % key]
+        msg = ["No branches recorded for %s yet (the background agent links them within one tick of seeing them)." % key]
+        return (["# %s — release plan" % key] + plan + [""] + msg) if plan else msg
     L = ["# %s — branches & PRs" % key, g.get("summary", ""), ""]
+    if plan:
+        L += plan + [""]
     for name, x in sorted(g["repos"].items()):
         how = ("%s (%s)" % (x["strategy"], x.get("strategy_how"))) if x.get("strategy") else (x.get("note") or "no strategy")
         L.append("## %s · strategy %s · %s" % (name, how, render.PR_SOURCE.get(x.get("pr_source"), "PR info unavailable")))
@@ -343,7 +358,12 @@ def branches_report(key, tk):
     return L
 
 
+MONTH_ARG = re.compile(r"^(\d{4}-\d{2}|month|this-month|releases?)$", re.I)
+
+
 def cmd_branches(a):
+    if not (a.key or "").strip() or MONTH_ARG.match(a.key.strip()) or getattr(a, "month", None):
+        return cmd_releases(a)  # no key, or a month: the release overview
     key = norm_key(a.key)
     if not key:
         return 0  # informational: the /cg: skills inject this output
@@ -352,6 +372,23 @@ def cmd_branches(a):
         out(json.dumps(tk.get("git") or {}, indent=1, ensure_ascii=False))
         return 0
     for line in branches_report(key, tk):
+        out(line)
+    return 0
+
+
+def cmd_releases(a):
+    """The monthly release overview: my tickets by planned release date, overdue and unresolved ones apart."""
+    from . import release
+    m = a.month or ((a.key or "").strip() if re.match(r"^\d{4}-\d{2}$", (a.key or "").strip()) else None)
+    try:
+        ov = release.month_overview(m)
+    except ValueError as e:
+        out("Not shown: %s" % e)
+        return 2
+    if getattr(a, "json", False):
+        out(json.dumps(ov, indent=1, ensure_ascii=False))
+        return 0
+    for line in release.overview_lines(ov):
         out(line)
     return 0
 
@@ -460,9 +497,14 @@ def cmd_branch(a):
         line = "branch-%s: %s %s" % (act, args[0], args[1])
     elif act == "strategy" and len(args) == 2:
         line = "strategy: %s %s" % (args[0], args[1])
+    elif act in RELEASE_ACTIONS:
+        return _release_directive(act, args)
     else:
         sys.stderr.write("usage: branch link|unlink <repo> <branch> <KEY> | branch abandon|restore <repo> <branch> | "
-                         "branch strategy <repo|KEY> <strategy>\n")
+                         "branch strategy <repo|KEY> <strategy> | branch release-map <repo> <release> <branch> | "
+                         "branch release-unmap <repo> <release> | branch release-pick <KEY> <release>|- | "
+                         "branch release-branch <KEY> <repo> <branch>|- | branch release-repos <KEY> <repo>...|- | "
+                         "branch uat <KEY> required|not_required|unknown\n")
         return 2
     d = gittrack.parse_directive(line)
     if not d or d["kind"] == "invalid":
@@ -473,6 +515,25 @@ def cmd_branch(a):
         if d["strategy"] not in names:
             sys.stderr.write("Not added: unknown strategy %r (known: %s)\n" % (d["strategy"], ", ".join(names)))
             return 2
+    if _append_inbox(line):
+        out("Added to inbox.md: `%s`" % line)
+        out("The background agent applies it on its next tick (within about 5 minutes); /cg:check applies it now.")
+    else:
+        out("Already in inbox.md: `%s` (nothing added)." % line)
+    return 0
+
+
+RELEASE_ACTIONS = ("release-map", "release-unmap", "release-pick", "release-branch", "release-repos", "uat")
+
+
+def _release_directive(act, args):
+    """One release-tracking decision -> one inbox.md line, applied by the background agent (its only writer)."""
+    from . import release
+    line = release.directive_line(act, list(args))
+    d = release.parse_directive(line)
+    if not d or d["kind"] == "invalid":
+        sys.stderr.write("Not added: could not read %r (see /cg:branch for the forms)\n" % line)
+        return 2
     if _append_inbox(line):
         out("Added to inbox.md: `%s`" % line)
         out("The background agent applies it on its next tick (within about 5 minutes); /cg:check applies it now.")
@@ -747,10 +808,12 @@ def parser():
     s.add_argument("key", nargs="?", default="")
     s.add_argument("--json", action="store_true")
     s.add_argument("--export", action="store_true", help="save the whole ticket page as one HTML file")
+    s.add_argument("--brief", action="store_true", help="write the ticket's brief now (when its inputs changed)")
     s.add_argument("--mode", choices=("full", "team", "shareable"), default="full")
     s.set_defaults(fn=cmd_ticket)
-    s = sub.add_parser("branches")
+    s = sub.add_parser("branches", help="a ticket's branches, PRs and release plan; no key or a month: the release overview")
     s.add_argument("key", nargs="?", default="")
+    s.add_argument("--month", default=None, help="YYYY-MM for the release overview (default: this month)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_branches)
     s = sub.add_parser("relations", help="base-branch relations: detect (read-only), show, set")
@@ -762,7 +825,7 @@ def parser():
     s.add_argument("key", nargs="?", default="")
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("branch")
-    s.add_argument("action", choices=("link", "unlink", "abandon", "restore", "strategy"))
+    s.add_argument("action", choices=("link", "unlink", "abandon", "restore", "strategy") + RELEASE_ACTIONS)
     s.add_argument("args", nargs="*")
     s.set_defaults(fn=cmd_branch)
     s = sub.add_parser("trace")

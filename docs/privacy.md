@@ -10,7 +10,7 @@ The hooks record five Claude Code events into `<home>\.worklog\raw\<work day>\<s
 |---|---|
 | SessionStart | The session's folder, repo, branch, ticket and model |
 | UserPromptSubmit | Your prompt, up to 4,000 characters |
-| PostToolUse | The tool's **input**, not its output. For a shell command: the command and its description. For HTTP commands such as curl or `Invoke-RestMethod`: the HTTP status and the *names* of the response's JSON keys, never the values. For files: the path. For MCP tools: the arguments. |
+| PostToolUse | The tool's **input**, not its output. For a shell command: the command and its description. For HTTP commands such as curl or `Invoke-RestMethod`: the HTTP status and the *names* of the response's JSON keys, never the values. For a test runner (pytest, `python -m unittest`, `mvn test`, `gradle test`, `npm test`, `go test`, `dotnet test`, `bru run`…): the status and the pass/fail counts, never the output. For files: the path. For MCP tools: the arguments. |
 | Stop | Claude's last message, up to 12,000 characters, plus any `worklog-requests` / `worklog-dbflow` blocks |
 | SessionEnd | The fact that the session ended |
 
@@ -21,12 +21,13 @@ The hooks never call a model and never touch the network. Only two hooks are wai
 ### What is not captured
 
 - **Sessions inside the data home**, such as asking Claude about your own worklog. Only a timestamp and the ticket you mention are recorded, so that the time counts, never the content.
-- **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, the background transcript scan skips it too, and no file in it is filed as a ticket artifact, even when a session elsewhere edits it.
+- **Sessions in your home folder itself** (not a repo or folder below it). They are time-only too: a timestamp and the ticket you mention. Their time counts toward the day; without a ticket it is the day's unassigned time.
+- **A folder with a `.worklog-ignore` file, and everything below it.** The marker counts in the session's folder, its repo root or any folder above them, up to your home folder (or the drive root outside it). So a repo nested inside an ignored checkout, such as its own `.dev-home`, is ignored too. Nothing is captured there, the background transcript scan skips it too, and no file in it is filed as a ticket artifact, even when a session elsewhere edits it. Events recorded there before you added the marker are dropped when they are next read, so they are never extracted afterwards.
 - **Anything while capture is paused**, from `/cg:pause` until `/cg:pause resume`.
 - **Folders outside `capture_scope.include_paths`, or inside `capture_scope.exclude_paths`.**
 - **The engine's own `claude -p` and git processes.** They carry `CHITRAGUPTA_INTERNAL=1`, and the hooks ignore them.
 
-A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder; a session in your home folder itself is skipped.
+A **transcript safety net** reads Claude Code's own session transcripts from the last 48 hours. It catches sessions whose hooks didn't fire, and it obeys the same rules, checked for each message's folder: nothing from an excluded or ignored folder or from Chitragupta's own folders, and only time-only lines for a session inside the data home or in your home folder itself. Because it can't see who started a transcript (another tool's background run, for example), it recovers full content only for work inside a git repo or a `capture_scope.include_paths` folder.
 
 ## What stays local
 
@@ -49,7 +50,7 @@ Nothing is pushed unless `github_remote` is set. If it is set:
 - **Only to a private repository.** Before pushing, and again every 24 hours, Chitragupta sends one unauthenticated request to the GitHub API (`api.github.com/repos/<owner>/<repo>`):
   - **404** (not visible to the public) counts as private, and the push goes ahead.
   - **200** (public) blocks every push.
-  - Any other result is treated as unknown, which also blocks pushes.
+  - Any other result (a network error, a rate limit, a GitHub outage, a non-GitHub remote) is treated as unknown, which also blocks pushes, even when an earlier check said private. Health, `/cg:doctor` and the daily file's footer then say "repo privacy unknown — pushes paused (last known: private, <date>)"; commits continue locally, and the check repeats on every tick until it gets an answer. `health.json` keeps the latest result in `privacy` and the last definite one in `privacy_last_known` / `privacy_last_known_at`.
 
   A local folder or `file://` remote counts as private.
 - **Only to the configured remote.** If `origin` doesn't match `github_remote`, the push is refused. Pushes fetch and integrate the remote first, and never force.
@@ -68,12 +69,14 @@ These references are never masked: `{{var}}`, `${VAR}`, `$VAR`, `$(…)`. You ca
 
 **Saved requests.** Credentials in saved requests become `{{process.env.NAME}}` references. The values go in `bruno\.env`, which is never read into the worklog and never committed. Personal values in request bodies become ticket-scoped variables with synthetic defaults.
 
+**Replay safety.** Chitragupta writes the replay files; it never runs them. A step that changes data (a `POST`, `PUT`, `PATCH` or `DELETE` that isn't a login or token call) is marked "⚠ changes a shared record" in `requests.md`, with a warning block naming the records. `replay.sh` stops before the first such step on any environment but `local` unless you pass `--yes` (or set `REPLAY_YES=1`), and exits 3 without having changed anything. A restore step (`NN Restore <name>.bru`, engine-owned) is added only when a `GET` of the same record with a captured QA response body came before the change in the same session; it sends back just the fields the change sends, templated like any generated request (personal fields come from `bruno\.env`). Otherwise `requests.md` says "no restore: before-state unknown". A step your `folder.bru` repeats ("1. Login again") gets an engine-owned `NN <name> (again).bru`, so `bru run` and `replay.sh` run the same steps. `payloads\` hold exactly the body of each `.bru`. Hard-coded strings in a changing step's body at name-, code-, email- or institution-like keys are listed in `requests.md` as a warning (keys only, never values); your own `.bru` files are never edited.
+
 ## QA data rules
 
 - An environment is QA only when it's listed in `qa_data.allowed_envs` (default `["qa"]`). A host's environment comes from your Bruno environment files and `qa_data.hosts`. **An unknown host counts as production.**
 - Values from allowed environments are kept literally, in local files only. Credentials are still turned into references.
 - Production values are masked at capture.
-- A QA response body is kept only up to 50 KB, as the expected result for replay.
+- A QA response body is kept only up to 50 KB, as the expected result for replay and, for a `GET` before a change, the before-state a restore step sends back.
 - Database samples are capped at `qa_data.max_rows_per_query` rows (default 20).
 - Database MCP jobs read only connections listed for an allowed environment, and never a connection whose name contains `prod`.
 - QA values never go into anything pushed or sent: the `public` pass masks known QA values and hosts.

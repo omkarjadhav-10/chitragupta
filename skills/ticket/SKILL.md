@@ -2,7 +2,7 @@
 name: ticket
 description: Everything Chitragupta has recorded for a ticket - summary, root causes, time, saved requests, DB flow, artifacts, branches and file paths; --export saves the whole page as one HTML file.
 disable-model-invocation: true
-argument-hint: "<TICKET-KEY> [--export [--mode shareable]]"
+argument-hint: "<TICKET-KEY> [--brief] [--export [--mode shareable]]"
 allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli ticket *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli ticket *)
@@ -27,7 +27,12 @@ If no key was given, ask for one and stop.
 
 If they asked to export (`--export`, "export", "save as HTML"), run
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli ticket <KEY> --export --mode full` (or `--mode shareable` for a copy to share:
-public redaction, no QA values, no internal URLs or paths) and report the file path it printed. Otherwise:
+public redaction, no QA values, no internal URLs or paths) and report the file path it printed.
+
+If they asked for the brief (`--brief`, "write / refresh the brief"), run
+`py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli ticket <KEY> --brief` and show what it printed as it is: the sections
+with their evidence ids, "Fixes made" from git and PRs, and why no new brief was written when it says so (unchanged,
+today's cap or budget). It makes at most one model call and writes only the ticket's brief and hub. Otherwise:
 
 1. Give the summary above in a few lines: title, status, time, TL;DR, root causes, what is recorded.
 2. Read the ticket's `README.md` from the file list and add what matters most for picking the work back up: problem, root cause & findings, fix, open questions. Cite the file and date for every fact; never claim more than the files say.

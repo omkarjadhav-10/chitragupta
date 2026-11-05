@@ -8,7 +8,12 @@ per scenario. Generated from that, with "my edits win" ownership tracked in data
     bruno/<T>/folder.bru           ticket title, scenarios and run order (only if you don't have one)
     tickets/<T>/requests.md        the same steps as curl for Git Bash
     tickets/<T>/replay.sh          bash tickets/<T>/replay.sh qa
-    tickets/<T>/payloads/NN-*.json request bodies (templated, no patient data)
+    tickets/<T>/payloads/NN-*.json request bodies, exactly as in the .bru files
+
+Steps that change a shared record (POST / PUT / PATCH / DELETE that isn't an auth call) are flagged in requests.md and
+gated in replay.sh (`--yes` for any env but local). A restore step is generated only when a GET of the same record with
+a captured body came before the change. A repeat step ("1. Login again") gets its own engine-owned
+`NN <name> (again).bru`, so `bru run` and replay.sh run the same steps. Chitragupta writes these files; it never runs them.
 
 The .bru files on disk are the source of truth for requests.md / replay.sh, so an edit made in Bruno
 flows into both. A .bru you edit becomes yours (never overwritten); one you delete is tombstoned
@@ -29,6 +34,13 @@ from .safety import paths
 HEALTH_RX = re.compile(r"(?i)/(?:actuator(?:/health)?|health(?:check|z)?|ping|status|ready|live|swagger[^/]*|v\d/api-docs|openapi[^/]*|favicon\.ico)(?:/|\?|$)")
 CODES_RX = re.compile(r"\b([1-5]\d\d)\b")
 ROLE_ORDER = {"auth": 0, "setup": 1, "trigger": 2, "verify": 3, "cleanup": 4, "exploratory": 5}
+MUTATING = ("POST", "PUT", "PATCH", "DELETE")
+AUTH_URL = re.compile(r"(?i)/(?:auth|login|logon|signin|sign-in|token|tokens|oauth2?|sessions?|connect/token)(?:/|$)")
+TOKEN_VAR = re.compile(r"(?i)token|jwt|session|auth|cookie")
+EXTRA_KINDS = ("repeat", "restore")  # engine-owned files made from the final order (not curated requests)
+# body keys whose hard-coded string values may be real people or institutions (linted in requests.md, never edited)
+LITERAL_KEY = re.compile(r"(?i)(name|code|email|phone|mobile|address|institution|organi[sz]ation|hospital|clinic|"
+                         r"company|facility|practice|npi)$")
 
 
 def sha(text):
@@ -214,6 +226,7 @@ def calls_from_event(ev, ticket):
                             body=r["body"], form=r["form"], basic=r["basic"], cookie=r["cookie"], status=st, statuses=sts,
                             response_keys=oc.get("response_keys") if len(reqs) == 1 else None,
                             token_path=oc.get("token_path") if len(reqs) == 1 else None,
+                            response_body=oc.get("body") if len(reqs) == 1 else None,
                             outcome=apicalls.outcome_of(st, oc.get("transport_error")) if oc else "unknown",
                             executed=True, evidence="command at %s" % common.hhmm(ev.get("ts")), idx=i))
     return out
@@ -587,6 +600,8 @@ def build_request(call, step, idx, seq):
     crit = step.get("critical_fields") or call.get("critical_fields") or []
     if crit:
         docs.append("Critical field: " + "; ".join(crit) + " (keep exactly as written; JSON null stays null)")
+    if mutates(req, call, step):
+        docs.append("Changes data: %s on the environment it runs against (on QA a shared record)." % resource_label(req))
     src = "captured call, %s %s" % ((call.get("at") or "")[:10], common.hhmm(call.get("at"))) if call.get("executed", True) \
         else "reconstructed from %s - not yet executed" % (call.get("source") or "code/docs")
     docs.append("Source: " + src + ".")
@@ -601,6 +616,189 @@ def default_name(call):
     if call.get("token_path") or re.search(r"(?i)login|token|auth", path):
         return "Login" if re.search(r"(?i)login|signin", path) else "Get token"
     return "%s %s" % (verb, " ".join(segs[-2:]) or "request")
+
+
+def is_auth(req, call=None, step=None):
+    """A login / token call: its role, a captured token, a token stored by its script, or a login/token URL."""
+    if (step or {}).get("role") == "auth" or (call or {}).get("role") == "auth" or (call or {}).get("token_path"):
+        return True
+    if any(TOKEN_VAR.search(c.get("var") or "") for c in req.get("capture") or []) or "bru.setVar(\"token\"" in (req.get("script_post") or ""):
+        return True
+    return bool(AUTH_URL.search(re.sub(r"\?.*$", "", req.get("url") or "")))
+
+
+def mutates(req, call=None, step=None):
+    """True for a step that changes a record: POST / PUT / PATCH / DELETE that isn't an auth call."""
+    return (req.get("method") or "").upper() in MUTATING and not is_auth(req, call, step)
+
+
+def resource(req):
+    """'/shop/orders/7': the path a request acts on, without its base URL, with pre-request vars filled in."""
+    u = re.sub(r"[?#].*$", "", req.get("url") or "")
+    u = re.sub(r"^https?://[^/]+", "", re.sub(r"^\{\{\s*[\w.-]+\s*\}\}", "", u))
+    vals = {k: v for k, v in req.get("vars_pre") or []}
+    u = re.sub(r"\{\{\s*([\w.-]+)\s*\}\}", lambda m: str(vals.get(m.group(1), m.group(0))), u)
+    return "/" + u.strip("/")
+
+
+def resource_label(req):
+    return "%s %s" % ((req.get("method") or "").upper(), resource(req))
+
+
+def _call_path(url):
+    return "/" + re.sub(r"^https?://[^/]+", "", re.sub(r"[?#].*$", "", url or "")).strip("/")
+
+
+def _same_resource(url, res):
+    p = _call_path(url)
+    return p == res or (res.count("/") >= 2 and p.endswith(res))
+
+
+def _json(text):
+    try:
+        return json.loads(text) if isinstance(text, str) else None
+    except ValueError:
+        return None
+
+
+def before_state(calls, req, call=None):
+    """(projected body, GET call) when a GET of the same record with a captured body came before the change, in the
+    same session, and its fields cover every field the change sends; else (None, None)."""
+    body = _json(req.get("body"))
+    if not isinstance(body, dict) or not body:
+        return None, None
+    res = resource(req)
+    mut = call
+    if not mut:  # your own .bru: the latest captured call of the same change
+        cands = [c for c in calls.values() if c.get("method") == req.get("method") and c.get("executed", True)
+                 and c.get("at") and _same_resource(c.get("url"), res)]
+        mut = max(cands, key=lambda c: c["at"]) if cands else None
+    if not mut or not mut.get("at"):
+        return None, None
+    gets = [c for c in calls.values() if c.get("method") == "GET" and c.get("response_body") and c.get("at")
+            and c["at"] < mut["at"] and _same_resource(c.get("url"), res)
+            and (not mut.get("session") or not c.get("session") or c["session"] == mut["session"])]
+    for g in sorted(gets, key=lambda c: c["at"], reverse=True):
+        got = _json(g["response_body"])
+        for obj in (got, (got or {}).get("data") if isinstance(got, dict) else None,
+                    (got or {}).get("result") if isinstance(got, dict) else None,
+                    got[0] if isinstance(got, list) and len(got) == 1 else None):
+            if isinstance(obj, dict) and all(k in obj for k in body):
+                return {k: obj[k] for k in body}, g
+    return None, None
+
+
+def literal_keys(req):
+    """Body keys holding hard-coded strings that may be real names or institutions (not {{vars}})."""
+    out = []
+
+    def walk(o):
+        if isinstance(o, list):
+            for x in o:
+                walk(x)
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and LITERAL_KEY.search(str(k)) and re.search(r"[A-Za-z]", v) and \
+                        not re.fullmatch(r"\s*\{\{[^}]+\}\}\s*", v) and k not in out:
+                    out.append(k)
+                walk(v)
+    walk(_json(req.get("body")))
+    return out
+
+
+def _extra_req(base, name, seq, codes, docs):
+    r = json.loads(json.dumps(base))
+    r.update(name=name, seq=seq, docs=docs)
+    r.pop("capture", None)
+    if len(codes) == 1:
+        r["asserts"] = [["res.status", "eq %d" % codes[0]]]
+    elif codes:
+        r["asserts"] = [["res.status", "in [%s]" % ", ".join(str(c) for c in codes)]]
+    return r
+
+
+def safety_steps(t, final, files, calls, regf, bdir, changed, events, variables):
+    """Engine-owned files made from the final order: one `NN <name> (again).bru` per repeat step and one restore step
+    per record a step changes when its before-state was captured; flags every step that changes data. Returns the
+    restore notes for requests.md: [(resource label, step n or None)]."""
+    prefix = "bruno/%s/" % t
+    wanted, notes = set(), []
+
+    def write_extra(fn, req, kind):
+        key = prefix + fn
+        r = regf.get(key) or {}
+        if r.get("tombstone"):
+            return None  # you deleted it: never recreated
+        p = os.path.join(bdir, fn)
+        wanted.add(fn)
+        if os.path.exists(p) and r.get("owner") != "engine":
+            return fn if fn in files else None  # yours now: used as it is
+        text = brufile.render_request(req)
+        if common.write_text(p, text):
+            changed.append(rel(p))
+            events.append(("updated %s" if r else "saved %s") % fn)
+        regf[key] = {"owner": "engine", "ticket": t, "sha": sha(text), "signature": apicalls.signature(req), "kind": kind,
+                     "generated": r.get("generated") or common.now_iso()}
+        files[fn] = {"path": p, "text": text, "req": brufile.parse_request(text)}
+        return fn
+
+    for s in final:
+        req = files[s["file"]]["req"]
+        s["mutates"] = mutates(req, calls.get(s.get("call_id")), s)
+        s["resource"] = resource_label(req) if s["mutates"] else ""
+        if s.get("repeat"):
+            k = _first_n(final, s)
+            name = "%02d %s (again)" % (s["n"], safe_name(display_name(req["name"])))
+            docs = "Repeat of step %d.%s" % (k, ("\nExpected: " + s["expected"]) if s.get("expected") else "")
+            s["again_file"] = write_extra(name + ".bru", _extra_req(req, name, s["n"], s.get("codes") or [], docs), "repeat")
+    seen = set()
+    for s in list(final):
+        if not s.get("mutates") or s.get("repeat") or s["resource"] in seen:
+            continue
+        seen.add(s["resource"])
+        req = files[s["file"]]["req"]
+        before, got = before_state(calls, req, calls.get(s.get("call_id")))
+        if before is None:
+            notes.append((s["resource"], None))
+            continue
+        vs = apicalls.Vars(t)
+        body, mode = apicalls.template_body_text(json.dumps(before), vs)
+        if mode != "json":
+            notes.append((s["resource"], None))
+            continue
+        variables += vs.list()
+        n = len(final) + 1
+        name = "%02d Restore %s" % (n, safe_name(display_name(req["name"])))
+        docs = ("Restore: sends %s back as the GET at %s %s saw it before step %d (only the fields step %d sends).\n"
+                "Changes data: %s on the environment it runs against (on QA a shared record)."
+                % (s["resource"], (got.get("at") or "")[:10], common.hhmm(got.get("at")), s["n"], s["n"], s["resource"]))
+        rreq = _extra_req(req, name, n, s.get("codes") or [], docs)
+        rreq.update(body=body, body_mode="json", body_kind="json", script_post="")
+        fn = write_extra(name + ".bru", rreq, "restore")
+        if not fn:
+            notes.append((s["resource"], None))
+            continue
+        final.append({"n": n, "file": fn, "name": "Restore %s" % display_name(req["name"]), "scenario": s.get("scenario", ""),
+                      "expected": s.get("expected") or "", "codes": s.get("codes") or [], "owner": "engine",
+                      "mutates": True, "resource": s["resource"], "restore_of": s["n"]})
+        notes.append((s["resource"], n))
+    # engine-owned extras no longer wanted go (only when you haven't edited them)
+    for key, r in list(regf.items()):
+        fn = key[len(prefix):]
+        if not key.startswith(prefix) or r.get("kind") not in EXTRA_KINDS or r.get("owner") != "engine" or fn in wanted:
+            continue
+        p = os.path.join(bdir, fn)
+        if os.path.exists(p) and sha(common.read_text(p)) == r.get("sha"):
+            try:
+                paths.delete(p)
+            except OSError:
+                continue
+            changed.append(prefix + fn)
+            events.append("removed %s (no longer needed)" % fn)
+        if not r.get("tombstone"):
+            regf.pop(key, None)
+        files.pop(fn, None)
+    return notes
 
 
 def generate(store, t, cfg):
@@ -632,15 +830,18 @@ def generate(store, t, cfg):
         if key.startswith(prefix) and key != prefix + "folder.bru" and not r.get("tombstone") and key[len(prefix):] not in files:
             r.update(tombstone=True, deleted=common.now_iso())
             events.append("you deleted %s - will not be recreated" % key[len(prefix):])
-    tomb_sigs = {r.get("signature") for k, r in regf.items() if k.startswith(prefix) and r.get("tombstone")}
+    tomb_sigs = {r.get("signature") for k, r in regf.items() if k.startswith(prefix) and r.get("tombstone")
+                 and r.get("kind") not in EXTRA_KINDS}
+    extra = {fn for fn in files if (regf.get(prefix + fn) or {}).get("kind") in EXTRA_KINDS}  # made from the order
+    own = {fn: f for fn, f in files.items() if fn not in extra}
 
     # 2. curated steps -> files
     idx = env_index(cfg)
     folder_mine = os.path.exists(os.path.join(bdir, "folder.bru")) and (regf.get(prefix + "folder.bru") or {}).get("owner") != "engine" \
-        and bool(run_order((folder or {}).get("docs"), files))
+        and bool(run_order((folder or {}).get("docs"), own))
     calls = tk.get("api_calls") or {}
     variables = []
-    sig_to_file = {apicalls.signature(f["req"]): fn for fn, f in files.items()}
+    sig_to_file = {apicalls.signature(f["req"]): fn for fn, f in own.items()}
     steps = []
     next_seq = max([f["req"].get("seq") or 0 for f in files.values()] + [0]) + 1
     for sc in rp.get("scenarios") or []:
@@ -725,7 +926,7 @@ def generate(store, t, cfg):
     for fn in list(files):
         key = prefix + fn
         r = regf.get(key) or {}
-        if r.get("owner") == "engine" and fn not in wanted and sha(files[fn]["text"]) == r.get("sha"):
+        if r.get("owner") == "engine" and fn not in wanted and fn not in extra and sha(files[fn]["text"]) == r.get("sha"):
             try:
                 paths.delete(files[fn]["path"])
             except OSError:
@@ -737,7 +938,7 @@ def generate(store, t, cfg):
 
     # 4. final order: my folder.bru 'Run in order' > curated order > seq
     final = []
-    order = run_order((folder or {}).get("docs"), files) if folder_mine else []
+    order = run_order((folder or {}).get("docs"), {fn: f for fn, f in files.items() if fn not in extra}) if folder_mine else []
     if order:
         for fn, exp, label in order:
             meta = next((dict(x) for x in steps if x.get("file") == fn), {})
@@ -748,7 +949,7 @@ def generate(store, t, cfg):
         final = [dict(s) for s in steps if s.get("file") in files]
     used = {s["file"] for s in final}
     for fn in sorted(files, key=lambda f: (files[f]["req"].get("seq") or 999, f)):
-        if fn not in used:
+        if fn not in used and fn not in extra:
             pos = len(final)
             seq = files[fn]["req"].get("seq") or 999
             for k, s in enumerate(final):
@@ -767,6 +968,9 @@ def generate(store, t, cfg):
         s["codes"] = expected_codes(s.get("expected"), req) if not s.get("repeat") else expected_codes(s.get("expected"))
         if not s["codes"] and not s.get("repeat"):
             s["codes"] = expected_codes("", req)
+
+    # 4b. replay safety: steps that change data, repeat files, restore steps
+    restores = safety_steps(t, final, files, calls, regf, bdir, changed, events, variables) if final else []
 
     # 5. folder.bru (only when I don't have my own)
     fkey = prefix + "folder.bru"
@@ -796,7 +1000,7 @@ def generate(store, t, cfg):
     if final:
         changed += write_payloads(t, final, files)
         envs = sorted(own_envs().keys()) or ["QA"]
-        if common.write_text(os.path.join(tdir, "requests.md"), render_requests_md(t, tk, final, files, envs, rp)):
+        if common.write_text(os.path.join(tdir, "requests.md"), render_requests_md(t, tk, final, files, envs, rp, restores)):
             changed.append("tickets/%s/requests.md" % t)
         if common.write_text(os.path.join(tdir, "replay.sh"), render_replay_sh(t, final, files, envs)):
             changed.append("tickets/%s/replay.sh" % t)
@@ -804,7 +1008,9 @@ def generate(store, t, cfg):
                     "scenario": s.get("scenario") or "", "owner": s.get("owner"), "repeat": bool(s.get("repeat")),
                     "method": files[s["file"]]["req"]["method"], "url": files[s["file"]]["req"]["url"],
                     "executed": s.get("executed", True), "verify_query": s.get("verify_query") or "",
-                    "critical_fields": s.get("critical_fields") or []} for s in final]
+                    "critical_fields": s.get("critical_fields") or [], "mutates": bool(s.get("mutates")),
+                    "resource": s.get("resource") or "", "restore_of": s.get("restore_of"),
+                    "again_file": s.get("again_file")} for s in final]
     if events:
         rp.setdefault("events", []).extend({"at": common.now_iso(), "text": e} for e in events)
         rp["events"] = rp["events"][-40:]
@@ -843,7 +1049,9 @@ def write_payloads(t, final, files):
             continue
         name = payload_name(s)
         want.add(name)
-        if common.write_text(os.path.join(pdir, name), redact(req["body"].rstrip("\n") + "\n")):
+        # the same body as the .bru (secrets there are already {{process.env.*}}); masking it here would make
+        # replay.sh send something other than what Bruno sends
+        if common.write_text(os.path.join(pdir, name), req["body"].rstrip("\n") + "\n"):
             out.append("tickets/%s/payloads/%s" % (t, name))
     if os.path.isdir(pdir):
         for fn in os.listdir(pdir):
@@ -903,7 +1111,36 @@ def _tools():
     return common.python_exe().replace("\\", "/"), common.launcher().replace("\\", "/")
 
 
-def render_requests_md(t, tk, final, files, envs, rp):
+def _steps_word(ns):
+    return ("step %d" % ns[0]) if len(ns) == 1 else "steps " + ", ".join(str(n) for n in ns)
+
+
+def safety_lines(final, files, restores):
+    """The warning block of requests.md: what changes shared data, the restore (or why there is none), lint."""
+    muts = {}
+    for s in final:
+        if s.get("mutates"):
+            muts.setdefault(s["resource"], []).append(s["n"])
+    if not muts:
+        return []
+    L = ["> ⚠ **Changes shared data.** " + "; ".join("%s `%s`" % (_steps_word(ns).capitalize(), r) for r, ns in muts.items()) +
+         ": these change a shared record on the environment you run them against (QA is shared). `replay.sh` stops "
+         "before the first of them unless you add `--yes` (any environment but local)."]
+    for res, n in restores:
+        L.append(">")
+        L.append("> Restore: step %d sends `%s` back as it was before the change." % (n, res) if n else
+                 "> `%s`: no restore: before-state unknown (no GET of that record with a captured body came before the "
+                 "change). Check the record afterwards, for example with the verify query." % res)
+    for s in final:
+        keys = literal_keys(files[s["file"]]["req"]) if s.get("mutates") and not s.get("repeat")             and not s.get("restore_of") else []  # the restore's values are the captured before-state
+        if keys:
+            L += [">", "> ⚠ Step %d sends hard-coded values: %s — if they are real names or institutions, move them to "
+                  "`bruno/environments` or `bruno/.env` as `{{variables}}` (Chitragupta never edits your files)."
+                  % (s["n"], ", ".join("`%s`" % k for k in keys))]
+    return L + [""]
+
+
+def render_requests_md(t, tk, final, files, envs, rp, restores=()):
     home = common.home().replace("\\", "/")
     folder = os.path.basename(home.rstrip("/")) or "home"
     py, launcher = _tools()
@@ -918,10 +1155,13 @@ def render_requests_md(t, tk, final, files, envs, rp):
          "3. **replay.sh** — `bash tickets/%s/replay.sh %s` from the %s folder: runs every step, prints status vs expected, stops at the first failure." % (t, env0, folder), ""]
     if need:
         L += ["Needs these in `bruno/.env` (git-ignored; fill once): " + ", ".join("`%s`" % n for n in need), ""]
-    L += ["## Steps", "", "| # | Request | Expected | Source |", "|---|---|---|---|"]
+    L += safety_lines(final, files, restores)
+    L += ["## Steps", "", "| # | Request | Expected | Changes data | Source |", "|---|---|---|---|---|"]
     for s in final:
         src = "yours" if s.get("owner") == "user" else ("generated" + ("" if s.get("executed", True) else " · not yet executed"))
-        L.append("| %d | %s%s | %s | %s |" % (s["n"], s["name"], " _(again)_" if s.get("repeat") else "", (s.get("expected") or "—").replace("|", "\\|"), src))
+        ch = ("⚠ changes a shared record" + (" (restore)" if s.get("restore_of") else "")) if s.get("mutates") else "—"
+        L.append("| %d | %s%s | %s | %s | %s |" % (s["n"], s["name"], " _(again)_" if s.get("repeat") else "",
+                                                   (s.get("expected") or "—").replace("|", "\\|"), ch, src))
     dropped = len(rp.get("dropped") or [])
     if dropped:
         L += ["", "_%d other captured call%s left out (failed attempts, duplicates, health checks, look-arounds)._" % (dropped, "" if dropped == 1 else "s")]
@@ -985,10 +1225,20 @@ def token_oneliner(path):
 
 REPLAY_HEAD = r'''#!/usr/bin/env bash
 # Replay %(t)s — generated by the worklog from bruno/%(t)s (edit the requests in Bruno; your edits win).
-# Usage: bash tickets/%(t)s/replay.sh <env>      envs: %(envs)s
+# Usage: bash tickets/%(t)s/replay.sh <env> [--yes]      envs: %(envs)s
 # Base URLs come from bruno/environments/<env>.bru, secrets from bruno/.env (git-ignored).
+# Steps that change a shared record run on any env but local only with --yes (or REPLAY_YES=1).
 set -u
-ENV="${1:-%(env0)s}"
+ENV=""; YES="${REPLAY_YES:-0}"
+for a in "$@"; do case "$a" in --yes|-y) YES=1;; *) [ -z "$ENV" ] && ENV="$a";; esac; done
+ENV="${ENV:-%(env0)s}"
+confirm_mutation() {  # confirm_mutation "<records>": stop before changing shared data unless --yes (local: always runs)
+  case "$ENV" in local|LOCAL|Local|localhost) return 0;; esac
+  if [ "$YES" = 1 ]; then echo "  ! changing $1 on $ENV (--yes given)"; return 0; fi
+  echo "  ✗ the next steps change $1 on $ENV, which may be shared. Nothing was changed yet."
+  echo "    Re-run with --yes (or REPLAY_YES=1) to allow it."
+  exit 3
+}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WL="$(cd "$HERE/../.." && pwd)"
 PY="%(py)s"
@@ -1025,9 +1275,17 @@ def render_replay_sh(t, final, files, envs):
     if need:
         L.append('bruenv check "$ENV" %s || exit 2' % " ".join(need))
     L.append('echo "Replaying %s on $ENV"' % t)
+    muts = {}
+    for s in final:
+        if s.get("mutates"):
+            muts.setdefault(s["resource"], []).append(s["n"])
+    gated = False
     for s in final:
         req = files[s["file"]]["req"]
         exp = (s.get("expected") or "").replace("\n", " ")
+        if s.get("mutates") and not gated:  # one gate, before the first step that changes data
+            gated = True
+            L += ["", "confirm_mutation %s" % sq("; ".join("%s (%s)" % (r, _steps_word(ns)) for r, ns in muts.items()))]
         L += ["", "# --- %d. %s" % (s["n"], s["name"]), 'echo "%d. %s"' % (s["n"], s["name"].replace('"', "'"))]
         for k, v in req.get("vars_pre") or []:
             L.append("setvar %s %s" % (sq(k), sq(v)))

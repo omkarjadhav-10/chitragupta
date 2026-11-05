@@ -184,7 +184,10 @@ class TestTools(McpBase):
     def test_get_ticket_summary_and_sections(self):
         t = self.text("get_ticket", key="abc-1001")
         self.assertIn("# ABC-1001 — Order total is wrong for discounted items", t)
-        self.assertIn("Counts: 2 findings · 2 requests · 1 queries", t)
+        self.assertNotIn("Counts:",t)
+        for question in ("What is the problem?", "What was actually verified?", "What is the next action?"):
+            self.assertIn(question,t)
+        self.assertIn("Find the order [q1]",t)
         self.assertIn("Sections (get_ticket section=…)", t)
         self.assertIn("The fix is on develop but not on qa", t)
         want = {"findings": "[root_cause] **Discount applied twice**", "requests": "2. Create order — POST {{shopBaseUrl}}/orders",
@@ -255,6 +258,36 @@ class TestTools(McpBase):
         t = self.text("get_alerts")
         self.assertIn("ABC-1001 · The fix is on develop but not on qa (shop-api)", t)
         self.assertIn("Last error:", t)
+
+
+class TestBrief(McpBase):
+    """FX-20: get_ticket leads with the brief, and section=brief gives all of it with what each evidence id is."""
+
+    def test_summary_leads_with_the_brief(self):
+        from tests.test_brief_surfaces import patched_view
+        with patched_view():
+            t = self.text("get_ticket", key=TICKET)
+        rc = t.index("Root cause (confirmed): The retry job resends the email")
+        self.assertLess(t.index("# ABC-1001"), rc)
+        self.assertLess(rc, t.index("Counts:"))
+        self.assertIn("Possible cons: Recorded: A crash can leave rows", t)
+        self.assertIn("brief", t.split("Sections (get_ticket section=…): ", 1)[1].split("\n", 1)[0])
+
+    def test_section_brief(self):
+        from tests.test_brief_surfaces import fixture_view, patched_view
+        v = fixture_view()
+        v["sections"][1]["claims"][0]["cites"].append("i1")
+        with patched_view(v):
+            s = self.text("get_ticket", key=TICKET, section="brief")
+        for needle in ("## Brief", "### Root cause (confirmed)", "### Fixes made (from git and PRs)", "- Suggested: A second worker",
+                       "- Rejected: A unique key", "[c607fa7d13, 7c75e0a1b2]", "New findings since 2026-10-16 17:05", "Evidence:",
+                       "- i1: [root_cause] Discount applied twice (", "- commit:a1b2c3d: commit a1b2c3d"):
+            self.assertIn(needle, s, needle)
+
+    def test_section_brief_without_one(self):
+        s = self.text("get_ticket", key=TICKET, section="brief")
+        self.assertIn("No brief yet", s)
+        self.assertIn("Root cause (confirmed): Discount applied twice", s)
 
 
 # --------------------------------------------------------------------------- caps and pages

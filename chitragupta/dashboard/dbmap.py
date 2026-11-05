@@ -76,9 +76,19 @@ def _known(cat, res, cards):
 
 
 def _load():
-    cat = read_json_cached(common.hp("data", "catalog.json")) or {}
+    from .. import relevance
+    cat = relevance.catalog_view(read_json_cached(common.hp("data", "catalog.json")) or {},
+        lambda t: read_json_cached(common.hp("data", "tickets", t + ".json")))
     lm, res = _linkmap()
     cards = _cards()
+    if cat.get("relevance_filtered"):
+        good = {_key(k) for k in cat.get("tables") or {}}
+        def allowed(k):
+            return any(_same(_key(k), g) for g in good)
+        cards = {k: v for k, v in cards.items() if allowed(k)}
+        res = dict(res, hierarchy=[dict(h, tables=[t for t in h.get("tables") or [] if allowed(str(h.get("schema")) + "." + t)])
+                                  for h in res.get("hierarchy") or []],
+                   links=[r for r in res.get("links") or [] if allowed(_table_of(r.get("from"), good)) and allowed(_table_of(r.get("to"), good))])
     return cat, lm, res, cards, _links(cat, res, _known(cat, res, cards))
 
 

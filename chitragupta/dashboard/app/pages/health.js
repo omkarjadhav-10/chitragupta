@@ -36,6 +36,8 @@ function diagnostics(s, setup) {
   const mc = s.mcp || {};
   (mc.configured || []).forEach((c) => L.push('MCP ' + c.role + ': ' + (c.enabled ? 'on' : 'off') + ' (' + (c.server || '-') + ')'));
   ((mc.live && (mc.live.servers || mc.live.rows)) || []).forEach((x) => L.push('  live ' + (x.name || x.server) + ': ' + x.status));
+  const md = s.models || {};
+  L.push('Model spend today: $' + (md.usd || 0) + ' of $' + md.cap + ' (' + (md.calls || 0) + ' calls, in ' + (md.in || 0) + ' out ' + (md.out || 0) + ')');
   L.push('MCP today: ' + (mc.calls_today || 0) + ' jobs' + (mc.budget ? ' of ' + mc.budget : '') + ', tokens in ' + (mc.tokens_in_today || 0) + ' out ' + (mc.tokens_out_today || 0));
   if (setup) setup.items.forEach((i) => L.push('Setup ' + i.label + ': ' + i.status + (i.detail ? ' (' + i.detail + ')' : '')));
   const sf = s.safety || {};
@@ -76,6 +78,7 @@ export function HealthPage() {
       const sf = s.safety || {};
       const blocks = sf.blocks_24h || 0;
       const budgetHit = mc.budget && mc.calls_today >= mc.budget;
+      const md = s.models || {};
       const problems = healthIssues(s);
       return html`
       <${PageHead} title="Health" sub=${fmtDay(s.day) + ' · checked ' + fmtTs(s.now)}>
@@ -99,9 +102,15 @@ export function HealthPage() {
           lines=${[sl.send_at ? 'Sends at ' + sl.send_at : '', last && last.sent_at ? 'Sent ' + fmtTs(last.sent_at) : '', sl.send_warning || '', last && last.last_error ? last.last_error : '',
             ss[1] === 'Not connected' ? "Slack isn't connected; the worklog is still written to the daily file. Connect it with /cg:setup." : '']} />
         <${SchedulerPanel} card />
+        <${Card} id="h-model" title="Model spend today" status=${md.over ? html`<${Status} kind="warn">Cap reached</${Status}>` : html`<${Status} kind="ok">Within cap</${Status}>`}
+          big=${'$' + (md.usd || 0).toFixed(2) + (md.cap != null ? ' of $' + Number(md.cap).toFixed(2) : '')}
+          lines=${[plural(md.calls || 0, 'model call') + ' · ' + (md.in || 0).toLocaleString() + ' tokens in · ' + (md.out || 0).toLocaleString() + ' out',
+            Object.keys(md.by_purpose || {}).length ? Object.entries(md.by_purpose).map(([k, v]) => k + ' $' + Number(v.usd || 0).toFixed(2)).join(', ') : '',
+            md.over ? 'Supersession and briefs wait until tomorrow; extraction continues.' : '',
+            Object.keys(md.skipped || {}).length ? 'Skipped today: ' + Object.entries(md.skipped).map(([k, v]) => v + ' ' + k).join(', ') : '']} />
         <${Card} id="h-safe" title="Safety" status=${!sf.enforced ? html`<${Status} kind="bad">Not enforced</${Status}>` : blocks ? html`<${Status} kind="warn">${plural(blocks, 'blocked action')}</${Status}>` : html`<${Status} kind="ok">Enforced</${Status}>`}
           big=${sf.enforced ? 'Read-only' : '—'}
-          lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h; latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
+          lines=${[...(sf.problems || []), blocks ? plural(blocks, 'action') + ' blocked in the last 24 h (' + Object.entries(sf.by_layer_24h || {}).map(([k, v]) => k + ' ' + v).join(', ') + '); latest: ' + ((sf.recent || []).slice(-1)[0] || {}).reason : 'Nothing blocked in the last 24 h (' + (sf.blocks_7d || 0) + ' in 7 days).',
             sf.skipped_7d ? plural(sf.skipped_7d, "other plugin's tool call") + ' skipped during /cg: commands in 7 days (not counted as blocks).' : '',
             sf.database_read_only === false ? "The database MCP's read-only login isn't confirmed (mcp.database.read_only_login)." : '', sf.log ? 'Log: ' + sf.log : '']} />
         <${SearchCard} st=${s.search} onDone=${res.reload} />

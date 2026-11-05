@@ -11,7 +11,7 @@ Two layers make this hold:
 
 1. **No codebase changes.** Chitragupta never creates, edits, moves or deletes a file outside its own folders: the data home, `%USERPROFILE%\.chitragupta\`, its plugin folder and its temp/sandbox folder. Work repos and every other folder are read-only.
 2. **Git is read-only in work repos.**
-   - Allowed: `rev-parse`, `for-each-ref`, `log`, `rev-list`, `merge-base`, `cherry`, `patch-id`, `show` (metadata), `reflog`, `branch --list` / `--contains`, `ls-remote`, `remote get-url`, `config --get`, and `fetch` of remote-tracking refs only.
+   - Allowed: `rev-parse`, `for-each-ref`, `log`, `rev-list`, `merge-base`, `cherry`, `patch-id`, `show` (metadata), `reflog`, `branch --list` / `--contains`, `ls-remote`, `remote get-url`, `config --get`, `ls-files`, `ls-tree` (names only at one commit SHA, no output-file or repository-redirect options), and `fetch` of remote-tracking refs only.
    - Never: `commit`, `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `checkout`, `switch`, `restore`, `stash`, `pull`, `push`, `tag`, `branch -d/-D/-m`, `clean`, `gc`, `prune`, `am`, `apply`, `worktree`, `submodule update`, or any config write.
    - The one exception: committing and pushing daily files in Chitragupta's own data-home repo.
 3. **Git hosts are read-only.**
@@ -57,6 +57,7 @@ The dashboard reads with GET and HEAD. It writes only through a short allowlist 
 | `mcp-check` | `claude mcp list`, the same check `/cg:doctor` runs | no |
 | `worklog-refresh` | Refresh from Jira: one read-only Jira job for the day | one MCP job, within the daily budget |
 | `worklog-exact` | Preview exactly: one batched condensing call for the lines still marked *condensed at 20:00* | one model call, within the daily budget |
+| `brief-refresh` | Refresh brief: writes one ticket's brief now (the same as `/cg:ticket <KEY> --brief`); writes only that ticket's record and hub in the data home | one model call, none when its inputs are unchanged; within `brief.daily_cap` and `budget.model_daily_usd` |
 | `worklog-resend` | Send again: adds one `resend:` line to `inbox.md` | no |
 | `calendar-mark` | Mark a day as leave, half day, holiday or extra workday, or remove its mark: one line in `inbox.md` | no |
 | `search-rebuild` | Rebuilds the search index (a cache in the data home) | no |
@@ -89,7 +90,7 @@ Branch tracking fetches remote-tracking refs only (`+refs/heads/<b>:refs/remotes
 
 ## Violations
 
-Each block is written to `%USERPROFILE%\.chitragupta\logs\security.log` (one JSON line: local time with its UTC offset, e.g. `2026-10-16T10:00:00+05:30` — older lines have no offset and are read as local time —, layer, caller — the module that asked, taken from the stack when the code didn't name one —, purpose, the blocked command, path, statement or tool, and why), counted on the dashboard's **Health** page and reported by `/cg:doctor`, which also shows **Safety: enforced** when the canned guard checks hold, every `/cg:` skill registers the guard and Claude Code is new enough for the internal calls' fail-closed hook (2.1.295). A blocked action is never retried. After a normal day the log is empty. One kind of line is recorded but not counted: another plugin's tool call denied during a `/cg:` command carries `"category": "other-plugin"` (layer `tool`); Health, `/cg:doctor` and the `get_alerts` tool leave it out of the block counts and only mention how many were skipped.
+Each block is written to `%USERPROFILE%\.chitragupta\logs\security.log` (one JSON line: local time with its UTC offset, e.g. `2026-10-16T10:00:00+05:30` — older lines have no offset and are read as local time —, layer, caller — the module that asked, taken from the stack when the code didn't name one —, purpose, the blocked command, path, statement or tool, and why), counted on the dashboard's **Health** page and reported by `/cg:doctor`, which also shows **Safety: enforced** when the canned guard checks hold, every `/cg:` skill registers the guard and Claude Code is new enough for the internal calls' fail-closed hook (2.1.295). A blocked action is never retried. After a normal day the log is empty. One kind of line is recorded but not counted: another plugin's tool call denied during a `/cg:` command carries `"category": "other-plugin"` (layer `tool`); Health, `/cg:doctor` and the `get_alerts` tool leave it out of the block counts and only mention how many were skipped. Lines written before that category existed (no UTC offset) are recognised by their content: the session guard's `server plugin_… is not on the allowlist` refusal of a tool counts as other-plugin too. Each count is shown with the breakdown by layer from the same window (the last 24 h count with the last 24 h layers), and the other-plugin calls as a separate clause.
 
 ## What you can do yourself
 

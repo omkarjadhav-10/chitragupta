@@ -13,15 +13,16 @@ Everything here comes from git and your Git host's own CLI. There are no model c
 
 ## Strategies
 
-A strategy says where branches start, where their PRs go, and which branches the work must reach. Strategies are config, not code. Three come built in:
+A strategy says where branches start, where their PRs go, and which branches the work must reach. Strategies are config, not code. Four come built in:
 
 | Strategy | Steps | Must reach |
 |---|---|---|
 | `release-then-qa` | 1. Branch from `release/*`, PR into that release.<br>2. Branch from `qa`, bring in the release-based branch (merge or cherry-pick), PR into `qa`. | the release branch **and** `qa` |
+| `release-then-qa-sync` | 1. Branch from `release/*`, PR into that release.<br>2. Branch from `qa`, merge the **release branch** into it (a shared QA integration branch), PR into `qa`. | the release branch **and** `qa` |
 | `qa-only` | Branch from `qa`, PR into `qa`. | `qa` |
 | `qa-cherry-pick` | Branch from `qa`, PR into `qa`. Then branch from `uat` and from `staging`, cherry-pick the commits onto each, PR into each. | `qa`, `uat` **and** `staging` |
 
-`release`, `qa`, `uat`, `staging` and `main` are **roles**. Each repo maps its own branch names to the roles, so a project whose qa branch is called `develop-qa` maps `"qa": "develop-qa"`. A pattern role such as `release/*` stands for many branches. The release that counts for a ticket is the target of its PR into a release, else the parent of the ticket branch cut from one. With neither, the check looks at every release branch changed in the last 120 days, plus `main`, and says so.
+`release`, `qa`, `uat`, `staging` and `main` are **roles**. Each repo maps its own branch names to the roles, so a project whose qa branch is called `develop-qa` maps `"qa": "develop-qa"`. A pattern role such as `release/*` stands for many branches. The release that counts for a ticket is the branch [release tracking](releases.md) confirmed for its Jira release (when that is on), else the target of its PR into a release, else the parent of the ticket branch cut from one. With none of these, the check looks at every release branch changed in the last 120 days, plus `main`, and says so. When release tracking says a ticket needs UAT, the UAT branch is checked as one more target.
 
 The config lives under `"branching"` in `<home>/.worklog/config.json`:
 
@@ -49,7 +50,7 @@ The config lives under `"branching"` in `<home>/.worklog/config.json`:
 
 | Key | Meaning |
 |---|---|
-| `strategies` | Your own strategies, merged over the built-in three. A new project or way of working is a config edit. |
+| `strategies` | Your own strategies, merged over the four built-in ones. A new project or way of working is a config edit. |
 | `repos.<repo>` | One entry per watched repo, keyed by the repo folder's name. A watched repo without an entry is still tracked (branches, parents, PRs), but gets no delivery check. |
 | `repos.<repo>.strategy` | The repo's default strategy. |
 | `repos.<repo>.bases` | Role → branch name, pattern, or a list of them. Defaults: `release/*`, `qa`, `uat`, `staging`, and `main` or `master`. A branch that matches a base is never treated as a ticket branch, even when its name carries a ticket key. |
@@ -198,6 +199,10 @@ branch-restore: <repo> <branch>
 strategy: <repo> <strategy-name>
 strategy: <TICKET> <strategy-name>
 ```
+
+### The delivery stage
+
+From the same data, one computed stage per ticket (`delivery.stage`): *not started*, *committed* (with unpushed commits), *pushed* (no PR yet), *PR open → target*, *merged to target (PR #, date)* or *in release*, followed by any target the work has not reached yet ("not yet in release/1.4"). It is a fact, never model text: it comes before the model's TL;DR on the ticket page, in the hub `README.md` and in the session-start context, and day close gets it as `delivery_stage` with the rule never to contradict it. A TL;DR sentence that still says the work is pending, not merged or not on a target after a PR merged is kept but shown struck through with "outdated: PR #7 merged 2026-09-02" (a plain keyword check).
 
 ## Where it shows up
 

@@ -93,6 +93,9 @@ class KBJobs:
             return mcpjobs.budget_left(self.a.health, self.cfg, today)
         if mcpjobs.enabled(self.cfg, "jira") and configstore.on(self.cfg, "mcp.jira.cards") and left() > EVENING_RESERVE:
             self._job("jira", lambda: self.jira_cards(today, limit=min(2, left() - EVENING_RESERVE)))
+        from . import release
+        if mcpjobs.enabled(self.cfg, "jira") and release.enabled(self.cfg) and left() > EVENING_RESERVE:
+            self._job("jira", lambda: self.release_jobs(st, limit=min(2, left() - EVENING_RESERVE)))
         if mcpjobs.enabled(self.cfg, "database") and mcpjobs.server_name(self.cfg, "database") \
                 and mcpjobs.database_conn(self.cfg):  # each job re-checks: one failure stops the rest of the tick
             if left() > EVENING_RESERVE:
@@ -106,16 +109,38 @@ class KBJobs:
                     st["linkmap_day"] = today
 
     # ------------------------------------------------------------------ Jira cards
+    def jira_wanted(self, today, days=7):
+        """Tickets that need a card: active in the last `days` work days (placeholders aside), with no card or one
+        fetched on an earlier work day than their last active day; not a key Jira recently said doesn't exist.
+        Missing cards first, then the oldest fetched, then the longest idle."""
+        from . import store as S
+        start = _dt.date.fromisoformat(today)
+        last = {}
+        for i in range(days):
+            d = (start - _dt.timedelta(days=i)).isoformat()
+            dd = self.a.store.days.get(d) or common.read_json(S.day_path(d), {}) or {}
+            for t in dd.get("tickets") or {}:
+                if not common.is_placeholder(t) and d > last.get(t, ""):
+                    last[t] = d
+        since = (start - _dt.timedelta(days=days)).isoformat()
+        out = []
+        for t, d in last.items():
+            rec = common.read_json(common.hp("data", "jira", t + ".json"), {}) or {}
+            fetched = rec.get("fetched_at") or "" if rec.get("card") else ""
+            if fetched and common.workday(fetched, self.cfg) >= d:
+                continue  # work days on both sides (a card fetched before day_starts_at belongs to the day before)
+            tk = self.a.store.tickets.get(t) or common.read_json(S.ticket_path(t), {}) or {}
+            if tk.get("jira_missing") and common.workday(tk["jira_missing"], self.cfg) >= since:
+                continue
+            out.append((fetched, d, t))
+        return [t for _, _, t in sorted(out)]
+
     def jira_cards(self, today, limit=2, force=None):
-        dd = self.a.store.day(today)
-        want = force or sorted(t for t in dd.get("tickets") or {} if not common.is_placeholder(t))
+        want = force or self.jira_wanted(today)
         n = 0
         for t in want:
             if n >= limit:
                 break
-            rec = common.read_json(common.hp("data", "jira", t + ".json"), {}) or {}
-            if not force and rec.get("fetched_at", "")[:10] >= today:
-                continue
             try:
                 rec = mcpjobs.jira_card(t, self.cfg, self.a.health)
                 n += 1
@@ -134,12 +159,60 @@ class KBJobs:
             if card.get("summary") and (not tk.get("problem") or tk.get("problem_source") == "jira"):
                 tk["problem"], tk["problem_source"] = card["summary"], "jira"
             tk["jira"] = {k: card.get(k) for k in ("type", "status", "priority", "sprint", "parent")}
-            tk["jira"]["fetched"] = rec.get("fetched_at")
-            tk["status"] = card.get("status") or tk.get("status")
+            tk["jira"]["fetched"] = rec.get("fetched_at")  # its status stays in jira.status; day close keeps status_inferred
             tk.pop("jira_missing", None)
         elif card.get("found") is False and self.h.get("jira_auth_ok"):
             tk["jira_missing"] = rec.get("fetched_at")  # a look-alike key: reading works, but Jira has no such issue
         self.a.store.touch_ticket(t)
+
+    # ------------------------------------------------------------------ release tracking (Jira)
+    def release_projects(self):
+        """Jira projects whose versions catalog release tracking needs: those of tickets with a fix version (cards and
+        the scope search)."""
+        from . import release
+        out = set()
+        for v in ((common.read_json(release.scope_path(), {}) or {}).get("issues") or {}).values():
+            for x in v.get("versions") or []:
+                out.add(x.get("project"))
+        jdir = common.hp("data", "jira")
+        for fn in sorted(os.listdir(jdir)) if os.path.isdir(jdir) else []:
+            if fn.endswith(".json") and not fn.startswith("_"):
+                for x in release.jira_facts(fn[:-5], self.cfg).get("versions") or []:
+                    out.add(x.get("project"))
+        return sorted(p for p in out if p)
+
+    def release_jobs(self, st, limit=2):
+        """At most `limit` read-only Jira jobs: the scope search when it's due (releases.jira.scope_refresh_hours),
+        then versions catalogs older than releases.jira.versions_refresh_hours. -> jobs run."""
+        from . import release
+        j = release.settings(self.cfg)["jira"]
+        now = common.now()
+        n = 0
+        sc = common.read_json(release.scope_path(), {}) or {}
+        last = common.parse_ts(max(sc.get("failed_at") or "", sc.get("fetched_at") or "") or None)
+        if j.get("scope_jql") and (not last or (now - last).total_seconds() >= float(j["scope_refresh_hours"]) * 3600):
+            try:
+                mcpjobs.jira_release_scope(self.cfg, self.a.health)
+                n += 1
+            except mcpjobs.JobError as ex:
+                self._skipped("jira", ex)
+                return n
+        every = float(j.get("versions_refresh_hours") or 24) * 3600
+        for p in self.release_projects():
+            if n >= limit:
+                break
+            cat = release.catalog(p)
+            t = common.parse_ts(max(cat.get("failed_at") or "", cat.get("fetched_at") or "") or None)
+            if t and (now - t).total_seconds() < every:
+                continue
+            try:
+                mcpjobs.jira_versions(p, self.cfg, self.a.health)
+                n += 1
+            except mcpjobs.JobError as ex:
+                self._skipped("jira", ex)
+                break
+        st["release_jobs_at"] = common.now_iso()
+        return n
 
     # ------------------------------------------------------------------ database-MCP schema cards
     def flow_tables(self, tk):
@@ -159,7 +232,11 @@ class KBJobs:
     def cached(self, table):
         conn = mcpjobs.database_conn(self.cfg, "qa", table)
         rec = common.read_json(common.hp("data", "db-schema", mcpjobs._safe(conn), mcpjobs._safe(table) + ".json"), {}) or {}
-        return rec if rec.get("fetched_at", "") >= (common.now() - _dt.timedelta(days=7)).isoformat() else None
+        cut = (common.now() - _dt.timedelta(days=7)).isoformat()
+        w = (rec.get("sources") or {}).get("writers")  # a writers query that failed is asked again on the next run
+        if isinstance(w, dict) and w.get("fetched_at", "") < cut and not str(w.get("error") or "").startswith("not supported"):
+            return None
+        return rec if rec.get("fetched_at", "") >= cut else None
 
     def schema_cards(self, today, tables=None):
         if tables is None:
@@ -418,12 +495,16 @@ def dbflow_qa_section(t, cfg=None):
         for tg in card.get("triggers") or []:
             facts.append("- `%s`: trigger `%s` (%s) sets %s" % (r["table"], tg.get("name"), tg.get("event"),
                                                                ", ".join("`%s`" % c for c in tg.get("sets_columns") or []) or "—"))
-        for w in card.get("writers") or []:
-            if w.get("writes"):
-                facts.append("- `%s`: %s `%s` writes %s" % (r["table"], w.get("kind"), w.get("name"),
-                                                          ", ".join("`%s`" % c for c in w["writes"])))
-        if card.get("found") and not card.get("triggers") and not any(w.get("writes") for w in card.get("writers") or []):
-            readers = [w.get("name") for w in card.get("writers") or []]
+        # writers: routines that write the table (older cards also listed ones that only name it, with no writes)
+        writers = [w for w in card.get("writers") or [] if w.get("writes") or w.get("ops")]
+        for w in writers:
+            facts.append("- `%s`: %s `%s` writes %s%s" % (
+                r["table"], w.get("kind"), w.get("name"),
+                ", ".join("`%s`" % c for c in w.get("writes") or []) or "rows (%s)" % ", ".join(w.get("ops") or []),
+                " (not returned since %s)" % w["missing_since"][:10] if w.get("missing_since") else ""))
+        checked = ((r.get("sources") or {}).get("writers") or {}).get("fetched_at", True)  # older cards: no sources
+        if card.get("found") and not card.get("triggers") and not writers and checked:
+            readers = [w.get("name") for w in (card.get("references") or []) + (card.get("writers") or [])]
             facts.append("- `%s`: no database trigger, procedure or function writes it, so its column changes come from "
                          "application code%s" % (r["table"], (" (read by %s)" % ", ".join("`%s`" % x for x in readers[:5]))
                                                  if readers else ""))

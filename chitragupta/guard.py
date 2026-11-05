@@ -73,6 +73,13 @@ def check(cmd, cwd, cfg):
             return r
         return (recs.get(branch) or {}).get("parent_role")
 
+    def release_branch(ticket):
+        """The release branch release tracking confirmed for the ticket's Jira release in this repo (or None)."""
+        tk = _read_json(common.hp("data", "tickets", ticket + ".json")) if ticket else {}
+        rel = tk.get("release") if isinstance(tk.get("release"), dict) else {}
+        b = (((rel.get("repos") or {}).get(name) or {}).get("branch")) or {}
+        return b.get("name") if b.get("state") in ("confirmed", "linked") else None
+
     for a in acts:
         if a["kind"] == "create":
             new = a.get("branch")
@@ -87,6 +94,11 @@ def check(cmd, cwd, cfg):
             if not strat or not prole:
                 continue
             roles = gitcmd.from_roles(strat)
+            rb = release_branch(ticket) if prole == "release" else None
+            if rb and parent != rb:
+                out.append("%s: new branch %s (%s) is being cut from %s, but %s's Jira release ships from %s in %s."
+                           % (PREFIX, new, ticket, parent, ticket, rb, name))
+                continue
             if prole not in roles:
                 out.append("%s: new branch %s (%s) is being cut from %s (%s), but %s for %s starts from %s (strategy: %s)."
                            % (PREFIX, new, ticket, parent, prole, nm, ticket, " or ".join(sorted(r for r in roles if r)), how))
@@ -111,7 +123,11 @@ def check(cmd, cwd, cfg):
             if not strat or not hrole or not brole:
                 continue
             expect = [st.get("pr_into") for st in strat["steps"] if st.get("from") == hrole]
-            if expect and brole not in expect:
+            rb = release_branch(ticket) if brole == "release" else None
+            if rb and base != rb:
+                out.append("%s: PR from %s into %s, but %s's Jira release ships from %s in %s."
+                           % (PREFIX, head, base, ticket, rb, name))
+            elif expect and brole not in expect:
                 out.append("%s: PR from %s (cut from %s) into %s: %s for %s expects a %s-based branch to go into %s. "
                            "It would also carry the %s commits that %s doesn't have."
                            % (PREFIX, head, hrole, base, nm, ticket, hrole, " or ".join(expect), hrole, base))

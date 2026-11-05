@@ -165,4 +165,4 @@ All of them run through the stable launcher, `py -3 "$env:USERPROFILE\.chitragup
 | `doctor [--json] [--fast]` | Health checks, including **Safety: enforced** and the blocks in `security.log` ([safety.md](safety.md)); exits 1 if any check fails; never repairs |
 | `runtime status` / `runtime install [--force]` | Inspect or refresh the stable runtime |
 | `install --status` | Scheduled-task status |
-| `uninstall` | Remove the task, runtime, recall skill, CLAUDE.md block and home pointer; keeps data |
+| `uninstall` | Remove the task, dashboard shortcut, runtime, recall skill, CLAUDE.md block and home pointer; keeps data, shares and backup zips |

@@ -14,13 +14,13 @@ The tools are named `mcp__plugin_cg_chitragupta__<tool>` in Claude Code.
 | Tool | Arguments | Returns |
 |---|---|---|
 | `search` | `q`, `type?` (ticket, finding, query, artifact, api, table, integration, day, request, branch), `ticket?`, `repo?`, `from?`, `to?`, `limit?` | Matches grouped by type: title, ticket, date, snippet, and the file to open |
-| `get_ticket` | `key`, `section?` | Summary (title, status, dates, time, repos, TL;DR, counts, branches, alerts). With `section`, one part in full: `findings`, `requests`, `queries`, `dbflow`, `branches`, `artifacts`, `timeline` or `notes` (your My notes block) |
+| `get_ticket` | `key`, `section?` | Summary: title and status line, then **the brief first** (root cause with its confidence, fixes made from git and PRs, possible cons, each with its first evidence ids; until a ticket has a brief, its current root cause), then TL;DR, problem, counts, branches and alerts. With `section`, one part in full: `brief` (every section of the brief, each claim with its evidence ids, then what each id is: the item, query, commit or PR), `findings`, `requests`, `queries`, `dbflow`, `branches`, `artifacts`, `timeline` or `notes` (your My notes block) |
 | `get_day` | `date` (`YYYY-MM-DD`, `today`, `yesterday`, `-N`) | Time per ticket, other work, commits, and the evening Jira worklog as sent (or a preview when it isn't sent yet) |
 | `get_timesheet` | `period` (`week`, `month`, `day`), `from?`, `to?` | Hours per ticket per period, totals, and leave or holidays in the range. Without `from`, the current week, month or day |
-| `get_branch_status` | `key`, `repo?` | Branches and their parents, PRs, delivery to each target branch, and alerts (the same view as `/cg:branches`) |
+| `get_branch_status` | `key`, `repo?` | With release tracking on, the release plan first (Jira release and date, per repo the development base and PR target with how certain they are, PRs per destination, release / QA / UAT state, next step, uncertainty); then branches and their parents, PRs, delivery to each target branch, and alerts (the same view as `/cg:branches`) |
 | `get_db_table` | `name` (`table` or `schema.table`) | Columns, relations, QA link-map matches (`m/s verified · likely · unverified`), the code that reads or writes it, tickets, and saved queries that use it |
-| `list_tickets` | `q?`, `status?`, `repo?`, `since?` | One line per ticket, newest activity first |
-| `get_alerts` | none | Branch and PR delivery alerts across tickets, and worklog health warnings (paused capture, a stale tick, the last error, safety blocks) |
+| `list_tickets` | `q?`, `status?`, `repo?`, `since?`, `release?` | One line per ticket, newest activity first. With `release` (`YYYY-MM` or `this-month`): your tickets scheduled that month by planned release date, with per-repo state and next step, then overdue and unresolved-date tickets ([releases.md](releases.md#the-monthly-overview)) |
+| `get_alerts` | none | Branch and PR delivery alerts across tickets, release and UAT reminders, and worklog health warnings (paused capture, a stale tick, the last error, safety blocks) |
 
 Every tool also takes `page`. An answer is at most 8,000 characters. A longer one is cut at a line break and ends with
 `… more: page=2 (of 3)`.

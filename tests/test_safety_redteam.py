@@ -210,6 +210,23 @@ class CommandGuardTests(SafetyCase):
                 self.assertBlocked(lambda: commands.check(commands.work_argv(cfg, self.repo, args), "git-work", cfg=cfg),
                                    "command")
 
+    def test_ls_tree_names_only_and_repo_redirects_are_guarded(self):
+        from chitragupta import gitro
+        cfg = self.cfg()
+        sha = _git(self.repo,"rev-parse","HEAD").strip()
+        other = _init_repo(os.path.join(self.scratch,"outside"))
+        cfg["capture_scope"] = {"include_paths":[self.repo],"exclude_paths":[]}
+        marker = os.path.join(self.scratch,"unwanted.txt")
+        attempts = [["--output="+marker],["-C",other],["--git-dir",os.path.join(other,".git")],
+                    ["--work-tree",other],["--git-dir="+os.path.join(other,".git")],["--work-tree="+other]]
+        for extra in attempts:
+            with self.subTest(extra=extra):
+                self.assertBlocked(lambda:gitro.run(cfg,self.repo,["ls-tree","--name-only"]+extra+[sha]),"command")
+        self.assertBlocked(lambda:gitro.run(cfg,other,["ls-tree","--name-only",sha]),"command")
+        self.assertBlocked(lambda:gitro.run(cfg,self.repo,["ls-tree",sha]),"command")
+        rc,out,_ = gitro.run(cfg,self.repo,["ls-tree","-r","-z","--name-only",sha])
+        self.assertEqual(rc,0);self.assertIn("a.txt",out.split("\0"));self.assertFalse(os.path.exists(marker))
+
     def test_gitro_refuses_before_a_process_starts(self):
         from chitragupta import gitro
         before = _git(self.repo, "rev-parse", "HEAD")
@@ -359,6 +376,7 @@ class PathGuardTests(SafetyCase):
         self.assertBlocked(lambda: paths.replace(os.path.join(self.repo, "a.txt"), os.path.join(h, "a.txt")), "path")
         self.assertTrue(os.path.isfile(os.path.join(self.repo, "a.txt")))
 
+    @unittest.skipUnless(os.name == "nt", "directory junctions are a Windows feature")
     def test_junction_out_of_the_data_home(self):
         import _winapi
         from chitragupta import common
@@ -371,6 +389,7 @@ class PathGuardTests(SafetyCase):
         self.assertBlocked(lambda: paths.write_text(os.path.join(j, "x.txt"), "x"), "path")
         self.assertFalse(os.listdir(outside))
 
+    @unittest.skipUnless(os.name == "nt", "Windows paths are case-insensitive; elsewhere a case variant is another path")
     def test_case_variant_of_an_own_root_is_still_ours(self):
         from chitragupta import common
         from chitragupta.safety import paths
@@ -445,9 +464,9 @@ class QueryAndMcpTests(SafetyCase):
         from chitragupta import mcpjobs
         from chitragupta.safety import query
         stmts = []
-        for ctype, s in mcpjobs.CATALOG_SQL.items():
-            stmts.append(s["triggers"].format(schema="shop", names="'orders', 'docs'"))
-            stmts.append(s["writers"].format(likes=" OR ".join(s["like"].format(name=n) for n in ("orders", "docs"))))
+        for ctype in mcpjobs.CATALOG_SQL:
+            stmts.append(mcpjobs.triggers_sql(ctype, "shop", ["orders", "docs"]))
+            stmts += [mcpjobs.writers_sql(ctype, "shop", n) for n in ("orders", "docs")]
             stmts.append(mcpjobs.link_sql(ctype, ("shop", "docs", "order_id"), ("shop", "orders", "id")))
         stmts += ["SELECT TOP 20 id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC",
                   "SELECT id, status FROM shop.orders WHERE id = 42 ORDER BY id DESC LIMIT 20"]
@@ -991,6 +1010,41 @@ class OtherPluginToolTests(SafetyCase):
         self.assertEqual((s["recent"], s["by_layer"], len(s["last"])), (1, {"tool": 1}, 1))
         self.assertFalse({r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]["ok"])
 
+    def test_counts_and_breakdown_share_one_window_and_legacy_lines_are_other_plugin(self):
+        """O3: the 24 h count is shown with the 24 h breakdown; old uncategorised 'server plugin_... is not on the
+        allowlist' lines from the session guard (no UTC offset: written before categories) are other-plugin."""
+        import datetime as dt
+        from chitragupta.dashboard import api
+        from chitragupta.safety import log, status
+        now = dt.datetime.now().astimezone()
+        lines = [
+            {"at": (now - dt.timedelta(days=3)).isoformat(timespec="seconds"), "layer": "path", "caller": "x",
+             "purpose": "", "what": "delete C:/x", "reason": "outside the write roots"},
+            {"at": (now - dt.timedelta(hours=1)).isoformat(timespec="seconds"), "layer": "tool",
+             "caller": "safety.session", "purpose": "", "what": "Bash", "reason": "Bash is not allowed during /cg:"},
+            {"at": (now - dt.timedelta(hours=1)).replace(tzinfo=None).isoformat(timespec="seconds"), "layer": "tool",
+             "caller": "safety.session", "purpose": "", "what": self.OTHER,
+             "reason": "server plugin_other_tool is not on the allowlist"},
+        ]
+        os.makedirs(os.path.dirname(log.path()), exist_ok=True)
+        with open(log.path(), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in lines))
+        st = status.status(self.cfg())
+        self.assertEqual((st["blocks_24h"], st["blocks_7d"]), (1, 2))
+        self.assertEqual(st["by_layer_24h"], {"tool": 1})
+        self.assertEqual(st["by_layer_7d"], {"path": 1, "tool": 1})
+        self.assertEqual((st["skipped_24h"], st["skipped_7d"]), (1, 1))
+        row = {r["name"]: r for r in status.doctor_rows(self.cfg())}["security log"]
+        self.assertIn("1 blocked action(s) in the last 24 h (tool 1)", row["detail"])
+        self.assertIn("1 other-plugin", row["detail"])
+        sf = api._safety(self.cfg())
+        self.assertEqual((sf["by_layer_24h"], sf["by_layer_7d"], sf["skipped_24h"]), ({"tool": 1}, {"path": 1, "tool": 1}, 1))
+        # an offset line (written by 0.4.1 or later) is trusted as written: still a violation
+        lines[2]["at"] = now.isoformat(timespec="seconds")
+        with open(log.path(), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in lines))
+        self.assertEqual(status.status(self.cfg())["by_layer_24h"], {"tool": 2})
+
 
 class SecurityLogFormatTests(SafetyCase):
     def test_timestamp_carries_the_local_utc_offset(self):
@@ -1075,7 +1129,8 @@ class AllowedTests(SafetyCase):
                      ["rev-list", "--count", "HEAD"], ["merge-base", "HEAD", "HEAD"], ["cherry", "HEAD", "HEAD"],
                      ["show", "-s", "--format=%s", "HEAD"], ["reflog", "-n", "1"], ["branch", "--list"],
                      ["branch", "--contains", head], ["ls-remote", "--heads", "origin"], ["remote", "get-url", "origin"],
-                     ["config", "--get", "remote.origin.url"], ["ls-files", "--others", "--exclude-standard"]):
+                     ["config", "--get", "remote.origin.url"], ["ls-files", "--others", "--exclude-standard"],
+                     ["ls-tree","-r","-z","--name-only",head]):
             with self.subTest(args=args):
                 rc, so, se = gitro.run(cfg, self.repo, args)
                 self.assertEqual(rc, 0, se)

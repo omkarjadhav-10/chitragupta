@@ -5,6 +5,7 @@ import os
 import unittest
 from unittest import mock
 
+from tests.support import local_iso
 from tests.test_v010 import Case
 
 JIRA = "mcp-atlassian"
@@ -179,9 +180,9 @@ class ServerStatus(Harness):
         self.assertEqual(setup.parse_mcp_errors(MCP_LIST)["claude.ai Slack"], "Needs authentication")
         old = {"slack": {"status": "missing"}, "jira": {"status": "offline", "server": JIRA, "detail": "server (user scope)"},
                "database": {"status": "signed out", "server": DBS, "detail": "server (user scope)",
-                            "error": "Needs authentication", "error_at": "2026-10-16T09:00:00+05:30"}}
+                            "error": "Needs authentication", "error_at": local_iso("2026-10-16", 9, 0)}}
         health = {"mcp": {"server_state": {JIRA: {"state": "unreachable", "error": "connect ETIMEDOUT",
-                                                  "at": "2026-10-16T08:00:00+05:30"}}}}
+                                                  "at": local_iso("2026-10-16", 8, 0)}}}}
         rows = {r["name"]: r for r in doctor.mcp_rows(old, self.jcfg(), health)}
         self.assertFalse(rows["Jira"]["ok"])
         self.assertTrue(rows["Jira"]["detail"].startswith("unreachable: "))
@@ -292,13 +293,13 @@ class OfflineProbe(Case):
     def test_cached_status_offline_skips_until_a_job_succeeds_later(self):
         from chitragupta import common, plugin
         self.clock("2026-10-16", 10, 0)
-        common.write_json(plugin.mcp_status_cache(), {"checked": "2026-10-16T09:50:00+05:30", "database": {
+        common.write_json(plugin.mcp_status_cache(), {"checked": local_iso("2026-10-16", 9, 50), "database": {
             "status": "unreachable", "server": "sqldb", "error": "Failed to connect",
             "error_at": common.now_iso()}})
         a = self._agent({"probe": {"database": common.now_iso()}})
         self.tick(a)
         self.assertEqual(self.ran, [])  # cached offline and probed just now
-        a.health["mcp"]["last_ok"] = {"sqldb": "2026-10-16T10:30:00+05:30"}  # a later job reached it
+        a.health["mcp"]["last_ok"] = {"sqldb": local_iso("2026-10-16", 10, 30)}  # a later job reached it
         self.clock("2026-10-16", 10, 40)
         self.tick(a)
         self.assertEqual(self.ran, ["schema"])

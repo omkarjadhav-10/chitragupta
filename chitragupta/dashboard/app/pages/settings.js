@@ -13,6 +13,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const PREFIX = /^[A-Z][A-Z0-9]{1,9}$/;
 const BRANCH = /^[A-Za-z0-9*][A-Za-z0-9._\/*-]{0,99}$/;
+const MODEL_ID = /^claude-[a-z0-9][a-z0-9.-]{1,60}$/;
 const REL = { cut_from: 'is cut from', merges_into: 'merges into', syncs_from: 'syncs from' };
 function words(s) { return String(s || '').split(',').map((x) => x.trim()).filter(Boolean); }
 
@@ -27,8 +28,11 @@ function problem(it, v) {
       if (!TIME.test(v || '')) return 'Use 24-hour time, for example 20:00.';
       return (it.min && v < it.min) || (it.max && v > it.max) ? 'Use a time from ' + it.min + ' to ' + it.max + '.' : null;
     case 'choice': return it.choices.some((c) => c[0] === v) ? null : 'Pick one of the listed options.';
+    case 'model': return (v === '' && it.optional) || (typeof v === 'string' && (it.choices.indexOf(v) >= 0 || MODEL_ID.test(v))) ? null
+      : 'Use ' + it.choices.join(', ') + ', or a model id such as claude-haiku-4-5.';
     case 'days': return Array.isArray(v) && v.length ? null : 'Pick at least one day.';
     case 'prefixes': return (v || []).every((p) => PREFIX.test(p)) ? null : 'Use uppercase project keys of 2 to 10 letters or digits, starting with a letter.';
+    case 'names': return (v || []).length <= 20 && (v || []).every((n) => /^[A-Za-z0-9][A-Za-z0-9 -]{0,39}$/.test(n)) ? null : 'Use one name per line: letters, digits, spaces or -, at most 40 characters.';
     case 'paths': return (v || []).every((p) => /^([A-Za-z]:[\\/]|\/)/.test(p)) ? null : 'Use full paths, one per line.';
     case 'envs_narrow': return (v || []).length ? null : 'Keep at least one environment.';
     case 'name': return typeof v === 'string' && v.length <= 80 && !/[\x00-\x1f]/.test(v) ? null : 'Use one line of at most 80 characters.';
@@ -161,6 +165,10 @@ function Control({ it, value, onChange, err }) {
     case 'choice':
       return html`<select ...${common} value=${value == null ? '' : value} onChange=${(e) => onChange(e.currentTarget.value)}>
         ${it.choices.map((c) => html`<option key=${c[0]} value=${c[0]}>${c[1]}</option>`)}</select>`;
+    case 'model':
+      return html`<input type="text" ...${common} list=${id + '-list'} maxlength="64" spellcheck="false" value=${value || ''}
+        placeholder=${it.optional ? 'not set' : null} onInput=${(e) => onChange(e.currentTarget.value.trim())} />
+        <datalist id=${id + '-list'}>${it.choices.map((c) => html`<option key=${c} value=${c} />`)}</datalist>`;
     case 'days':
       return html`<fieldset class="daypick" ...${common}><legend class="sr">${it.label}</legend>${DAYS.map((d) => html`<label key=${d} class="check">
         <input type="checkbox" checked=${(value || []).indexOf(d) >= 0} onChange=${(e) => onChange(DAYS.filter((x) => (x === d ? e.currentTarget.checked : (value || []).indexOf(x) >= 0)))} />${d}</label>`)}</fieldset>`;
@@ -172,7 +180,7 @@ function Control({ it, value, onChange, err }) {
     case 'name':
       return html`<input type="text" ...${common} maxlength="80" value=${value || ''} onInput=${(e) => onChange(e.currentTarget.value)} />`;
     case 'relations': return html`<${RelationsEditor} it=${it} value=${value} onChange=${onChange} common=${common} />`;
-    case 'prefixes': case 'paths':
+    case 'prefixes': case 'names': case 'paths':
       return html`<textarea ...${common} rows=${Math.min(6, Math.max(2, (value || []).length + 1))} spellcheck="false"
         onInput=${(e) => onChange(e.currentTarget.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))}>${(value || []).join('\n')}</textarea>`;
     default:

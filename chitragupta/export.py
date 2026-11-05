@@ -139,11 +139,22 @@ def drop_local(t, mode, stats=None):
         _hit(stats, "qa-example", n)
         df["markdown"] = md
     if public:
+        pr = ((t.get("brief") or {}).get("header") or {}).get("pr")
+        if isinstance(pr, dict):  # the brief's header names the latest PR; its link goes like the others
+            if pr.get("url"):
+                _hit(stats, "pr-link")
+            pr["url"] = None
         for e in ((t.get("git") or {}).get("repos") or {}).values():
             for p in e.get("prs") or []:
                 if p.get("url"):
                     _hit(stats, "pr-link")
                 p["url"] = None
+        for e in (((t.get("release_plan") or {}).get("repos")) or {}).values():  # release tracking's PR lists
+            for p in [p for lst in (e.get("prs") or {}).values() for p in lst or []] + list(e.get("shared") or []):
+                if isinstance(p, dict):
+                    if p.get("url"):
+                        _hit(stats, "pr-link")
+                    p["url"] = None
     return t
 
 
@@ -189,6 +200,11 @@ def snapshot(key, mode="full", now=None):
     if not t:
         return None
     t = json.loads(json.dumps(t, default=str))  # a private copy: api results may be cached
+    if t.get("focused"):
+        # Exports carry the summary and core lists; they never need a live archived-record API.
+        detail = api.ticket_detail(t["key"], "dbflow") or {}
+        t["dbflow"] = detail.get("dbflow") or t["dbflow"]
+        t["lazy"] = False
     if mode == "shareable":
         t = shareable(t)
     elif mode == "team":
@@ -215,7 +231,7 @@ _ABS_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(?\s*)(['"])(/(?:app|vendor)
 # An export only ever shows the ticket page: these modules become stubs that keep their exported names (main.js
 # imports them) and render nothing; the ones only stubbed pages import are left out.
 _STUBBED = {"/app/pages/" + p + ".js" for p in ("today", "timesheet", "knowledge", "db", "team", "search", "health",
-                                               "setup", "settings")} | {"/app/lib/share.js"}
+                                               "setup", "settings", "releases")} | {"/app/lib/share.js"}
 _UNUSED = {"/app/lib/mcpstatus.js", "/app/lib/scheduler.js"}
 _EXPORTED = re.compile(r"^export\s+(?:function|const|let)\s+(\w+)", re.M)
 

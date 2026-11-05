@@ -15,11 +15,20 @@
           },
           "summary": {
             "type": "string"
+          },
+          "relevance": {
+            "type": "string",
+            "enum": [
+              "core",
+              "supporting",
+              "noise"
+            ]
           }
         },
         "required": [
           "name",
-          "summary"
+          "summary",
+          "relevance"
         ],
         "additionalProperties": false
       }
@@ -120,7 +129,8 @@
           "confidence"
         ],
         "additionalProperties": false
-      }
+      },
+      "maxItems": 12
     },
     "table_relations": {
       "type": "array",

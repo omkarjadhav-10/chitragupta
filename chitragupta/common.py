@@ -58,11 +58,50 @@ INTERNAL_ENV = {"CHITRAGUPTA_INTERNAL": "1", "WORKLOG_INTERNAL": "1"}
 
 def prompt_path(name):
     """A prompt or schema file: a user override in <home>/.worklog/prompts wins over the packaged one.
-    `name` is relative to the prompts folder, e.g. "extract.md" or "schemas/extract.json"."""
-    override = wl("prompts", *name.split("/"))
-    if os.path.isfile(override):
-        return override
-    return os.path.join(PROMPTS_DIR, *name.split("/"))
+    `name` is relative to the prompts folder, e.g. "extract.md" or "schemas/extract.json". A stale override schema
+    (written for an older version: it lacks a field the packaged schema requires) is ignored, and so is the prompt
+    of the same name, which was written for it; agent.log says so once."""
+    parts = name.split("/")
+    packaged = os.path.join(PROMPTS_DIR, *parts)
+    override = wl("prompts", *parts)
+    if not os.path.isfile(override):
+        return packaged
+    kind = parts[-1].rsplit(".", 1)[0]
+    if (name.endswith(".md") or name.startswith("schemas/")) and stale_override(kind):
+        return packaged
+    return override
+
+
+_STALE_LOGGED = set()
+
+
+def _missing_fields(pack, over, path=""):
+    """Fields `pack` (a JSON schema) requires that `over` doesn't define, at any depth, as dotted paths."""
+    if not isinstance(pack, dict) or not isinstance(over, dict):
+        return []
+    have = over.get("properties") or {}
+    out = [path + k for k in pack.get("required") or [] if k not in have]
+    for k, v in (pack.get("properties") or {}).items():
+        if k in have:
+            out += _missing_fields(v, have[k], path + k + ".")
+    if isinstance(pack.get("items"), dict):
+        out += _missing_fields(pack["items"], over.get("items"), path)
+    return out
+
+
+def stale_override(kind):
+    """The fields an override of schemas/<kind>.json lacks (a non-empty list: stale), else []."""
+    over_p = wl("prompts", "schemas", kind + ".json")
+    pack_p = os.path.join(PROMPTS_DIR, "schemas", kind + ".json")
+    if not os.path.isfile(over_p) or not os.path.isfile(pack_p):
+        return []
+    over, pack = read_json(over_p, None), read_json(pack_p, None)
+    missing = _missing_fields(pack, over) if isinstance(over, dict) else ["(not a JSON schema)"]
+    if missing and over_p not in _STALE_LOGGED:
+        _STALE_LOGGED.add(over_p)
+        log("agent", "prompt override for %s is stale (no %s): using the packaged %s.md and schema" % (
+            kind, ", ".join(missing[:5]), kind))
+    return missing
 
 
 def wl(*parts):
@@ -119,6 +158,8 @@ DEFAULT_CONFIG = {
     "render": {"example_ticket": DEFAULT_EXAMPLE_TICKET},
     "reminders": {"mcp": True},  # weekly SessionStart line when Slack/Jira isn't connected
     # MCP jobs are off until configured; the database MCP's server name comes only from the user's config.
+    # Jira issue types that only group work: they never get time or items themselves, their children do
+    "jira": {"parent_issue_types": ["Epic", "Initiative"]},
     "mcp": {"daily_call_budget": 10, "jira": {"enabled": False}, "database": {"enabled": False, "label": "database MCP"}},
 }
 
@@ -342,6 +383,179 @@ def find_tickets(text, prefixes):
     return out
 
 
+DEFAULT_PARENT_TYPES = ["Epic", "Initiative"]
+_PASTED = re.compile(r"<pasted_content[^>]*>(.*?)(?:</pasted_content>|\Z)", re.S | re.I)
+_CRUMB_SEP = re.compile(r"\s+[/>»›]\s+")
+_CARD_CACHE = {}
+
+
+def _crumb_line(line, prefixes):
+    """The ticket ids of a breadcrumb line ("ABC-1000 / ABC-1001", "Spaces / Shop / ABC-1000 > ABC-1001", or a line
+    that is only an id), else None."""
+    s = line.strip()
+    if not s:
+        return None
+    ids = find_tickets(s, prefixes)
+    if not ids:
+        return None
+    if ticket_key(s) and ids == [ticket_key(s)]:
+        return ids
+    parts = _CRUMB_SEP.split(s)
+    if len(parts) > 1 and all(len(p.split()) <= 4 for p in parts) and ticket_key(parts[-1].strip()):
+        return ids
+    return None
+
+
+def _card(key):
+    """data/jira/<KEY>.json "card" (cached per file version; {} when there is none)."""
+    p = hp("data", "jira", key + ".json")
+    try:
+        st = os.stat(p)
+        mt = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    hit = _CARD_CACHE.get(p)
+    if hit and hit[0] == mt:
+        return hit[1]
+    card = read_json(p, {}).get("card") or {}
+    card = card if isinstance(card, dict) else {}
+    _CARD_CACHE[p] = (mt, card)
+    return card
+
+
+def parent_issue_types(cfg):
+    lst = ((cfg or {}).get("jira") or {}).get("parent_issue_types")
+    return [str(x) for x in (lst if isinstance(lst, list) else DEFAULT_PARENT_TYPES)]
+
+
+def is_parent_ticket(key, cfg, others=()):
+    """True when the ticket is a parent issue (an Epic, an Initiative…): its Jira card's type is one of
+    jira.parent_issue_types, or another candidate's card names it as its parent. Parents never get time or items."""
+    if not key:
+        return False
+    types = {t.lower() for t in parent_issue_types(cfg)}
+    if str(_card(key).get("type") or "").lower() in types:
+        return True
+    for o in others:
+        par = str(_card(o).get("parent") or "").strip().upper() if o != key else ""
+        if par == key or par.startswith(key + " "):
+            return True
+    return False
+
+
+def is_task_notification(text):
+    """A system-injected background result, rather than a new user ticket selection."""
+    return bool(re.match(r"^\s*<task-notification(?:\s|>)", str(text or "")))
+
+
+def prompt_ticket(text, prefixes, cfg=None, branch_ticket=None):
+    """(ticket, src) a prompt is about, or (None, None). An id typed in your own words wins (src "prompt") over one in
+    pasted text (`<pasted_content>` blocks and Jira header / breadcrumb lines; src "jira-title"). A breadcrumb gives its
+    LAST id (the issue itself; the ones before it are its parents). Within the highest-priority source, prefer the
+    work-branch ticket when named, otherwise the first own-words key (breadcrumbs keep their last child). Parent issue types never win (is_parent_ticket):
+    the next candidate does, or nobody, so the branch or the carried ticket decides."""
+    if not text or not prefixes:
+        return None, None
+    text = str(text)
+    if is_task_notification(text):
+        return None, None  # a background agent result is not a new user ticket selection
+    own, crumbs, pasted, parents = [], [], [], []
+
+    def lines_of(block, is_pasted):
+        run = []  # consecutive breadcrumb lines (blank lines between them allowed)
+
+        def flush():
+            if len(run) == 1 and not is_pasted:  # one id alone on a line of your own text: your words
+                own.append(run[0])
+            elif run:
+                crumbs.append(run[-1])
+                parents.extend(run[:-1])
+            del run[:]
+        for line in block.splitlines():
+            ids = _crumb_line(line, prefixes)
+            if ids:
+                run.extend(i for i in ids if i not in run)
+                continue
+            if line.strip():
+                flush()
+                (pasted if is_pasted else own).extend(find_tickets(line, prefixes))
+        flush()
+    pos = 0
+    for m in _PASTED.finditer(text):
+        lines_of(text[pos:m.start()], False)
+        lines_of(m.group(1), True)
+        pos = m.end()
+    lines_of(text[pos:], False)
+    cands = []
+    for k, src in [(k, "prompt") for k in own] + [(k, "jira-title") for k in crumbs + pasted + parents]:
+        if k not in [c[0] for c in cands]:
+            cands.append((k, src))
+    keys = [c[0] for c in cands]
+    for group, src, last in ((own, "prompt", False), (crumbs, "jira-title", True),
+                             (pasted, "jira-title", False), (parents, "jira-title", False)):
+        eligible = [k for k in group if cfg is None or not is_parent_ticket(k, cfg, keys)]
+        if eligible:
+            default = eligible[-1] if last else eligible[0]
+            return (branch_ticket if branch_ticket in eligible else default), src
+    return None, None
+
+
+def breadcrumb_parents(text, prefixes):
+    """{child: [parents]} from the breadcrumb runs of a prompt ("Shop / ABC-1000 / ABC-1001": ABC-1000 is the parent
+    of ABC-1001, the run's last id), in your own text or pasted. A lone id is no breadcrumb."""
+    out = {}
+    if not text or not prefixes:
+        return out
+    run = []
+
+    def flush():
+        if len(run) > 1:
+            out.setdefault(run[-1], [])
+            out[run[-1]] += [p for p in run[:-1] if p not in out[run[-1]]]
+        del run[:]
+    for line in _PASTED.sub(lambda m: "\n" + m.group(1) + "\n", str(text)).splitlines():
+        ids = _crumb_line(line, prefixes)
+        if ids:
+            run.extend(i for i in ids if i not in run)
+        elif line.strip():
+            flush()
+    flush()
+    return out
+
+
+def work_branch_ticket(branch, cfg, repo=None):
+    """A work branch's ticket. Base and environment branches (release/…, qa, uat, main…: the repo's branching bases,
+    gitcmd.repo_conf) name no ticket of their own, and neither does a parent issue (is_parent_ticket)."""
+    if not branch or branch.startswith("detached@"):
+        return None
+    if branch.split("/")[0].lower() == "release":
+        return None
+    from . import gitcmd
+    bases = gitcmd.repo_conf(cfg, gitcmd.repo_key(repo) if repo else "")["bases"]
+    if gitcmd.role_of(branch, bases):
+        return None
+    t = ticket_from_branch(branch, cfg.get("ticket_prefixes") or [])
+    return None if t and is_parent_ticket(t, cfg) else t
+
+
+def ticket_for_turn(cfg, prompt_t=None, prompt_src="prompt", branch=None, repo=None, own_repo=None, carry=None, carry_recent=False):
+    """(ticket, src) for one turn (a prompt and every event until the next one), the single rule for time and
+    knowledge: the ticket the turn's prompt named (src "prompt", or "jira-title" for pasted Jira text; see
+    prompt_ticket) -> an eligible continuation of the previous turn (carry_recent, decided by agent.attribute)
+    -> the session's own work branch (src "branch") -> the last named ticket (src "carry")."""
+    if prompt_t:
+        return prompt_t, prompt_src or "prompt"
+    if carry_recent and carry:
+        return carry, "carry-recent"
+    own = not (repo and own_repo) or norm_path(repo) == norm_path(own_repo)
+    bt = work_branch_ticket(branch, cfg, own_repo or repo) if own else None
+    if bt:
+        return bt, "branch"
+    if carry:
+        return carry, "carry"
+    return None, None
+
+
 def ticket_from_branch(branch, prefixes):
     """Ticket key from a branch name. Configured prefixes match case-insensitively;
     other UPPERCASE prefixes are accepted too (and later auto-added to config)."""
@@ -509,16 +723,30 @@ def repo_ignored(repo_root):
     return bool(repo_root) and path_ignored(repo_root)
 
 
+def is_home_folder(path):
+    """True for the user's home folder itself (not a folder below it); case-insensitive on Windows."""
+    if not path:
+        return False
+    try:
+        a = os.path.normcase(os.path.abspath(path)).rstrip("\\/")
+    except (TypeError, ValueError):
+        return False
+    return a == os.path.normcase(os.path.abspath(os.path.expanduser("~"))).rstrip("\\/")
+
+
 def capture_mode(cwd, cfg):
     """What capture does for a session in `cwd`, one rule set for the hooks and the transcript safety net:
-    "time" inside the data home (timestamp + ticket mentioned, never content), None when not captured (outside the
-    capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings folder), else "full"."""
+    "time" inside the data home and in the home folder itself (timestamp + ticket mentioned, never content), None
+    when not captured (outside the capture scope, `.worklog-ignore` here or above, Chitragupta's runtime and settings
+    folder), else "full". Folders below the home folder (repos, notes) stay "full"."""
     if not cwd:
         return None
     if path_within(cwd, home()):
         return "time"
     if not scope_allows(cwd, cfg) or path_within(cwd, user_dir()) or path_ignored(cwd):
         return None
+    if is_home_folder(cwd):
+        return "time"
     return "full"
 
 

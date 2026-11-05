@@ -7,6 +7,7 @@ are read as local time.
 import datetime as _dt
 import json
 import os
+import re
 import sys
 import time
 
@@ -106,13 +107,30 @@ def entries(limit=200):
     return out[-limit:]
 
 
+_OFFSET = re.compile(r"[+-]\d\d:?\d\d$|Z$")
+_LEGACY_OTHER = re.compile(r"^server plugin_\S+ is not on the allowlist$")
+
+
+def category(e):
+    """The line's category. Lines written before categories existed (no UTC offset in `at`) are read as other-plugin
+    when they are the session guard's "server plugin_… is not on the allowlist" refusal of a tool: that is how those
+    versions logged another plugin's tool during a /cg: command. Lines with an offset are taken as written."""
+    c = e.get("category")
+    if c or _OFFSET.search(str(e.get("at") or "")):
+        return c or ""
+    if e.get("layer") == "tool" and e.get("caller") == "safety.session" and _LEGACY_OTHER.match(str(e.get("reason") or "")):
+        return "other-plugin"
+    return ""
+
+
 def is_violation(e):
-    return e.get("category") not in NOT_VIOLATIONS
+    return category(e) not in NOT_VIOLATIONS
 
 
 def summary(days=7):
-    """{total, recent (last `days`), by_layer, last, other_plugin} for Health and doctor. Counts violations only;
-    `other_plugin` is the number of other plugins' tool calls skipped during /cg: commands in the same window."""
+    """{total, recent (last `days`), by_layer, last, other_plugin, other_plugin_by_layer} for Health and doctor.
+    Counts violations only, and `by_layer` breaks down the same `recent` window; `other_plugin` is the number of other
+    plugins' tool calls skipped during /cg: commands in that window."""
     every = entries(10_000)
     es = [e for e in every if is_violation(e)]
     cutoff = time.time() - days * 86400
@@ -120,10 +138,13 @@ def summary(days=7):
     def is_recent(e):
         t = _epoch(e.get("at"))
         return t is not None and t >= cutoff
+
+    def layers(rows):
+        by = {}
+        for e in rows:
+            by[e.get("layer") or "?"] = by.get(e.get("layer") or "?", 0) + 1
+        return by
     recent = [e for e in es if is_recent(e)]
-    by = {}
-    for e in recent:
-        by[e.get("layer") or "?"] = by.get(e.get("layer") or "?", 0) + 1
-    skipped = sum(1 for e in every if e.get("category") == "other-plugin" and is_recent(e))
-    return {"total": len(es), "recent": len(recent), "days": days, "by_layer": by, "last": es[-5:],
-            "other_plugin": skipped}
+    skipped = [e for e in every if category(e) == "other-plugin" and is_recent(e)]
+    return {"total": len(es), "recent": len(recent), "days": days, "by_layer": layers(recent), "last": es[-5:],
+            "other_plugin": len(skipped), "other_plugin_by_layer": layers(skipped)}

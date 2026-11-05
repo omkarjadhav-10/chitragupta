@@ -369,6 +369,7 @@ class Tracker:
         self.pending = {}  # repo name -> [session events]
         self.changed_tickets = set()
         self.notes = []
+        self._fetch_attempts = 0
 
     # ---- session events from the hook stream
     def add_session_event(self, ev):
@@ -389,7 +390,14 @@ class Tracker:
     def refresh(self, repos=None, fetch=True, force_pr=False):
         self.flush_session_events()
         out = {}
-        for path in repos if repos is not None else (self.cfg.get("watched_repos") or []):
+        self._fetch_attempts = 0
+        paths = list(repos if repos is not None else (self.cfg.get("watched_repos") or []))
+        cursor = self.state.get("fetch_cursor")
+        names = [repo_key(p) for p in paths]
+        if not self.force_fetch and cursor in names:
+            start = names.index(cursor) + 1
+            paths = paths[start:] + paths[:start]
+        for path in paths:
             if not os.path.exists(os.path.join(path, ".git")):
                 continue
             try:
@@ -433,7 +441,7 @@ class Tracker:
         if not last or (self.now - last).total_seconds() >= int(f.get("every_minutes") or 30) * 60:
             return True
         win = self.pre_send_window()
-        return bool(win and win[0] <= self.now < win[1] and last < win[0])
+        return bool(win and win[0] <= self.now < win[1] and (not last or last < win[0]))
 
     def pre_send_window(self):
         """(start, send time) today: one more fetch and PR check just before the 8 PM message."""
@@ -464,11 +472,15 @@ class Tracker:
         mine = {b.get("ticket") for b in data.branches.values()}
         if not self.force_fetch and not self.fetch_due(data, bool(active & mine) or (not data.branches and bool(active))):
             return
+        if not self.force_fetch and self._fetch_attempts >= 2:
+            return
         remote = conf["remote"]
         if gitro.locked(path):
             data.meta["fetch_skipped"] = common.now_iso() + " a git lock file exists"
             data.touch("meta")
             return
+        self._fetch_attempts += 1
+        self.state["fetch_cursor"] = repo_key(path)  # advance even after an offline attempt
         rc, so, se = gitro.run(self.cfg, path, ["ls-remote", "--heads", remote], timeout=60)
         if rc != 0:
             data.meta["fetch_error"] = common.now_iso() + " " + (se or so).strip()[:200]
@@ -616,8 +628,8 @@ class Tracker:
             rec["parent_role"] = up.get("parent_role")  # cut from another work branch: it plays that branch's role
             if up.get("parent_source") == "inferred" or up.get("role_guessed"):
                 rec["role_guessed"] = True
-        sig = "%s#%s" % (tip, r.sha(rec["parent_ref"]) if rec.get("parent_ref") else "")
-        if old.get("_sig") != sig or not old.get("own") and tip:
+        sig = "%s#%s#%s" % (tip,rec.get("remote_tip"),r.sha(rec["parent_ref"]) if rec.get("parent_ref") else "")
+        if old.get("_sig") != sig or (not isinstance(old.get("own"),list) and tip):
             self.commit_facts(r, rec, tip_ref, local, rref)
             rec["_sig"] = sig
             rec["checked_at"] = common.now_iso()
@@ -795,8 +807,8 @@ class Tracker:
             ck = checked.get(b) or {}
             last = common.parse_ts(ck.get("at"))
             has_open = any(p.get("source") == b and p.get("state") in ("open", "draft") for p in prs.values())
-            pre_send = bool(win and win[0] <= self.now < win[1] and last < win[0])
-            if force or not last or ck.get("tip") != rec.get("remote_tip") or pre_send or \
+            pre_send = bool(win and win[0] <= self.now < win[1] and (not last or last < win[0]))
+            if force or not last or (ck.get("tip") != rec.get("remote_tip") and not has_open) or pre_send or \
                     ((has_open or not any(p.get("source") == b for p in prs.values()))
                      and (self.now - last).total_seconds() >= every):
                 due.append(b)
@@ -804,22 +816,25 @@ class Tracker:
             self._prs_via_mcp(r, info, src[4:], due, force, win, every)
             data.touch("meta")
             return
-        for b in due:
-            rec = data.branches[b]
-            try:
-                got = self.pr_fetch(r, b) if self.pr_fetch else hosts.prs_for_branch(self.cfg, info, src, b, run=self.pr_run)
-            except hosts.SourceError as e:
-                meta["pr_error"] = common.now_iso() + " " + str(e)[:200]
-                break
-            except (OSError, ValueError) as e:
-                meta["pr_error"] = common.now_iso() + " " + str(e)[:200]
-                break
-            meta.pop("pr_error", None)
-            for p in got:
+        if not due:
+            data.touch("meta")
+            return
+        try:
+            # Keep the injected per-branch test source; production CLIs list once per repository.
+            got = [p for b in due for p in self.pr_fetch(r,b)] if self.pr_fetch else \
+                hosts.prs_for_repo(self.cfg,info,src,run=self.pr_run)
+        except (hosts.SourceError,OSError,ValueError) as e:
+            meta["pr_error"] = common.now_iso() + " " + str(e)[:200]
+            data.touch("meta")
+            return
+        meta.pop("pr_error", None)
+        for p in got:
+            if p.get("source") in due:
                 self._merge_pr(r, prs, p)
-            checked[b] = {"at": common.now_iso(), "tip": rec.get("remote_tip")}
-            meta["pr_refreshed_at"] = common.now_iso()
-            data.touch("prs")
+        for b in due:
+            checked[b] = {"at": common.now_iso(), "tip": data.branches[b].get("remote_tip")}
+        meta["pr_refreshed_at"] = common.now_iso()
+        data.touch("prs")
         data.touch("meta")
 
     def _prs_via_mcp(self, r, info, provider, due, force, win, every):

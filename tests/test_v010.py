@@ -337,14 +337,14 @@ class NoSlackTests(Case):
 # --------------------------------------------------------------------------- no Jira
 
 class NoJiraTests(Case):
-    def test_title_from_branch(self):
+    def test_title_hint_from_branch(self):
         d = "2026-10-16"
         self.clock(d, 12, 0)
         self.raw(d, "ABC-1001", 9, 0, branch="feature/ABC-1001-fix-login-message")
         a = self.agent()
         a.ingest()
         tk = a.store.ticket("ABC-1001")
-        self.assertEqual((tk["title"], tk["title_source"]), ("fix login message", "branch"))
+        self.assertEqual((tk["title"], tk["title_hint"], tk["title_hint_source"]), ("", "fix login message", "branch"))  # K4: a hint
 
     def test_nothing_subtracted_and_no_jira_call(self):
         from chitragupta import mcpjobs

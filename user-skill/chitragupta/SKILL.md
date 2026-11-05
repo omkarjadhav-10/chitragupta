@@ -19,10 +19,13 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 
 ## Where things live
 - `tickets/INDEX.md` — every ticket: status, first/last worked, ≈ time, TL;DR
-- `tickets/<TICKET>/README.md` — the ticket hub: quick links, Scenarios (trigger request · DB effect · verify query),
+- `tickets/<TICKET>/README.md` — the ticket hub: quick links, then `## Brief` (root cause, helpful findings, how it
+  works today and after the fix, proposed fix, fixes made from git and PRs, possible cons; each claim's evidence is a
+  footnote pointing at the item further down), Scenarios (trigger request · DB effect · verify query),
   replay steps, latest artifacts, TL;DR, problem, root cause & findings, how it works, fix, database, APIs,
   integrations, config, errors, repro, decisions, open questions, code map, timeline
-- `tickets/<TICKET>/queries.md` — important queries, dated, with what each revealed
+- `tickets/<TICKET>/queries.md` — SQL that was actually sent, dated, each with the raw line it came from and what it
+  revealed (SQL the notes mention but never sent stays in the data as `sent: false` and isn't listed)
 - `tickets/<TICKET>/requests.md` — the minimal replay set as curl for Git Bash (purpose + expected per step)
 - `tickets/<TICKET>/replay.sh` — run it: `bash tickets/<TICKET>/replay.sh qa` (or `local`) from the worklog folder
 - `bruno/<TICKET>/` — the same requests in the single Bruno collection `{{HOME}}\bruno` (envs in `bruno/environments`,
@@ -36,7 +39,9 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 - `knowledge/branches.md` — every work branch: parent, created, last commit, unpushed, where it lives
 - `data/tickets/<KEY>.json` → `git` — per repo: strategy, branches (parent + how found, status), PRs, the delivery
   matrix (each commit × each required target: in / same change / via squash PR / PR open / missing / reverted / check)
-  and alerts; `data/git/<repo>/` holds the raw events, branch records and PRs
+  and alerts; `data/git/<repo>/` holds the raw events, branch records and PRs; → `release` (when release tracking is
+  on) — the Jira release, the release branch per repo (how it was resolved, confidence, candidates), dev branches,
+  PRs per destination (shared integration PRs marked), release / QA / UAT stages, flags, next step, reminders
 - `daily/YYYY/MM/YYYY-MM-DD.md` — per day: summary, per-ticket work with times (incl. requests saved, DB flow
   updates, new artifacts), other work, outside Claude Code, commits, standup. A work day starts at `day_starts_at`
   in `.worklog/config.json`.
@@ -45,27 +50,41 @@ Claude Code sessions, git commits, Bruno requests, SQL scripts, `inbox.md` and `
 ## Ask the worklog's MCP tools first
 When the Chitragupta plugin is loaded, its read-only MCP server (`mcp__plugin_cg_chitragupta__*`) answers most
 questions in one call, in compact Markdown with the file paths to open for detail:
-`search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: findings, requests, queries,
-dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
+`search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: brief, findings, requests,
+queries, dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
 `get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name)` ·
-`list_tickets(q?, status?, repo?, since?)` · `get_alerts()`. Long answers end with "more: page=N" — pass `page`.
+`list_tickets(q?, status?, repo?, since?, release?)` (`release=YYYY-MM`: my tickets scheduled that month) ·
+`get_alerts()`. Long answers end with "more: page=N" — pass `page`.
 Use them before reading files; read the files below only for detail they don't show, or when the tools aren't
 available.
 
 ## How to answer
-1. Search in this order: the MCP tools above → ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
+1. Search in this order: the MCP tools above (for a ticket, its brief first) → ticket README → requests.md / db-flow.md / artifacts/INDEX.md → queries.md → knowledge/ →
    daily files by date → grep across the folder (ticket keys look like ABC-1234; the prefixes are `ticket_prefixes`
    in `.worklog/config.json`).
 2. Cite the file and date for every fact, e.g. "(tickets/ABC-1234/README.md, 2026-10-14)". Quote queries in
    fenced code blocks exactly as recorded.
-3. Never claim more than the files say. If something isn't recorded, say so plainly.
-4. Standups: use the "Standup for next working day" section of the latest daily file; if it is a draft, build
+3. Never claim more than the files say. If something isn't recorded, say so plainly. Answer from current items: in
+   the ticket JSON an item with `status: "superseded"` was replaced by `superseded_by`, `archived` is out of every view,
+   `review` means it may belong to another ticket (the hub's "Needs review"), and a TODO with `status: "done"` was
+   closed by `closed_by` (a PR or a pushed branch). Mention a superseded item only as history. An item archived with
+   reason "rebuild …" was replaced when the ticket was rebuilt from raw (`agent rebuild <KEY> --dry-run` prices one;
+   the user runs it, you don't).
+4. Ticket questions ("what was the root cause of ABC-1234?", "what did we change?", "any risks?"): answer from the brief
+   first (`get_ticket(key)` leads with it; `get_ticket(key, section="brief")` has all of it with what each evidence id
+   is), keep its evidence ids, and go to the findings only for detail it doesn't have. The user's corrections win:
+   an inbox note or a "My notes" line that contradicts the brief or an item is the answer, and say the brief is behind.
+   When the brief says "New findings since …" or there is none yet, say so and mention they can refresh it with
+   *Refresh brief* on the ticket's dashboard page or `/cg:ticket <KEY> --brief` (a model call; you don't run it).
+5. Standups: use the "Standup for next working day" section of the latest daily file; if it is a draft, build
    Yesterday/Today/Blockers from that day's ticket sections, one line each with ticket refs.
-5. Timesheets: sum the "≈ Time" column of each daily file's Tickets table per ticket and day (or run
+6. Timesheets: sum the "≈ Time" column of each daily file's Tickets table per ticket and day (or run
    `py -3 "{{LAUNCHER}}" cli hours --week` / `--month`); label totals as approximate (derived from Claude Code activity).
-6. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
-7. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
+7. Weekly summaries and handovers: build from daily files for the range and the ticket READMEs.
+8. "Replay / run the requests for <TICKET>": point to `bash tickets/<TICKET>/replay.sh qa` (and Bruno folder
    `bruno/<TICKET>`). Don't run replay.sh yourself: it sends real requests that can change data, so the user runs it.
+   Steps marked "changes a shared record" in requests.md need `--yes` on any env but local (say which records change
+   and whether a restore step exists before suggesting it).
    If it stops on a missing variable, the name to fill is in `bruno/.env.example`; the user fills `bruno/.env`
    themselves — never write secrets anywhere.
 
@@ -132,6 +151,23 @@ Answer from `py -3 "{{LAUNCHER}}" cli branches <KEY>` (or the ticket JSON's `git
 sentences with their commits ("3 commits not in release/1.4 — pushed after PR #812 merged" means they never arrived), then
 per target how many commits are ✓ / ⏳ / ✗. For "which PRs are open", look through `git.repos.*.prs` of recently active
 tickets (state open or draft). The data is as of the last background tick; `/cg:check <KEY>` fetches and refreshes now.
+
+## Releases, branching plan, UAT ("which release is ABC-1234 in?", "where do I branch from?", "what's left this month?")
+Before creating a branch or a PR for a ticket, and when the user starts or resumes work on one, read its release plan
+(`get_branch_status(key)` starts with it; also `cli branches <KEY>`): the Jira release and planned date, then per
+affected repo the development base, the PR target, observed branches and PRs, release / QA / UAT state, the next step
+and what is uncertain. Rules:
+- Give a branch base or PR target as certain only when the plan says `confirmed` or `linked`. `suggested` /
+  `unresolved` means: name the candidates and the missing decision, and recommend no base.
+- Commands in "Next:" are suggestions for the user to review and run; never run them yourself.
+- Say "unknown", not "missing", when the plan says unknown (stale refs, failed fetch, Jira not read, merge-commit-only
+  PR data). Say how old the data is.
+- UAT is `required`, `not_required` or `unknown`; unknown means ask, never "not needed". Deployment and acceptance are
+  unverified unless the plan says yes.
+"What's scheduled this month?" → `list_tickets(release="this-month")` or `cli branches <YYYY-MM>`: groups by planned
+release date, then overdue and unresolved-date tickets, with per-repo state and the next step.
+Release decisions are `/cg:branch release-map|release-unmap|release-pick|release-branch|release-repos|uat …` (or the
+matching `release-map:` … `uat:` line in `inbox.md` when the user asks).
 Never run git in the user's repos for this. To fix tracking, the user runs `/cg:branch link|unlink|abandon|restore|strategy …`
 (or you append the matching `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` line
 to `inbox.md` when they ask).
@@ -157,7 +193,11 @@ replay.sh or any other request against an API. If the user wants one of those, t
 ## The only writes allowed (only when the user explicitly asks)
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;
   `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `clear:` / `resend:` lines for the Jira worklog, and
-  `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking).
+  `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking;
+  `release-map:` / `release-unmap:` / `release-pick:` / `release-branch:` / `release-repos:` / `uat:` lines for release
+  tracking;
+  `ABC-1234: keep <item id>` keeps a "Needs review" item on its ticket, `ABC-1234: move <item id> ABC-1235` copies it
+  to ABC-1235 and archives it on ABC-1234, never deleting it).
 - Create a file in `{{HOME}}\_drop\` whose name starts with the ticket ID, e.g. `ABC-1234_lock-analysis.md`
   ("save this analysis to the worklog for ABC-1234"); the agent files it under the ticket's artifacts.
 Never edit any other worklog file.

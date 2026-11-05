@@ -8,6 +8,7 @@ import { Icon, Toasts, Dialog, themeMode } from './lib/ui.js';
 import { NAV, NAV_END, paletteOpen, keysOpen, morePagesOpen, pageKeys, setTheme, Desk } from './lib/shell.js';
 import { TodayPage } from './pages/today.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
+import { ReleasesPage } from './pages/releases.js';
 import { TimesheetPage } from './pages/timesheet.js';
 import { KnowledgePage } from './pages/knowledge.js';
 import { DbPage } from './pages/db.js';
@@ -43,7 +44,7 @@ function TopBar() {
     <nav class="primary-nav" aria-label="Pages">${primary.map((n) => item(n))}</nav>
     <div class="top-right">
       ${conn === 'offline' ? html`<a class="offline-status" href="#/health">Offline</a>` : null}
-      <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls="more-pages"
+      <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls=${more ? 'more-pages' : null}
         onClick=${() => morePagesOpen.set(!more)}><span class="desktop-more">More</span><span class="mobile-more">Pages</span><${Icon} name=${more ? 'up' : 'down'} size=${14} /></button>
       <button type="button" class="cmd" onClick=${() => paletteOpen.set(true)} aria-haspopup="dialog" aria-label="Go to a page, ticket, or command" aria-keyshortcuts="Control+K">
         <span>Go to</span><kbd>Ctrl K</kbd></button>
@@ -140,7 +141,7 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
+  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
   ['g then h', 'Health'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
@@ -155,7 +156,9 @@ function KeysDialog() {
 }
 function typing(t) { return t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)); }
 function railStep(dir) {
-  const links = Array.from(document.querySelectorAll('.rlist a'));
+  const switcher = document.querySelector('details.ticket-switcher');
+  if (switcher) switcher.open = true;
+  const links = Array.from(document.querySelectorAll('.rlist a')).filter((a) => a.getClientRects().length > 0);
   if (!links.length) return;
   let i = links.indexOf(document.activeElement);
   if (i < 0) i = links.findIndex((a) => a.getAttribute('aria-current'));
@@ -207,6 +210,7 @@ function Page() {
     case 'today': return html`<${TodayPage} route=${r} />`;
     case 'day': return html`<${TodayPage} route=${r} />`;
     case 'tickets': return r.arg ? html`<${TicketPage} key=${'t-' + r.arg} route=${r} />` : html`<${TicketsPage} route=${r} />`;
+    case 'releases': return html`<${ReleasesPage} route=${r} />`;
     case 'timesheet': return html`<${TimesheetPage} route=${r} />`;
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
     case 'db': return html`<${DbPage} route=${r} />`;

@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 from tests import support
 from tests.support import Isolated
@@ -145,7 +146,7 @@ def build_home(home, now=None):
     dayfile(old, {"ABC-1002": 300})
 
     _w(os.path.join(home, "data", "tickets", TICKET + ".json"), {
-        "id": TICKET, "title": "Order total is wrong for discounted items", "status": "In Progress",
+        "id": TICKET, "title": "Order total is wrong for discounted items", "title_source": "jira", "status": "In Progress",
         "first": old, "last": day, "repos": ["C:/src/shop-api"], "branches": ["feature/ABC-1001-order-total"],
         "tldr": "Discount applied twice in OrderService.total.", "problem": "Totals are off for discounted orders.",
         "items": {
@@ -169,9 +170,9 @@ def build_home(home, now=None):
                              "date": yday, "last": day, "stored_name": yday + "_order-trace.md", "versions": [1, 2]}},
         "files": {"src/OrderService.java": {"path": "src/OrderService.java", "role": "service", "changed": True, "last": day}},
     })
-    _w(os.path.join(home, "data", "tickets", "ABC-1002.json"), {"id": "ABC-1002", "title": "Checkout timeout", "last": day,
+    _w(os.path.join(home, "data", "tickets", "ABC-1002.json"), {"id": "ABC-1002", "title": "Checkout timeout", "title_source": "jira", "last": day,
                                                               "timeline": {day: {"minutes": 40}}})
-    _w(os.path.join(home, "data", "tickets", "ABC-1003.json"), {"id": "ABC-1003", "title": "Refund report", "last": yday,
+    _w(os.path.join(home, "data", "tickets", "ABC-1003.json"), {"id": "ABC-1003", "title": "Refund report", "title_source": "user", "last": yday,
                                                               "timeline": {yday: {"minutes": 200}}})
     _w(os.path.join(home, "tickets", TICKET, "requests.md"), REQUESTS_MD)
     _w(os.path.join(home, "tickets", TICKET, "db-flow.md"), DBFLOW_MD)
@@ -221,7 +222,11 @@ def snapshot(root):
 class Base(Isolated, unittest.TestCase):
     def setUp(self):
         self.isolate()
-        self.days = build_home(self.home)
+        fixed = common.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        clock = mock.patch.object(common, "now", return_value=fixed)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.days = build_home(self.home, fixed)
         from chitragupta import extract
         self._real_call = extract.call_claude
 

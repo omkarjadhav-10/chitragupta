@@ -1,14 +1,16 @@
 // Browser checks for the dashboard (run through scripts/ui/run.py, which serves a synthetic home).
 // node check.js <base url> <today YYYY-MM-DD> [screenshot dir]
 // Fails (exit 1) on: a serious or critical axe violation, a console or page error, any request that leaves
-// 127.0.0.1, a first view slower than 1 s, horizontal scrolling at 900 px, or a keyboard check that doesn't hold.
+// 127.0.0.1, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check that doesn't hold.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
 
 const AXE = fs.readFileSync(path.join(__dirname, 'vendor', 'axe.min.js'), 'utf8');
 const [base, today, shots] = process.argv.slice(2);
+const lastMonth = (() => { const d = new Date(+today.slice(0, 4), +today.slice(5, 7) - 2, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })();
 const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/tickets'], ['ticket', '#/tickets/ABC-1001'],
+  ['releases', '#/releases'], ['releases-month', '#/releases?month=' + lastMonth],
   ['ticket-branches', '#/tickets/ABC-1001?tab=branches'], ['ticket-dbflow', '#/tickets/ABC-1001?tab=dbflow'],
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
@@ -17,6 +19,7 @@ let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 
 async function launch() {
+  if (process.env.CG_UI_BROWSER) return chromium.launch({ executablePath: process.env.CG_UI_BROWSER });
   for (const channel of ['chrome', 'msedge']) {
     try { return await chromium.launch({ channel }); } catch (e) { /* try the next browser */ }
   }
@@ -25,6 +28,8 @@ async function launch() {
 
 (async () => {
   const browser = await launch();
+  await require('./regressions.js').run(browser, base, check, process.env.CG_UI_FOCUS);
+  if (process.env.CG_UI_FOCUS) { await browser.close(); process.exit(failed ? 1 : 0); }
   for (const theme of ['light', 'dark']) {
     for (const width of [1440, 1280, 900]) {
       console.log(theme + ' · ' + width + ' px');
@@ -144,7 +149,7 @@ async function launch() {
   await page.setViewportSize({ width: 900, height: 900 });
   await page.goto(base + '#/today');
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
-  check(await page.locator('#more-pages a').count() === 10, 'compact navigation exposes every page');
+  check(await page.locator('#more-pages a').count() === 11, 'compact navigation exposes every page');
   await page.keyboard.press('Escape');
   check(await page.locator('#more-pages').count() === 0, 'Escape closes navigation from its trigger');
   await page.locator('.dayline-span').first().click();
@@ -188,11 +193,42 @@ async function launch() {
   exportPage.on('pageerror', (e) => exportErrors.push(e.message));
   exportPage.on('console', (m) => { if (m.type() === 'error') exportErrors.push(m.text()); });
   exportPage.on('request', (r) => { if (!/^(data|blob):/.test(r.url())) exportErrors.push(r.url()); });
-  await exportPage.goto('data:text/html;base64,' + Buffer.from(exported).toString('base64'));
+  await exportPage.goto('about:blank');
+  await exportPage.setContent(exported, { waitUntil: 'domcontentloaded' });
   await exportPage.waitForSelector('#page-title');
   await exportPage.evaluate(() => document.fonts.ready);
   check(!exportErrors.length && await exportPage.locator('.font-licenses a').count() === 2, 'standalone export renders with embedded fonts and licenses and no network requests');
   await exportPage.close();
+
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.goto(base + '#/tickets/ABC-1002');
+  await page.locator('#page-title').waitFor();
+  const headingWidth = await page.locator('#page-title').evaluate((e) => e.getBoundingClientRect().width);
+  check(headingWidth >= 390 * .7, 'ticket heading keeps reading width on a phone');
+  await page.setViewportSize({ width: 900, height: 1000 });
+
+  const briefTicket = await (await page.request.get(base + 'api/tickets/ABC-1002')).json();
+  briefTicket.tldr = 'Legacy summary awaiting an earlier fix.';
+  briefTicket.brief = { ...briefTicket.brief, has_brief: true, sections: [{ id: 'root_cause', heading: 'Root cause', confidence: 'confirmed',
+    claims: [{ text: 'The reservation was never released.', cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] }] };
+  Object.assign(briefTicket.brief.summary.sections.find(s => s.id === 'root_cause'), { confidence: 'confirmed', claims: briefTicket.brief.sections[0].claims, empty: false, text: null });
+  await page.route('**/api/tickets/ABC-1002', r => r.fulfill({ json: briefTicket }));
+  await page.goto(base + '#/tickets/ABC-1002');
+  await page.reload();
+  await page.locator('article.brief').waitFor();
+  check(await page.locator('.ticket-summary').count() === 0 && (await page.locator('article.brief').innerText()).includes('The reservation was never released.'),
+    'generated brief leads without the legacy model summary');
+  briefTicket.brief.sections.push({ id: 'proposed', heading: 'Proposed fix', claims: [{
+    text: 'ShopOrderService.releaseStockAfterCommit'.repeat(6),
+    cites: briefTicket.findings.slice(0, 1).map(i => i.id) }] });
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.reload();
+  await page.locator('.full-brief > summary').click();
+  await page.locator('#b-proposed').waitFor();
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+    'long method names in an owner correction wrap on phones');
+  await page.setViewportSize({ width: 900, height: 1000 });
+  await page.unroute('**/api/tickets/ABC-1002');
 
   let dayVariant;
   await page.route('**/api/today', (r) => r.fulfill({ json: dayVariant }));

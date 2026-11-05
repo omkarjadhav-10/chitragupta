@@ -67,6 +67,13 @@ def rmtree(path, *_):
             shutil.rmtree(path, onerror=onerror)
 
 
+def local_iso(day, hh, mm, ss=0):
+    """ISO timestamp for a wall-clock time on `day` in this machine's timezone. Fixtures that mean "10:00 local"
+    use it instead of a fixed offset, so they hold on a CI runner in UTC as well as on a developer's machine."""
+    import datetime as _dt
+    return _dt.datetime.combine(_dt.date.fromisoformat(day), _dt.time(hh, mm, ss)).astimezone().isoformat(timespec="seconds")
+
+
 def rd(p):
     with open(p, encoding="utf-8") as f:
         return f.read()
@@ -215,3 +222,11 @@ def _leftovers(dirs, n=10):
         for dp, _, fs in os.walk(d):
             out += [os.path.join(dp, f) for f in fs]
     return out[:n] or dirs
+
+
+def backup_file(backups, step, *rel):
+    """Where a migration step's backup keeps the copy of <rel> (manifest.json: a too-long path is stored under _long)."""
+    import json
+    dest = [b for b in backups if os.path.basename(b).startswith("chitragupta-%s-" % step)][0]
+    with open(os.path.join(dest, "manifest.json"), encoding="utf-8") as f:
+        return os.path.join(dest, json.load(f)[os.path.join(*rel)])
