@@ -17,6 +17,10 @@ export function healthIssues(s) {
     if (!hit || hit.status !== 'connected') add((c.role === 'database' ? 'Database MCP' : 'Jira MCP') + ' needs a look',
       'Connection: ' + (hit ? hit.status || 'unknown' : 'unknown') + '. Review MCP status below; your worklog is still recorded.');
   });
+  const ps = s.personal || {};
+  [['Your commits', ps.git]].concat((ps.hosts || []).map((h) => ['Your pull requests on ' + h.instance, h])).forEach(([what, c]) => {
+    if (c && c.state === 'failing') add(what + ': the last read failed', (c.why || '') + ' Earlier results are kept and marked; run /cg:check, or check the sign-in of that tool.', '#/profile?section=identity');
+  });
   if (s.safety && !s.safety.enforced) add('Safety checks need a look', (s.safety.problems || []).join('; ') || 'Run /cg:doctor for diagnostics.');
   return out;
 }

@@ -228,8 +228,11 @@ const cases = {
         'Releases lists the month\'s release, then Overdue and Release date unresolved');
       const row = page.locator('article.relrow', { has: page.locator('h3 a', { hasText: 'ABC-1001' }) });
       check(await row.locator('.status.ok').count() === 0 && (await row.innerText()).includes('In progress'), 'a ticket that isn\'t ready never shows Ready');
-      const cells = await row.locator('tbody tr').allInnerTexts();
+      check(/Pending: service-ui Release missing/.test(await row.innerText()), 'the compact row names the pending repository and stage');
+      await row.locator('summary').first().click();
+      const cells = await row.locator('.relrepo-b').allInnerTexts();
       check(cells.length === 2 && /✓ present/.test(cells[0]) && /✗ missing/.test(cells[1]), 'one finished repo keeps the other repo\'s own state, in symbols and words');
+      check(heads[0] === 'Overdue', 'what needs attention (overdue) comes before the month\'s releases');
       check((await page.locator('article.relrow', { has: page.locator('h3 a', { hasText: 'ABC-1005' }) }).innerText()).includes('Not started'), 'a scope-only ticket shows as not started');
       const month = ov.month;
       await page.getByRole('button', { name: /^Previous month/ }).click();
@@ -245,6 +248,10 @@ const cases = {
       await page.locator('.relline a').click();
       await page.locator('#release-plan').waitFor();
       check(/tab=branches/.test(page.url()), 'the header\'s release line opens the release plan on Branches & PRs');
+      const brief = await page.locator('#release-plan').innerText();
+      check(/Development base/.test(brief) && /Development PR target/.test(brief) && /Next step/.test(brief),
+        'release plan leads with the base, PR target and next step per repository');
+      for (const d of await page.locator('#release-plan details').all()) await d.evaluate((e) => { e.open = true; });
       const plan = await page.locator('#release-plan').innerText();
       check(plan.includes('shared integration PR') && plan.includes('Wrong target') && plan.includes('Moved from'),
         'release plan shows shared integration PRs, wrong targets and the release history');

@@ -90,9 +90,10 @@ Release tracking: the ticket's Jira release, its release branch per repo, releas
 | `releases.jira.uat_deployed_statuses` | list | `[]` | Jira statuses that count as deployed to UAT. Empty: deployment stays unverified. |
 | `releases.jira.uat_accepted_statuses` | list | `[]` | Jira statuses that count as UAT accepted. |
 | `releases.jira.exclude_statuses` | list | cancelled, canceled, won't do, wont do, rejected, duplicate | Tickets in these statuses are left out of the monthly overview. |
-| `releases.jira.scope_jql` | string | `assignee = currentUser() AND fixVersion is not EMPTY AND updated >= -120d` | The scope search behind the monthly overview. |
+| `releases.jira.scope_jql` | string | `fixVersion is not EMPTY AND updated >= -120d` | The scope search behind the monthly overview. It is always narrowed to `assignee in (<your confirmed Jira ids>)` and `project in (<your Jira projects>)`; an `assignee = currentUser()` in it is replaced, and with no confirmed Jira account the search doesn't run. |
 | `releases.jira.scope_refresh_hours` | int | `12` | How often the scope search runs. |
-| `releases.jira.scope_limit` | int | `50` | Issues read per scope search (at most 100). |
+| `releases.jira.scope_limit` | int | `50` | Issues per page of the scope search (at most 100). |
+| `releases.jira.scope_max_pages` | int | `4` | Pages read in one scope job (one model call, at most 20). An unfinished pass resumes 15 minutes later; only a complete pass may drop a ticket it no longer returns. |
 | `releases.jira.versions_refresh_hours` | int | `24` | How often each project's versions catalog is re-read. |
 | `releases.scope` | object | `{"assigned": true, "branches": true, "worked": true}` | What makes a ticket yours for the overview: Jira assignment, a branch named for it with your commits, Claude Code work on it. |
 
@@ -104,7 +105,7 @@ Your developer profile: who you are and which identities and scope are yours. Ev
 |---|---|---|---|
 | `profile.display_name` | string | `""` | How summaries greet you (at most 80 characters). Never used to match work. |
 | `profile.email` | string | `""` | Your primary work email, for example `developer@acme.test`. Shown to you only (masked by default); the Jira account lookup uses it. Not proof of authorship by itself. |
-| `profile.accounts` | list | `[]` | Confirmed provider accounts, each `{"provider": "jira" \| "github" \| "gitlab" \| "azure" \| "bitbucket", "instance", "id", "login"}` plus the `source` it was confirmed from. `instance` is lower case: `github.com`, `dev.azure.com/<org>`, a GitLab host, a Jira site. The stable `id` decides when the provider reports one; else the exact `login`. One account per provider instance; bot logins and token-like values are refused. |
+| `profile.accounts` | list | `[]` | Confirmed provider accounts, each `{"provider": "jira" \| "github" \| "gitlab" \| "azure" \| "bitbucket", "instance", "id", "login"}` plus the `source` it was confirmed from. `instance` is lower case: `github.com`, `dev.azure.com/<org>`, a GitLab host, a Jira site. The stable `id` decides when the provider reports one; else the exact `login`. Several accounts may share an instance (each identified by provider, instance and id, else login; the same account twice is refused); bot logins and token-like values are refused. |
 | `profile.repos` | list of paths | `[]` | Watched repositories in scope. Empty: every `watched_repos` entry. |
 | `profile.jira_projects` | list of strings | `[]` | Jira projects in scope. Empty: `ticket_prefixes`. |
 | `profile.focus` | string | `""` | Current projects or responsibilities (at most 400 characters), given to Claude as planning context. |

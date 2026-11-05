@@ -385,14 +385,15 @@ def check(it, value, current):
     if t == "accounts":
         if not isinstance(value, list) or len(value) > 20:
             return "Use a list of at most 20 accounts."
+        from . import profile
         seen = set()
         for i, a in enumerate(value, 1):
             why = _check_account(i, a)
             if why:
                 return why
-            k = (a["provider"], a["instance"])
+            k = profile.account_key(a)  # several accounts of yours may share an instance; the same one twice may not
             if k in seen:
-                return "Account %d: there is already a %s account for %s." % (i, a["provider"], a["instance"])
+                return "Account %d: this %s account for %s is listed twice." % (i, a["provider"], a["instance"])
             seen.add(k)
         return None
     if t == "repo_paths":

@@ -21,7 +21,7 @@ def stash_commit(ref, subject):
 
 def scan_commits(cfg, state, since_dt):
     """My commits in the profile's repositories since `since_dt`. Dedupe by sha via state['commits_seen'].
-    `--author` narrows git's own walk (a pattern, so it also matches look-alike addresses); every result is then
+    `--author` narrows git's own walk (a literal substring, so it can also match look-alike addresses); every result is then
     rechecked against the confirmed emails exactly (profile.Policy) before it is kept. No confirmed email: nothing."""
     from . import profile
     seen = state.setdefault("commits_seen", {})
@@ -38,7 +38,8 @@ def scan_commits(cfg, state, since_dt):
                 "--since=" + since_dt.isoformat(timespec="seconds"), "--name-status",
                 "--format=" + _SEP_REC + "%H" + _SEP_FLD + "%aI" + _SEP_FLD + "%ae" + _SEP_FLD + "%S" + _SEP_FLD + "%s" +
                 _SEP_FLD + "%b" + _SEP_FLD]
-        args += ["--regexp-ignore-case"] + ["--author=" + re.escape(e) for e in emails]
+        # fixed strings: a confirmed address is literal text, not a pattern ("+" in an alias is not an operator)
+        args += ["--regexp-ignore-case", "--fixed-strings"] + ["--author=" + e for e in emails]
         rc, so, se = gitro.run(cfg, repo, args, timeout=60)
         if rc != 0:
             common.log("agent", "git log failed for %s: %s" % (repo, se.strip()[:300]))

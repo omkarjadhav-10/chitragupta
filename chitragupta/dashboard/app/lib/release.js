@@ -157,47 +157,78 @@ function RepoPlan({ name, e, uatReq }) {
   const br = e.branch || {}, rb = br.state === 'confirmed' || br.state === 'linked' ? br.name : null;
   const u = e.uat_conf, st = e.stages || {};
   const id = 'rp-' + name.replace(/[^A-Za-z0-9_-]/g, '_');
+  const devWrong = (e.dev || []).filter((d) => d.base === 'wrong');
+  const stageDd = (s, keepDone) => html`<${StageMark} s=${s} /> <span class="muted small">${(s || {}).state === 'present' && !keepDone ? '' : (s || {}).detail || ''}</span>`;
   return html`<section class="relrepo" aria-labelledby=${id}>
-    <h3 id=${id}><${Icon} name="branch" size=${17} />${name}${e.candidate ? html`<${Chip}>candidate: no branches yet</${Chip}>` : e.affected && e.affected.how ? html`<${Chip}>${e.affected.how}</${Chip}>` : null}</h3>
+    <h3 id=${id}><${Icon} name="branch" size=${17} />${name}${e.candidate ? html`<${Chip}>candidate: no branches yet</${Chip}>` : null}</h3>
     <dl class="kv relkv">
-      <dt>Development base</dt><dd><${BaseLine} br=${br} /></dd>
-      <dt>PR target</dt><dd>${rb ? html`<span class="mono">${rb}</span>` : html`<span class="muted">none until the release branch is confirmed</span>`}</dd>
-      ${e.strategy ? html`<dt>Strategy</dt><dd>${e.strategy}</dd>` : null}
-      ${!e.candidate && uatReq === 'required' ? html`<dt>UAT destination</dt><dd>${u && u.branch ? html`<span class="mono">${u.branch}</span> <span class="muted">via ${(u.promotion || {}).kind || 'unspecified'}${(u.promotion || {}).from ? ' from ' + u.promotion.from : ''}</span>` : html`<span class="muted">not configured</span>`}</dd>` : null}
+      <dt>Development base</dt><dd>${rb ? html`<span class="mono wrap">${rb}</span>` : html`<${Status} kind=${BRANCH[br.state] || 'warn'} quiet>not certain</${Status}> <span class="small">${br.missing || ''}</span>`}
+        ${devWrong.length ? html`<div class="small"><${Status} kind="bad" quiet>Wrong base:</${Status}> ${devWrong.map((d) => d.branch + ' started from ' + d.parent).join('; ')}</div>` : null}</dd>
+      <dt>Development PR target</dt><dd>${rb ? html`<span class="mono wrap">${rb}</span>` : html`<span class="muted">none until the release branch is confirmed</span>`}</dd>
+      ${e.candidate ? null : html`<dt>Release</dt><dd>${stageDd(st.release)}</dd><dt>QA</dt><dd>${stageDd(st.qa)}</dd>
+        <dt>UAT</dt><dd>${stageDd(st.uat, true)}
+          ${uatReq === 'required' && u && u.branch ? html`<div class="muted small">into <span class="mono">${u.branch}</span> via ${(u.promotion || {}).kind || 'unspecified'}${(u.promotion || {}).from ? ' from ' + u.promotion.from : ''}</div>` : null}</dd>`}
     </dl>
-    <ul class="relstages" aria-label=${'Stages in ' + name}>${ROLES.map(([r, label]) => html`<li key=${r}><span class="lab">${label}</span><${StageMark} s=${st[r]} />
-      <span class="muted small">${(st[r] || {}).detail || ''}</span></li>`)}</ul>
     ${(e.flags || []).length ? html`<ul class="relflags">${e.flags.map((f, i) => html`<li key=${i}><${Status} kind="warn" quiet>Flag:</${Status}> ${f.text}</li>`)}</ul>` : null}
     ${e.next ? html`<p class="relnext"><span class="lab">Next step:</span> <${CodeText} text=${e.next} /></p>` : null}
     <${Uncertainty} f=${e.freshness} />
-    ${e.candidate ? null : html`<${DevBranches} list=${e.dev} name=${name} /><${RepoPrs} e=${e} name=${name} />`}
+    <details class="more"><summary>Evidence for ${name}: branches, pull requests and how the base was found</summary>
+      <dl class="kv relkv"><dt>Release branch</dt><dd><${BaseLine} br=${br} /></dd>
+        ${e.strategy ? html`<dt>Strategy</dt><dd>${e.strategy}</dd>` : null}
+        ${e.affected && e.affected.how ? html`<dt>Why this repository</dt><dd>${e.affected.how}</dd>` : null}</dl>
+      ${e.candidate ? null : html`<${DevBranches} list=${e.dev} name=${name} /><${RepoPrs} e=${e} name=${name} />`}
+    </details>
   </section>`;
 }
 
-// The ticket's release plan at the top of Branches & PRs (release.view): nothing when release tracking has no record.
+// One list of what stands between the ticket and "ready": the reminders and the readiness gaps, each said once.
+function Blockers({ plan }) {
+  const rd = plan.readiness || {};
+  if (rd.ready) return null;
+  const seen = new Set(), items = [];
+  // what each repository block already shows (its flags, its release / QA / UAT state) isn't said again here
+  const shown = new Set(['wrong-base', 'old-release-base', 'wrong-target', 'old-release-pr', 'dev-into-integration']);
+  (plan.reminders || []).forEach((r) => { if (!shown.has(r.kind) && !seen.has(r.text)) { seen.add(r.text); items.push(r); } });
+  (rd.missing || []).forEach((m) => {
+    if (/: \d+ flags?$/.test(m) || /^[^:]+: (release|qa|uat) [a-z ]+$/.test(m)) return;
+    if (!seen.has(m)) { seen.add(m); items.push({ text: m, severity: 'info' }); }
+  });
+  if (!items.length) return null;
+  const top = items.slice(0, 4), rest = items.slice(4);
+  const line = (r, i) => { const [kind, word] = SEVERITY[r.severity] || SEVERITY.info; return html`<li key=${i}><${Status} kind=${kind} quiet>${word}:</${Status}> <${CodeText} text=${r.text} /></li>`; };
+  return html`<div class="relrem"><p class="lab">Not ready yet</p><ul>${top.map(line)}</ul>
+    ${rest.length ? html`<details class="more"><summary>${plural(rest.length, 'more item')}</summary><ul>${rest.map(line)}</ul></details>` : null}</div>`;
+}
+
+// The ticket's release plan at the top of Branches & PRs (release.view): the release once, then per repository the
+// development base, PR target, QA, UAT and the next step; blockers once; evidence and provenance on request.
 export function ReleasePlan({ plan, brief, k }) {
   if (!plan) return null;
   const sel = selected(plan), how = plan.selection || {}, rd = plan.readiness || {};
   const req = ((plan.uat || {}).requirement || {}).state;
   const names = Object.keys(plan.repos || {}).sort((a, b) => (!!plan.repos[a].candidate - !!plan.repos[b].candidate) || a.localeCompare(b));
+  const hist = (plan.uat || {}).history || [];
   return html`<section class="relplan" id="release-plan" tabindex="-1" aria-labelledby="rp-title">
     <div class="sec-head"><h2 id="rp-title">Release plan</h2><${ReadyStatus} ready=${rd.ready} /><span class="grow"></span>
       ${(brief || []).length && !EXPORT ? html`<${CopyButton} text=${brief.join('\n')} label="Copy as text" what="the release plan" />` : null}</div>
     <dl class="kv relkv">
-      <dt>Release</dt><dd>${sel ? html`<strong>${sel.name}</strong> · ${sel.planned_date ? 'planned ' + fmtDay(sel.planned_date) : 'planned date unknown'}${sel.date_source ? html` <span class="muted">(${sel.date_source})</span>` : null}
-        ${sel.name_date && sel.name_date.text ? html`<div class="muted small">The name says ${sel.name_date.text}: shown only, never used as the planned date.</div>` : null}`
+      <dt>Release</dt><dd>${sel ? html`<strong>${sel.name}</strong> · ${sel.planned_date ? 'planned ' + fmtDay(sel.planned_date) : 'planned date unknown'}${sel.date_source ? html` <span class="muted">(${sel.date_source})</span>` : null}`
         : html`<${Status} kind="warn" quiet>Not resolved:</${Status}> ${how.missing || how.how || 'no release'}`}</dd>
-      <dt>Chosen by</dt><dd>${how.how || '—'}</dd>
       ${!sel && (how.candidates || []).length ? html`<dt>Fix versions</dt><dd><ul class="relcands">${how.candidates.map((c) => html`<li key=${c}>${c}</li>`)}</ul>
         <div class="muted small">Choose the one that counts: <code>/cg:branch release-pick ${k} "&lt;release&gt;"</code></div></dd>` : null}
-      ${(plan.history || []).length ? html`<dt>Moved from</dt><dd>${plan.history.slice().reverse().map((h, i) => html`<div key=${i}>${(h.releases || []).map((x) => x.name || '?').join(', ')} on ${fmtDay(h.at, true)}
-        ${Object.keys(h.branches || {}).length ? html` <span class="muted small">(was ${Object.keys(h.branches).map((n) => n + ': ' + h.branches[n]).join(', ')})</span>` : null}</div>`)}</dd>` : null}
-      <dt>UAT</dt><dd><${UatFacts} uat=${plan.uat} /></dd>
+      <dt>UAT</dt><dd><${UatFacts} uat=${plan.uat} compact /></dd>
     </dl>
-    <${Freshness} computed=${plan.computed_at} jira=${plan.jira} repos=${names.filter((n) => !plan.repos[n].candidate).map((n) => [n, plan.repos[n].freshness])} />
-    <${Reminders} list=${plan.reminders} />
-    <${MissingList} ready=${rd.ready} missing=${rd.missing} />
+    <${Blockers} plan=${plan} />
     ${names.length ? names.map((n) => html`<${RepoPlan} key=${n} name=${n} e=${plan.repos[n]} uatReq=${req} />`)
       : html`<p class="muted">No affected repository known yet: one counts once the ticket has a branch or PR in it.</p>`}
+    <details class="more"><summary>Provenance and history</summary>
+      <dl class="kv relkv"><dt>Chosen by</dt><dd>${how.how || '—'}</dd>
+        ${sel && sel.name_date && sel.name_date.text ? html`<dt>Name date</dt><dd>The name says ${sel.name_date.text}: shown only, never used as the planned date.</dd>` : null}
+        ${(plan.history || []).length ? html`<dt>Moved from</dt><dd>${plan.history.slice().reverse().map((h, i) => html`<div key=${i}>${(h.releases || []).map((x) => x.name || '?').join(', ')} on ${fmtDay(h.at, true)}
+          ${Object.keys(h.branches || {}).length ? html` <span class="muted small">(was ${Object.keys(h.branches).map((n) => n + ': ' + h.branches[n]).join(', ')})</span>` : null}</div>`)}</dd>` : null}
+        <dt>UAT evidence</dt><dd><${UatFacts} uat=${plan.uat} />
+          ${hist.length ? html`<div class="small muted">For earlier changes (history, not the changes in UAT now): ${hist.map((h) => h.kind + ' ' + fmtDay(h.at, true)).join('; ')}</div>` : null}</dd></dl>
+      <${Freshness} computed=${plan.computed_at} jira=${plan.jira} repos=${names.filter((n) => !plan.repos[n].candidate).map((n) => [n, plan.repos[n].freshness])} />
+    </details>
   </section>`;
 }

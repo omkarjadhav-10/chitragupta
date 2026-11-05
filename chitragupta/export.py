@@ -197,7 +197,7 @@ def snapshot(key, mode="full", now=None):
         raise ValueError("mode must be full, team or shareable")
     from .dashboard import api
     t = api.ticket((key or "").upper())
-    if not t:
+    if not t or t.get("outside"):  # another person's work is never exported as yours
         return None
     t = json.loads(json.dumps(t, default=str))  # a private copy: api results may be cached
     if t.get("focused"):

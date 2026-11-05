@@ -59,8 +59,27 @@ def read_day(day):
 
 
 def read_ticket(key):
+    """A ticket record inside your personal scope (profile.ticket_scope), else None."""
     from . import store
-    return common.read_json(store.ticket_path(key), None)
+    from .dashboard import api
+    tk = common.read_json(store.ticket_path(key), None)
+    if tk and not api.scope_of(key).get("visible"):
+        return None
+    return tk
+
+
+def outside(key):
+    """True (after saying why) when the ticket has a record that is outside your personal scope."""
+    from . import store
+    from .dashboard import api
+    if not os.path.exists(store.ticket_path(key)):
+        return False
+    s = api.scope_of(key)
+    if s.get("visible"):
+        return False
+    out("%s is outside your personal scope: %s. Only your own work is shown; include it on the Profile page "
+        "(Collaborative tickets) if you work on it with someone." % (key, s.get("reason")))
+    return True
 
 
 def norm_key(key):
@@ -261,6 +280,8 @@ def cmd_ticket(a):
     key = norm_key(a.key)
     if not key:
         return 0  # informational: the /cg: skills inject this output
+    if outside(key):
+        return 0
     tk = read_ticket(key)
     files = ticket_files(key)
     if not tk and not files:
@@ -367,7 +388,9 @@ def cmd_branches(a):
     key = norm_key(a.key)
     if not key:
         return 0  # informational: the /cg: skills inject this output
-    tk = read_ticket(key)
+    if outside(key):
+        return 0
+    tk = read_ticket(key) or {}
     if a.json:
         out(json.dumps(tk.get("git") or {}, indent=1, ensure_ascii=False))
         return 0
@@ -474,7 +497,7 @@ def cmd_check(a):
         out("! %s: %s" % (n, e))
     for t in res["tickets"]:
         out()
-        for line in branches_report(t, read_ticket(t)):
+        for line in branches_report(t, read_ticket(t) or {}):
             out(line)
     if not res["tickets"]:
         out("No active tickets with branches.")
@@ -523,7 +546,8 @@ def cmd_branch(a):
     return 0
 
 
-RELEASE_ACTIONS = ("release-map", "release-unmap", "release-pick", "release-branch", "release-repos", "uat")
+RELEASE_ACTIONS = ("release-map", "release-unmap", "release-pick", "release-branch", "release-repos", "uat",
+                   "uat-deployed", "uat-accepted")
 
 
 def _release_directive(act, args):

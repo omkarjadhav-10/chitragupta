@@ -2,7 +2,7 @@
 name: branch
 description: Fix branch tracking by hand - link or unlink a branch and a ticket, mark a branch abandoned or restore it, set a repo's or ticket's branching strategy, or record release decisions (which branch ships a Jira release, which fix version counts, which repos a ticket touches, whether it needs UAT).
 disable-model-invocation: true
-argument-hint: "link|unlink <repo> <branch> <KEY> · abandon|restore <repo> <branch> · strategy <repo|KEY> <name> · release-map <repo> <release> <branch> · release-pick|release-branch|release-repos|uat <KEY> …"
+argument-hint: "link|unlink <repo> <branch> <KEY> · abandon|restore <repo> <branch> · strategy <repo|KEY> <name> · release-map <repo> <release> <branch> · release-pick|release-branch|release-repos|uat|uat-deployed|uat-accepted <KEY> …"
 allowed-tools:
   - Bash(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli branch *)
   - PowerShell(py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" cli branch *)
@@ -36,6 +36,7 @@ Turn the request into exactly one of these and run it:
 | only for ABC-1234, service-ui uses another branch | `… cli branch release-branch ABC-1234 service-ui <branch>` (`-` clears) |
 | ABC-1234 only touches service-api | `… cli branch release-repos ABC-1234 service-api` (`-` clears) |
 | ABC-1234 needs UAT / doesn't | `… cli branch uat ABC-1234 required` / `not_required` / `unknown` |
+| ABC-1234's changes now in UAT are deployed / accepted (I checked) | `… cli branch uat-deployed ABC-1234` / `uat-accepted ABC-1234` (counts for exactly the changes in UAT now; a later commit needs it again) |
 
 `<repo>` is the repo folder's name as shown by `/cg:branches`. Keep a release name with spaces in double quotes. The command appends one line to `inbox.md`; the background agent applies it on its next tick (`/cg:check` applies it at once). Report what it printed. If it says "Not added", fix the arguments from its message or ask. Never edit `inbox.md` or any other file yourself.
 

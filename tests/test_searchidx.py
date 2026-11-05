@@ -168,7 +168,8 @@ class TestUpdates(IdxBase):
         self.assertEqual(self.ix.search("zeppelin")["total"], 1)
         self.assertEqual(self.ix.stats()["view"], "disk")
         before = os.stat(self.db()).st_mtime_ns, os.path.getsize(self.db())
-        _w(os.path.join(self.home, "data", "tickets", "ABC-1006.json"), {"id": "ABC-1006", "title": "Wombat import"})
+        _w(os.path.join(self.home, "data", "tickets", "ABC-1006.json"), {"id": "ABC-1006", "title": "Wombat import",
+                                                                         "last": self.days["day"]})
         self.ix.invalidate()
         self.assertEqual(self.top("wombat", self.ix.default_engine())["ref"], "ABC-1006")  # behind: a copy in memory
         self.assertEqual(self.ix.stats()["view"], "memory")

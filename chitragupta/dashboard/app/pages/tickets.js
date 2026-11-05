@@ -387,8 +387,16 @@ export function TicketPage({ route }) {
     pageKeys.set(k);
     return () => pageKeys.set({});
   }, [key]);
-  const loadTab = res.data && res.data.lazy && !EXPORT && ['branches', 'dbflow', 'requests', 'artifacts', 'notes'].includes(tab);
+  const loadTab = res.data && !res.data.outside && res.data.lazy && !EXPORT && ['branches', 'dbflow', 'requests', 'artifacts', 'notes'].includes(tab);
   const detail = useApi(loadTab ? '/api/tickets/' + encodeURIComponent(key) + '?section=' + tab : null);
+  if (res.data && res.data.outside) {  // somebody else's work: the server says only that, and why
+    const s = res.data.scope || {};
+    return html`<${Desk}><${PageHead} title=${key} sub="Outside your personal scope" />
+      <div class="alert quietalert" role="status"><${Icon} name="info" size=${18} /><div class="grow">
+        <p><strong>${key} isn't part of your work.</strong> ${s.reason || ''}.</p>
+        <p class="small">Chitragupta shows only your own work on tickets: assigned to one of your confirmed Jira accounts, included by you, or carrying your own sessions, findings or commits.
+          If you work on it with someone, <a href="#/profile?section=scope">include it on the Profile page</a> with a reason; only your own activity on it will count.</p></div></div></${Desk}>`;
+  }
   const t = res.data && detail.data && detail.data.key === key && detail.data.section === tab ? Object.assign({}, res.data, detail.data) : res.data;
   const g = (t && t.git) || {};
   const nb = Object.values(g.repos || {}).reduce((a, e) => a + (e.branches || []).length, 0);

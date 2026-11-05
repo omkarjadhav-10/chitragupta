@@ -88,7 +88,7 @@ class ReleaseCase(Isolated, unittest.TestCase):
             json.dump(rec, f)
 
     def jira(self, key, versions=None, uat=None, status="In Progress", assignee=True, simplified=False, error=None,
-             fields="summary,status,fixVersions,assignee,labels," + UAT_FIELD, labels=None):
+             fields="summary,status,fixVersions,assignee,labels," + UAT_FIELD, labels=None, at="2026-10-10T09:00:00+05:30"):
         """data/jira/<KEY>.json as the card job writes it (raw = the jira_get_issue result)."""
         if error:
             rec = {"key": key, "fetched_at": "2026-10-10T09:00:00+05:30", "card": {}, "raw": None, "error": error}
@@ -106,7 +106,7 @@ class ReleaseCase(Isolated, unittest.TestCase):
                 if uat is not None:
                     f[UAT_FIELD] = {"value": uat, "id": "1"}
                 iss = {"key": key, "fields": f}
-            rec = {"key": key, "fetched_at": "2026-10-10T09:00:00+05:30", "card": {"found": True, "status": status},
+            rec = {"key": key, "fetched_at": at, "card": {"found": True, "status": status},
                    "raw": json.dumps(iss), "error": None, "fields": fields}
         os.makedirs(os.path.join(self.home, "data", "jira"), exist_ok=True)
         with open(os.path.join(self.home, "data", "jira", key + ".json"), "w", encoding="utf-8") as f:
@@ -491,12 +491,19 @@ class Scenarios(ReleaseCase):
         self.assertIn("uat-accepted", kinds)
         self.assertNotIn("uat-missing", kinds)
         self.assertFalse(r["readiness"]["ready"])
-        # explicit evidence settles acceptance only
+        # explicit evidence settles acceptance only, and only when Jira was read after these changes reached UAT
         self.over = {"jira": {"uat_field": UAT_FIELD, "uat_accepted_statuses": ["UAT Done"]}}
-        self.jira("ABC-1001", [V_DEC], uat="Yes", status="UAT Done")
+        self.jira("ABC-1001", [V_DEC], uat="Yes", status="UAT Done")  # an old read: not evidence for these changes
         self.track()
         r = self.rel()
+        self.assertEqual(r["uat"]["accepted"]["state"], "unknown")
+        self.assertIn("no Jira read since these changes reached UAT", r["uat"]["accepted"]["source"])
+        later = (NOW + dt.timedelta(hours=1)).isoformat(timespec="seconds")
+        self.jira("ABC-1001", [V_DEC], uat="Yes", status="UAT Done", at=later)
+        self.track(now=NOW + dt.timedelta(hours=2))
+        r = self.rel()
         self.assertEqual((r["uat"]["deployed"]["state"], r["uat"]["accepted"]["state"]), ("unknown", "yes"))
+        self.assertEqual(r["uat"]["accepted"]["rev"], r["uat"]["revision"]["rev"])
 
     def test_12_later_changes_need_promotion_again(self):
         self.jira("ABC-1001", [V_DEC], uat="No")
@@ -552,7 +559,7 @@ class Scenarios(ReleaseCase):
 
     def test_14_month_overview_boundary_overdue_and_partial_repos(self):
         from chitragupta import release
-        cfg = self.cfg()
+        cfg = dict(self.cfg(), profile={"accounts": [{"provider": "jira", "instance": "acme.atlassian.net", "id": "acct-test"}]})
 
         def rec(key, planned, ready=False, repos=None, first="2026-10-01", status=""):
             v = {"key": "ABC:%s" % key, "name": "Release " + (planned or "?"), "planned_date": planned}
@@ -571,14 +578,18 @@ class Scenarios(ReleaseCase):
         rec("ABC-2006", "2026-12-14", first="")  # not mine: no work, no assignment, no branch
         os.makedirs(os.path.dirname(release.scope_path()), exist_ok=True)
         with open(release.scope_path(), "w", encoding="utf-8") as f:
-            json.dump({"fetched_at": "2026-12-03T08:00:00+05:30", "mine_only": True, "issues": {
+            json.dump({"fetched_at": "2026-12-03T08:00:00+05:30", "binding": "acct-test", "complete": True, "issues": {
                 "ABC-2007": {"versions": [{"id": "", "name": "Release 2026-12-14", "project": "ABC",
                                            "release_date": "2026-12-14"}], "summary": "Not started yet",
+                             "status": "To Do", "assignee_me": True},
+                # an unconfirmed answer (the signed-in account's search, no assignee compared): never yours
+                "ABC-2008": {"versions": [{"id": "", "name": "Release 2026-12-14", "project": "ABC",
+                                           "release_date": "2026-12-14"}], "summary": "Someone's",
                              "status": "To Do", "assignee_me": None}}}, f)
         ov = release.month_overview(None, cfg, now=dt.datetime(2026, 12, 3, 10, 0, tzinfo=TZ))
         self.assertEqual(ov["month"], "2026-12")
         dec = {r["key"]: r for g in ov["groups"] for r in g["tickets"]}
-        self.assertEqual(sorted(dec), ["ABC-2001", "ABC-2007"])
+        self.assertEqual(sorted(dec), ["ABC-2001", "ABC-2007"])  # ABC-2008: not compared with your account
         self.assertFalse(dec["ABC-2001"]["ready"])
         self.assertEqual([x["repo"] for x in dec["ABC-2001"]["repos"]], ["service-api", "service-ui"])
         self.assertEqual(dec["ABC-2001"]["repos"][1]["qa"]["state"], "missing")
@@ -706,8 +717,9 @@ class Jobs(ReleaseCase):
 
         def scope(cfg, health):
             calls.append("scope")
-            return release.save_scope([{"key": "ABC-1001", "fields": {"fixVersions": [V_DEC], "status": {"name": "To Do"}}}],
-                                      "assignee = currentUser()", cfg, common_now())
+            return release.save_scope([{"key": "ABC-1001", "fields": {"fixVersions": [V_DEC], "status": {"name": "To Do"},
+                                                                    "assignee": {"accountId": "acct-test"}}}],
+                                      release.scope_query(cfg)[0], cfg, common_now())
 
         def versions(p, cfg, health):
             calls.append("versions:" + p)
@@ -724,7 +736,8 @@ class Jobs(ReleaseCase):
             os.makedirs(os.path.dirname(release.versions_path("ABC")), exist_ok=True)
 
             class A:
-                cfg = self.cfg()
+                cfg = dict(self.cfg(), profile={"accounts": [{"provider": "jira", "instance": "acme.atlassian.net",
+                                                              "id": "acct-test"}]})
                 health = {}
                 state = {}
             jobs = kbjobs.KBJobs(A())
@@ -735,7 +748,7 @@ class Jobs(ReleaseCase):
             mcpjobs.jira_release_scope, mcpjobs.jira_versions = real
         with open(release.scope_path(), encoding="utf-8") as f:
             sc = json.load(f)
-        self.assertTrue(sc["mine_only"])
+        self.assertEqual(sc["binding"], "acct-test")  # rows are bound to the confirmed account they were checked against
         self.assertEqual(sc["issues"]["ABC-1001"]["versions"][0]["name"], "FY99 December 14th Release")
         self.assertNotIn("fields", sc["issues"]["ABC-1001"])  # only release facts are kept
 

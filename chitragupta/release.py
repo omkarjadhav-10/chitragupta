@@ -38,9 +38,11 @@ DEFAULTS = {
     "enabled": False,
     "stale_hours": 24,
     "jira": {
-        "scope_jql": "assignee = currentUser() AND fixVersion is not EMPTY AND updated >= -120d",
+        # the assignee and project limits come from your profile (scope_query), never from the signed-in account
+        "scope_jql": "fixVersion is not EMPTY AND updated >= -120d",
         "scope_refresh_hours": 12,
         "scope_limit": 50,
+        "scope_max_pages": 4,
         "versions_refresh_hours": 24,
         "planned_date_field": "",
         "uat_field": "",
@@ -319,24 +321,159 @@ def merge_catalog(old, versions, now_iso):
     return {"versions": out, "fetched_at": now_iso, "error": None}
 
 
+SCOPE_FACTS = ("versions", "planned_date", "uat_values", "uat_seen", "labels", "status", "summary", "assignee_me")
+SCOPE_RESUME_S = 15 * 60       # an unfinished pass over the search's pages resumes this soon (within the MCP budget)
+SCOPE_CYCLE_MAX_S = 24 * 3600  # a pass older than this starts again from the first page
+SCOPE_REMOVED_MAX = 50
+_CURRENT_USER = re.compile(r"(?i)\bassignee\s*(?:=|in)\s*\(?\s*currentUser\s*\(\s*\)\s*\)?")
+_ORDER_BY = re.compile(r"(?i)\s+ORDER\s+BY\s+.*$", re.S)
+
+
+def scope_query(cfg):
+    """(jql, why): the scope search, always narrowed to the Jira accounts confirmed in your profile and to its Jira
+    projects, whatever releases.jira.scope_jql says (an `assignee = currentUser()` there is replaced: the signed-in
+    account isn't evidence of whose tickets they are). None when no Jira account is confirmed: nothing is searched,
+    never everyone's tickets. Ordered by key so pages stay stable between calls."""
+    from . import profile
+    pol = profile.Policy(cfg)
+    ids = sorted(pol.jira_ids())
+    if not ids:
+        return None, "no Jira account is confirmed in your profile, so the scope search isn't run"
+    base = _ORDER_BY.sub("", settings(cfg)["jira"]["scope_jql"] or "").strip()
+    base = _CURRENT_USER.sub("", base).strip()
+    base = re.sub(r"(?i)^(?:AND|OR)\s+|\s+(?:AND|OR)$", "", re.sub(r"(?i)\b(AND|OR)\s+(AND|OR)\b", r"\1", base)).strip()
+    parts = ["assignee in (%s)" % ", ".join(json.dumps(i) for i in ids)]
+    projects = [p for p in pol.p["projects"] if re.fullmatch(r"[A-Z][A-Z0-9_]{0,19}", p or "")]
+    if projects:
+        parts.append("project in (%s)" % ", ".join(projects))
+    if base:
+        parts.append("(%s)" % base)
+    return " AND ".join(parts) + " ORDER BY key ASC", ""
+
+
+def _page_shape(res):
+    """A jira_search result -> (issues, total, start, next_token, is_last, error). Anything that isn't a result with an
+    `issues` list is an error, never an empty answer (an error object, text, a permission message)."""
+    if not isinstance(res, dict):
+        return None, None, None, None, None, "not a search result: %s" % common.truncate(str(res), 160)
+    if not isinstance(res.get("issues"), list):
+        err = res.get("error") or res.get("errorMessages") or res.get("message") or res.get("errors") or "no issues list"
+        return None, None, None, None, None, common.truncate(str(err), 200)
+
+    def num(*ks):
+        for k in ks:
+            v = res.get(k)
+            if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                return v
+        return None
+    tok = res.get("nextPageToken") or res.get("next_page_token")
+    last = res.get("isLast") if isinstance(res.get("isLast"), bool) else res.get("is_last") if isinstance(
+        res.get("is_last"), bool) else None
+    return res["issues"], num("total"), num("startAt", "start_at"), (str(tok) if tok else None), last, None
+
+
+def scope_cycle(old, jql, binding, now):
+    """Where the next pass over the scope search starts: the unfinished pass of the same query and accounts (resumed
+    at its next page), else a new one from the first page."""
+    c = (old or {}).get("cycle") if isinstance((old or {}).get("cycle"), dict) else {}
+    started = common.parse_ts(c.get("started_at"))
+    if c and not c.get("done") and c.get("jql") == jql and c.get("binding") == binding and started and \
+            (now - started).total_seconds() < SCOPE_CYCLE_MAX_S:
+        return c
+    return {"jql": jql, "binding": binding, "started_at": now.isoformat(timespec="seconds"), "next": 0, "token": None,
+            "seen": [], "total": None, "done": False}
+
+
+def merge_scope(old, pages, cfg, now_iso, jql, size, cycle=None):
+    """Fold the pages one scope job read into the scope record (pure: the caller writes it). Every page is checked
+    (shape, errors) and every row rechecked before it is kept: a key outside your Jira projects or a ticket not
+    assigned to one of your confirmed accounts is rejected and counted, never stored. Rows are deduplicated by key, so
+    reordered or repeated pages don't double anything.
+    Completeness: only a pass that read every page from the first (total reached, isLast, or a short last page) is
+    complete; only then may a ticket missing from it be dropped (listed in `removed`). An unfinished pass or a failed
+    page keeps every earlier row (marked `stale` until it is seen again) with the error and the time."""
+    from . import profile
+    pol = profile.Policy(cfg)
+    binding = pol.jira_binding()
+    now = common.parse_ts(now_iso) or common.now()
+    old = old if isinstance(old, dict) else {}
+    cyc = dict(cycle or scope_cycle(old, jql, binding, now))
+    issues = {k: dict(v) for k, v in (old.get("issues") or {}).items() if isinstance(v, dict)} \
+        if old.get("binding") == binding else {}  # rows recorded against other accounts are never kept as yours
+    req = scope_fields(cfg)
+    rejected = dict(old.get("rejected") or {}) if cyc.get("next") else {}
+    seen = list(cyc.get("seen") or [])
+    error, read = None, 0
+    for inp, res in pages:
+        rows, total, start, tok, last, err = _page_shape(res)
+        if err:
+            error = "page %d: %s" % (read + 1, err)
+            break
+        read += 1
+        if start is None:
+            start = (inp or {}).get("start_at") if isinstance((inp or {}).get("start_at"), int) else cyc.get("next") or 0
+        for iss in rows:
+            key = str((iss or {}).get("key") or "").upper() if isinstance(iss, dict) else ""
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,19}-\d{1,7}", key):
+                rejected["malformed"] = rejected.get("malformed", 0) + 1
+                continue
+            if not pol.project_in_scope(key):
+                rejected["outside_projects"] = rejected.get("outside_projects", 0) + 1
+                continue
+            f = issue_facts(iss, cfg, key, req)
+            if f.get("assignee_me") is not True:
+                rejected["not_yours"] = rejected.get("not_yours", 0) + 1
+                continue
+            issues[key] = dict({k: f[k] for k in SCOPE_FACTS}, seen_at=now_iso)
+            if key not in seen:
+                seen.append(key)
+        cyc["next"] = max(int(cyc.get("next") or 0), start + len(rows))
+        cyc["token"] = tok
+        if total is not None:
+            cyc["total"] = total
+        if last is True or (total is not None and cyc["next"] >= total) or \
+                (last is None and total is None and not tok and len(rows) < size):
+            cyc["done"] = True
+            break
+    cyc["seen"] = seen
+    rec = {"fetched_at": now_iso if read else old.get("fetched_at"), "jql": jql, "binding": binding,
+           "projects": list(pol.p["projects"]), "error": error, "failed_at": now_iso if error else old.get("failed_at"),
+           "rejected": rejected, "cycle": cyc, "total": cyc.get("total"), "collected": len(seen),
+           "removed": list(old.get("removed") or [])[-SCOPE_REMOVED_MAX:], "complete_at": old.get("complete_at")}
+    if error and not read and not old.get("issues"):
+        rec["fetched_at"] = old.get("fetched_at")
+    if cyc.get("done") and not error:
+        gone = sorted(k for k in issues if k not in set(seen))
+        rec["removed"] = (rec["removed"] + [{"key": k, "at": now_iso} for k in gone])[-SCOPE_REMOVED_MAX:]
+        issues = {k: v for k, v in issues.items() if k in set(seen)}
+        for v in issues.values():
+            v.pop("stale", None)
+        rec.update(complete=True, complete_at=now_iso, partial_reason="")
+    else:
+        for k, v in issues.items():
+            if k not in set(seen):
+                v["stale"] = True  # known from an earlier pass, not seen in this one yet: kept, never "absent"
+        why = error or ("read %d of %s matching tickets so far; the rest are read on the next run" % (
+            len(seen), cyc.get("total") if cyc.get("total") is not None else "an unknown number of"))
+        rec.update(complete=False, partial_reason=why)
+    rec["issues"] = issues
+    rec["page_size"] = size
+    return rec
+
+
 def save_scope(issues, jql, cfg, now_iso, error=None):
-    """data/jira/_releases/scope.json from one jira_search: only the release facts of each issue are kept."""
+    """data/jira/_releases/scope.json: an error keeps every earlier row (with the error and its time); a list of issues
+    is one complete, validated result (the job itself goes through merge_scope page by page)."""
     path = scope_path()
     old = common.read_json(path, {}) or {}
     if error:
-        old.update(error=str(error)[:300], failed_at=now_iso)
+        old.update(error=str(error)[:300], failed_at=now_iso, complete=False,
+                   partial_reason="the last search failed: %s" % str(error)[:200])
         common.write_json(path, old)
         return old
-    req = scope_fields(cfg)
-    out = {}
-    for iss in issues or []:
-        if not isinstance(iss, dict) or not iss.get("key"):
-            continue
-        f = issue_facts(iss, cfg, iss["key"], req)
-        out[iss["key"]] = {k: f[k] for k in ("versions", "planned_date", "uat_values", "uat_seen", "labels", "status",
-                                             "summary", "assignee_me")}
-    rec = {"fetched_at": now_iso, "jql": jql, "issues": out, "error": None,
-           "mine_only": "assignee=currentuser()" in re.sub(r"\s+", "", (jql or "").lower())}
+    rows = [i for i in issues or [] if isinstance(i, dict)]
+    rec = merge_scope(old, [({"start_at": 0}, {"issues": rows, "total": len(rows), "startAt": 0})], cfg, now_iso, jql,
+                      max(1, len(rows)), cycle=scope_cycle({}, jql, None, common.parse_ts(now_iso) or common.now()))
     common.write_json(path, rec)
     return rec
 
@@ -345,7 +482,7 @@ def jira_facts(key, cfg):
     """The newest release facts for a ticket: its Jira card (data/jira/<KEY>.json) or the scope search, whichever was
     read last. -> facts + {source, fetched_at, error} (source None: nothing read yet)."""
     out = {"source": None, "fetched_at": None, "error": None, "versions": None, "planned_date": None, "uat_values": [],
-           "uat_seen": False, "labels": [], "status": "", "summary": "", "assignee_me": None}
+           "uat_seen": False, "labels": [], "status": "", "summary": "", "assignee_me": None, "assignee_binding": ""}
     rec = common.read_json(common.hp("data", "jira", key + ".json"), {}) or {}
     card_at = rec.get("fetched_at") if rec.get("raw") else None
     sc = _read_cached(scope_path())
@@ -357,11 +494,13 @@ def jira_facts(key, cfg):
             out.update(issue_facts(iss, cfg, key, rec.get("fields")))
             out.update(source="card", fetched_at=card_at)
     elif sc_iss:
-        out.update({k: sc_iss.get(k) for k in ("versions", "planned_date", "uat_values", "uat_seen", "labels", "status",
-                                               "summary", "assignee_me") if k in sc_iss})
-        out.update(source="scope", fetched_at=sc_at)
+        out.update({k: sc_iss.get(k) for k in SCOPE_FACTS if k in sc_iss})
+        out.update(source="scope", fetched_at=sc_iss.get("seen_at") or sc_at)
+        if sc.get("binding") != _me(cfg).jira_binding():
+            out["assignee_me"] = None  # compared with other Jira accounts than the ones confirmed now: unknown
     out["error"] = rec.get("error") if out["source"] == "card" else (sc.get("error") if out["source"] == "scope" else
                                                                      rec.get("error") or None)
+    out["assignee_binding"] = _me(cfg).jira_binding() if out["assignee_me"] is not None else ""
     return out
 
 
@@ -417,7 +556,8 @@ def _matches(v, ident):
 
 # --------------------------------------------------------------------------- inbox directives
 
-DIRECTIVE = re.compile(r"^(release-map|release-unmap|release-pick|release-branch|release-repos|uat)\s*:\s*(.+)$", re.I)
+DIRECTIVE = re.compile(r"^(release-map|release-unmap|release-pick|release-branch|release-repos|uat-deployed|uat-accepted|uat)"
+                       r"\s*:\s*(.+)$", re.I)
 _KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}$")
 
 
@@ -425,7 +565,8 @@ def parse_directive(text):
     """inbox.md line -> dict or None.
       release-map: <repo> "<release>" <branch>      release-unmap: <repo> "<release>"
       release-pick: <TICKET> "<release>"|-          release-branch: <TICKET> <repo> <branch>|-
-      release-repos: <TICKET> <repo>...|-           uat: <TICKET> required|not_required|unknown|-"""
+      release-repos: <TICKET> <repo>...|-           uat: <TICKET> required|not_required|unknown|-
+      uat-deployed: <TICKET>   uat-accepted: <TICKET>   (your confirmation, for the changes in UAT now only)"""
     m = DIRECTIVE.match((text or "").strip().lstrip("-* ").strip())
     if not m:
         return None
@@ -448,6 +589,8 @@ def parse_directive(text):
         return {"kind": kind, "ticket": t, "repo": args[1], "branch": None if args[2] == "-" else args[2]}
     if kind == "release-repos" and len(args) >= 2:
         return {"kind": kind, "ticket": t, "repos": [] if args[1:] == ["-"] else args[1:]}
+    if kind in ("uat-deployed", "uat-accepted") and len(args) == 1:
+        return {"kind": kind, "ticket": t}
     if kind == "uat" and len(args) == 2 and args[1].lower().replace("-", "_") in UAT_STATES + ("_",):
         v = args[1].lower().replace("-", "_")
         return {"kind": kind, "ticket": t, "state": None if v in ("_", "unknown") else v}
@@ -478,6 +621,17 @@ def apply_directive(d, store, cfg, now_iso=None):
             del br[k]
         return bool(hit), "%s: mapping for %s %s" % (repo, d["release"], "removed" if hit else "not found"), bool(hit)
     tk = store.ticket(d["ticket"])
+    if d["kind"] in ("uat-deployed", "uat-accepted"):
+        cur = (((tk.get("release") or {}).get("uat") or {}).get("revision")) or {}
+        if not cur.get("rev"):
+            return False, "%s: the current changes aren't confirmed in the UAT branch yet; nothing to confirm" % (
+                d["ticket"]), False
+        kind = d["kind"].split("-", 1)[1]
+        ev = tk.setdefault("release_override", {}).setdefault("uat_evidence", {})
+        ev[kind] = {"rev": cur["rev"], "at": now_iso}  # for exactly these changes: a later commit needs it again
+        tk.setdefault("release", {})["sig"] = None
+        store.touch_ticket(d["ticket"])
+        return True, "%s %s (changes %s)" % (d["kind"], d["ticket"], cur["rev"]), False
     ov = tk.setdefault("release_override", {})
     if d["kind"] == "release-pick":
         _set(ov, "pick", d["release"])
@@ -825,15 +979,112 @@ def uat_requirement(facts, override, cfg):
 
 
 def _status_evidence(facts, cfg, kind):
+    """A Jira status read on its own (no UAT revision to bind it to): never "yes" from a failed read; see uat_evidence
+    for what the tick decides."""
     j = settings(cfg)["jira"]
     lst = j["uat_%s_statuses" % kind]
     st = (facts.get("status") or "").strip()
     if not lst:
         return {"state": "unknown", "source": "no %s evidence source configured (releases.jira.uat_%s_statuses)" % (
             kind, kind)}
+    if facts.get("error"):
+        return {"state": "unknown", "source": "the last Jira read failed (%s), so its status %r isn't current" % (
+            str(facts["error"])[:120], st or "?")}
     if st and st.lower() in lst:
-        return {"state": "yes", "source": "Jira status %r" % st, "at": facts.get("fetched_at")}
+        return {"state": "unknown", "source": "Jira status %r, not yet tied to the changes now in UAT" % st,
+                "at": facts.get("fetched_at")}
     return {"state": "unknown", "source": "Jira status %r doesn't say %s" % (st or "?", kind)}
+
+
+UAT_OBS_MAX = 30
+UAT_PROMOTIONS_MAX = 10
+
+
+def uat_revision(rel, git):
+    """The identity of the changes the UAT stage has to carry: every live repo's ticket commits (delivery rows, by
+    patch identity) -> a short hash, or None while any live repo's UAT stage isn't confirmed present. A follow-up
+    commit makes a new revision, so evidence for the earlier one stops counting for it."""
+    live = [n for n, e in (rel.get("repos") or {}).items() if not e.get("candidate")]
+    if not live or any(((rel["repos"][n].get("stages") or {}).get("uat") or {}).get("state") != "present" for n in live):
+        return None
+    ids = sorted("%s:%s" % (n, r.get("id") or "") for n in live for r in ((git or {}).get(n) or {}).get("rows") or [])
+    return hashlib.sha1("|".join(ids).encode("utf-8")).hexdigest()[:12] if ids else None
+
+
+def uat_observations(old, facts):
+    """Jira status reads, oldest first: one entry per successful read (a failed read keeps the last good card, whose
+    status isn't current, so it isn't an observation)."""
+    obs = [o for o in old or [] if isinstance(o, dict) and o.get("at")]
+    at = facts.get("fetched_at")
+    if at and facts.get("source") and not facts.get("error") and (not obs or obs[-1]["at"] != at):
+        obs.append({"at": at, "status": str(facts.get("status") or "")})
+    return obs[-UAT_OBS_MAX:]
+
+
+def _transitions(key, since):
+    """Jira status changes of a ticket with their exact times, from the evening checks since `since` (a bounded set of
+    day files): stronger evidence than a status read."""
+    out = []
+    d = (since - _dt.timedelta(days=1)).date()
+    end = common.now().date() + _dt.timedelta(days=1)
+    n = 0
+    while d <= end and n < 120:
+        ev = _read_cached(common.hp("data", "jira", "_evening", d.isoformat() + ".json"))
+        f = ev.get("facts") or {}
+        for ch in (f.get("status_history") or f.get("status_changes") or []):
+            if str(ch.get("ticket") or "").upper() == key:
+                out.append(ch)
+        d += _dt.timedelta(days=1)
+        n += 1
+    return sorted(out, key=lambda c: str(c.get("time")))
+
+
+def uat_evidence(kind, cur, earlier, obs, cfg, override, key, facts):
+    """Deployment or acceptance of the current UAT revision. -> {state: yes | unknown, source, at?, rev?, carried?}
+    yes needs evidence observed after the current changes reached the UAT branch: your own confirmation for this
+    revision (/cg:branch uat-deployed|uat-accepted), a Jira transition into a configured status after then, or a Jira
+    status read after then that changed into a configured status (a status that already said so before these changes
+    reached UAT is the earlier changes' evidence, kept as history, never this revision's)."""
+    lst = settings(cfg)["jira"]["uat_%s_statuses" % kind]
+    mine = (((override or {}).get("uat_evidence") or {}).get(kind)) or {}
+    if not cur:
+        return {"state": "unknown", "source": "the current changes aren't confirmed in the UAT branch yet"}
+    if mine.get("rev") == cur["rev"]:
+        return {"state": "yes", "source": "confirmed by you %s" % str(mine.get("at") or "")[:16].replace("T", " "),
+                "at": mine.get("at"), "rev": cur["rev"]}
+    fresh = ""
+    if facts.get("error"):
+        fresh = "; the last Jira read failed: %s" % str(facts["error"])[:120]
+    if not lst:
+        return {"state": "unknown", "rev": cur["rev"],
+                "source": "no %s evidence source configured (releases.jira.uat_%s_statuses); confirm it yourself with "
+                          "`/cg:branch uat-%s %s`" % (kind, kind, kind, key)}
+    p = common.parse_ts(cur["at"])
+    for t in _transitions(key, p):
+        at = common.parse_ts(t.get("time"))
+        if at and at >= p and str(t.get("to") or "").strip().lower() in lst:
+            return {"state": "yes", "source": "Jira status moved to %r at %s, after these changes reached UAT" % (
+                t.get("to"), str(t.get("time"))[:16].replace("T", " ")), "at": t.get("time"), "rev": cur["rev"]}
+    before = [o for o in obs if (common.parse_ts(o["at"]) or p) < p]
+    after = [o for o in obs if (common.parse_ts(o["at"]) or p) >= p]
+    last = before[-1]["status"].strip().lower() if (earlier and before) else None
+    for o in after:
+        s = o["status"].strip().lower()
+        if s in lst and s != last:
+            return {"state": "yes", "source": "Jira status %r read %s, after these changes reached UAT" % (
+                o["status"], o["at"][:16].replace("T", " ")), "at": o["at"], "rev": cur["rev"]}
+        last = s
+    if after and after[-1]["status"].strip().lower() in lst:
+        return {"state": "unknown", "carried": True, "rev": cur["rev"],
+                "source": "Jira still says %r from before the latest changes reached UAT (%s): that was the earlier "
+                          "changes' %s; confirm it for the current ones (`/cg:branch uat-%s %s`)%s" % (
+                              after[-1]["status"], cur["at"][:16].replace("T", " "),
+                              "deployment" if kind == "deployed" else "acceptance", kind, key, fresh)}
+    if not after:
+        return {"state": "unknown", "rev": cur["rev"],
+                "source": "no Jira read since these changes reached UAT (%s)%s" % (cur["at"][:16].replace("T", " "), fresh)}
+    return {"state": "unknown", "rev": cur["rev"], "source": "Jira status %r doesn't say %s%s" % (
+        after[-1]["status"] or "?", kind, fresh)}
 
 
 def sibling_index(store, views):
@@ -945,7 +1196,8 @@ def resolve(store, key, views, cfg, now=None, sib=None):
     new = dict(old, v=VERSION, jira={k: facts.get(k) for k in ("source", "fetched_at", "error", "status")},
                releases=rels, release_keys=cur_keys, selected=sel["key"] if sel else None, selection=how,
                history=hist, uat=dict(old.get("uat") or {}, requirement=req), repos=repos, pins=pins,
-               assignee_me=facts.get("assignee_me"), summary=facts.get("summary") or old.get("summary") or "")
+               assignee_me=facts.get("assignee_me"), assignee_binding=facts.get("assignee_binding") or "",
+               summary=facts.get("summary") or old.get("summary") or "")
     changed_pins = old.get("pins") != pins
     if _strip(old) != _strip(new):
         tk["release"] = new
@@ -1088,18 +1340,40 @@ def _carried(repo, head, rows, since):
     return got
 
 
+_INTEGRATION_TOKEN = re.compile(r"(?i)(?:^|[/_.-])(qa|uat|integration|int|sync|merge)(?:$|[/_.-])")
+INTEGRATION_ROLES = ("qa", "uat")
+
+
+def branch_intent(b, view, x):
+    """development | integration for one of the ticket's branches. Integration: it carries the ticket's commits
+    without being named for it (linked by commit message or patch), or it starts from an integration base (qa, uat)
+    and is named or used as one (a qa/uat token in its last name segment, or a PR back into that base). Everything
+    else is development, whatever it started from: a development branch from main, qa or an unknown branch is
+    still checked against the release, never skipped."""
+    if b.get("link") in ("commit message", "patch"):
+        return "integration"
+    par = b.get("parent")
+    prole = b.get("parent_role") or (view.role(par) if par else None)
+    tail = str(b.get("branch") or "").rsplit("/", 1)[-1]
+    if prole in INTEGRATION_ROLES:
+        into = any(p.get("source") == b.get("branch") and view.role(p.get("target") or "") == prole for p in x.get("prs") or [])
+        if into or _INTEGRATION_TOKEN.search(tail):
+            return "integration"
+    return "development"
+
+
 def _dev_branches(x, view, rb, prev_branches):
-    """The ticket's development branches (started from a release branch, or recorded as such) and how their start
-    fits the resolved release branch. A shared history alone never proves where a branch started."""
+    """The ticket's development branches and how their start fits the resolved release branch: a start on another
+    release, on main, on qa / uat or on any other base is flagged; a start that isn't recorded, or isn't a known base,
+    stays uncertain (never silently dropped). A shared history alone never proves where a branch started."""
     out, flags = [], []
     for b in x.get("branches") or []:
-        if b.get("status") == "abandoned":
+        if b.get("status") == "abandoned" or branch_intent(b, view, x) != "development":
             continue
         par, src = b.get("parent"), b.get("parent_source")
         prole = b.get("parent_role") or (view.role(par) if par else None)
-        if prole not in ("release", None):
-            continue
-        e = {"branch": b["branch"], "parent": par, "parent_source": src, "status": b.get("status"), "base": "unknown"}
+        e = {"branch": b["branch"], "parent": par, "parent_source": src, "parent_role": prole, "status": b.get("status"),
+             "base": "unknown", "intent": "development"}
         if not par:
             e["note"] = "start not recorded"
         elif src == "inferred" or b.get("role_guessed"):
@@ -1113,27 +1387,61 @@ def _dev_branches(x, view, rb, prev_branches):
             old = par in prev_branches
             e["note"] = "created from %s%s, but the release ships from %s" % (par, " (the previous release)" if old else "", rb)
             flags.append({"kind": "old-release-base" if old else "wrong-base", "branch": b["branch"],
-                          "text": "%s was created from %s%s; the release branch is %s." % (
+                          "text": "%s was created from %s%s; the release ships from %s." % (
                               b["branch"], par, " (the ticket's previous release)" if old else "", rb)})
+        elif rb and prole:
+            e["base"] = "wrong"
+            e["note"] = "created from %s (%s), but development starts from the release branch %s" % (par, prole, rb)
+            flags.append({"kind": "wrong-base", "branch": b["branch"],
+                          "text": "%s was created from %s (the %s branch); development for this release starts from %s: "
+                                  "start again from %s or bring the commits over." % (b["branch"], par, prole, rb, rb)})
+        elif prole is None:
+            e["base"] = "unproven"
+            e["note"] = "created from %s, which isn't a known base branch here; the release ships from %s" % (
+                par, rb or "a release branch that isn't confirmed yet")
         out.append(e)
     return out, flags
 
 
-def _pr_flags(prs, rb, prev_branches, view):
+def _pr_intent(p, view, x, key=None):
+    """development | integration | promotion for one of the ticket's PRs, from its source branch: a release / base
+    branch is a promotion, a branch the ticket's records call integration is integration, everything else is the
+    ticket's development work."""
+    src = p.get("source") or ""
+    if view.role(src):
+        return "promotion"
+    rec = next((b for b in x.get("branches") or [] if b.get("branch") == src), None)
+    if rec is not None:
+        return branch_intent(rec, view, x)
+    tail = src.rsplit("/", 1)[-1]
+    return "integration" if _INTEGRATION_TOKEN.search(tail) else "development"
+
+
+def _pr_flags(prs, rb, prev_branches, view, x=None):
+    """Wrong targets of the ticket's development PRs, whatever role the target has: another or older release, main,
+    or straight into qa / uat (this workflow integrates through a branch cut from qa). Integration and promotion PRs
+    are never flagged here. `prs`: every PR of the ticket (any target role)."""
     flags = []
     for p in prs:
-        if p.get("role") != "release" or not rb or p.get("target") == rb:
+        if not rb or p.get("target") == rb or p.get("shared"):
             continue
+        if _pr_intent(p, view, x or {}) != "development":
+            continue
+        trole = p.get("role") or view.role(p.get("target") or "") or "other"
         old = p.get("target") in prev_branches
-        what = "the ticket's previous release branch %s" % p["target"] if old else p.get("target")
+        what = "the ticket's previous release branch %s" % p["target"] if old else \
+            "%s (the %s branch)" % (p.get("target"), trole) if trole not in ("release", "other") else p.get("target")
         if p.get("state") in ("open", "draft"):
-            txt = "PR #%s targets %s; the release ships from %s: retarget it in the Git host." % (p["number"], what, rb)
+            txt = "PR #%s targets %s; development PRs go to the release branch %s: retarget it in the Git host." % (
+                p["number"], what, rb)
         elif p.get("state") == "merged":
             txt = "PR #%s was merged into %s, not %s: those changes still have to reach %s." % (p["number"], what, rb, rb)
         else:
             continue
         p["wrong_target"] = True
-        flags.append({"kind": "old-release-pr" if old else "wrong-target", "pr": p["number"], "text": txt})
+        p["intent"] = "development"
+        kind = "old-release-pr" if old else ("dev-into-integration" if trole in INTEGRATION_ROLES else "wrong-target")
+        flags.append({"kind": kind, "pr": p["number"], "text": txt, "target_role": trole, "resolved_target": rb})
     return flags
 
 
@@ -1153,6 +1461,10 @@ def suggest(cfg, name, which, ticket, dev=None, release_branch=None):
           "release_key": (re.findall(r"\b[A-Z][A-Z0-9]{1,9}-\d+", rb) or [""])[0]}
     devname = dev or _fmt(n.get("dev") or "feature/{ticket}", dev="", **kw) or "feature/" + ticket
     return _fmt(n.get(which) or "", dev=devname, **kw) or devname
+
+
+def wrong_open_any(prs):
+    return any(p.get("wrong_target") and p.get("state") in ("open", "draft") for p in prs)
 
 
 def next_step(key, name, e, strat, uat_req, cfg):
@@ -1180,14 +1492,15 @@ def next_step(key, name, e, strat, uat_req, cfg):
             name, fresh.get("why_stale") or "stale", key)
     devs = [d for d in e["dev"] if d.get("base") != "wrong"]
     rel_prs = [p for p in e["prs"].get("release") or [] if not p.get("wrong_target")]
+    all_prs = [p for lst in (e.get("prs") or {}).values() for p in lst]
     s_rel, s_qa = st.get("release") or {}, st.get("qa") or {}
-    if not e["dev"] and not rel_prs and s_rel.get("state") in ("not_started", None):
+    if not e["dev"] and not rel_prs and not wrong_open_any(all_prs) and s_rel.get("state") in ("not_started", None):
         dev = suggest(cfg, name, "dev", key, release_branch=rb)
         return "Start from %s: `git switch -c %s %s/%s` (review the name), then PR %s → %s." % (rb, dev, remote, rb, dev, rb)
     if any(d.get("base") == "wrong" for d in e["dev"]) and not devs:
-        return "The development branch starts from the wrong release; start again from %s or bring the commits over." % rb
+        return "The development branch doesn't start from %s; start again from %s or bring the commits over." % (rb, rb)
     open_rel = [p for p in rel_prs if p.get("state") in ("open", "draft")]
-    wrong_open = [p for p in e["prs"].get("release") or [] if p.get("wrong_target") and p.get("state") in ("open", "draft")]
+    wrong_open = [p for p in all_prs if p.get("wrong_target") and p.get("state") in ("open", "draft")]
     if wrong_open and not open_rel and s_rel.get("state") != "present":
         p = wrong_open[0]
         return "Retarget PR #%s from %s to %s in the Git host (or open a new PR %s → %s)." % (
@@ -1274,7 +1587,8 @@ def evaluate(store, key, rx, cfg, now=None):
         strat = gitcmd.settings(cfg)["strategies"].get(e.get("strategy") or "") if e.get("strategy") else None
         e["dev"], flags = _dev_branches(x, view, rb, prev_branches - ({rb} if rb else set()))
         e["prs"] = _prs_by_role(x, view)
-        flags += _pr_flags(e["prs"].get("release") or [], rb, prev_branches - ({rb} if rb else set()), view)
+        flags += _pr_flags([p for lst in e["prs"].values() for p in lst], rb, prev_branches - ({rb} if rb else set()),
+                           view, x)
         cache = dict(e.get("_shared") or {})
         if repo is not None:
             try:
@@ -1332,16 +1646,34 @@ def evaluate(store, key, rx, cfg, now=None):
             elif su.get("state") in ("unknown", "not_started") and stages["qa"].get("state") == "present":
                 reminders.append({"id": "uat-verify:%s" % name, "kind": "uat-verify", "repo": name, "severity": "warn",
                                   "text": "%s: UAT required — %s; verify it reaches UAT." % (name, su.get("detail"))})
-    dep = _status_evidence(facts, cfg, "deployed")
-    acc = _status_evidence(facts, cfg, "accepted")
-    rel["uat"] = {"requirement": req, "deployed": dep, "accepted": acc}
+    # UAT deployment and acceptance belong to one revision: the exact changes now in the UAT branch. A follow-up commit
+    # is a new revision; what Jira said about the earlier one stays in history and never counts for the new one.
+    old_uat = rel.get("uat") or {}
+    obs = uat_observations(old_uat.get("observations"), facts)
+    proms = [p for p in old_uat.get("promotions") or [] if isinstance(p, dict) and p.get("rev")]
+    rev = uat_revision(rel, git) if req["state"] == "required" else None
+    if rev and (not proms or proms[-1]["rev"] != rev):
+        proms.append({"rev": rev, "at": now.isoformat(timespec="seconds")})
+    proms = proms[-UAT_PROMOTIONS_MAX:]
+    cur = proms[-1] if rev and proms and proms[-1]["rev"] == rev else None
+    earlier = bool(cur) and len(proms) > 1
+    ov = tk.get("release_override") or {}
+    dep = uat_evidence("deployed", cur, earlier, obs, cfg, ov, key, facts)
+    acc = uat_evidence("accepted", cur, earlier, obs, cfg, ov, key, facts)
+    hist = list(old_uat.get("history") or [])
+    for kind, ev in (("deployed", old_uat.get("deployed")), ("accepted", old_uat.get("accepted"))):
+        if isinstance(ev, dict) and ev.get("state") == "yes" and ev.get("rev") and ev.get("rev") != (cur or {}).get("rev") \
+                and not any(h.get("rev") == ev["rev"] and h.get("kind") == kind for h in hist):
+            hist.append({"kind": kind, "rev": ev["rev"], "at": ev.get("at"), "source": ev.get("source")})
+    rel["uat"] = {"requirement": req, "deployed": dep, "accepted": acc, "revision": cur, "promotions": proms,
+                  "observations": obs, "history": hist[-10:]}
     live = [n for n, e in (rel.get("repos") or {}).items() if not e.get("candidate")]
-    if req["state"] == "required" and live and all(((rel["repos"][n].get("stages") or {}).get("uat") or {}).get("state")
-                                                   == "present" for n in live):
+    if req["state"] == "required" and live and cur:
         for kind, ev in (("deployed", dep), ("accepted", acc)):
             if ev["state"] != "yes":
                 reminders.append({"id": "uat-%s" % kind, "kind": "uat-%s" % kind, "repo": "", "severity": "warn",
-                                  "text": "UAT branch has the changes, but %s is unverified (%s)." % (
+                                  "text": "UAT branch has the %schanges, but %s of them is unverified (%s)." % (
+                                      "latest " if earlier else "",
                                       "the UAT deployment" if kind == "deployed" else "UAT acceptance", ev["source"])})
     if req["state"] == "unknown" and sel:
         reminders.insert(0, {"id": "uat-unknown", "kind": "uat-unknown", "repo": "", "severity": "info",
@@ -1391,10 +1723,29 @@ def readiness(rel):
         if e.get("flags"):
             miss.append("%s: %d flag%s" % (n, len(e["flags"]), "" if len(e["flags"]) == 1 else "s"))
     if req == "required":
+        u = rel.get("uat") or {}
+        cur = (u.get("revision") or {}).get("rev")
         for kind in ("deployed", "accepted"):
-            if ((rel.get("uat") or {}).get(kind) or {}).get("state") != "yes":
-                miss.append("UAT %s unverified" % kind)
+            ev = u.get(kind) or {}
+            # yes only for the revision now in UAT: evidence for earlier changes never makes later ones ready
+            if ev.get("state") != "yes" or not cur or ev.get("rev") != cur:
+                miss.append("UAT %s unverified for the current changes" % kind)
     return {"ready": not miss, "missing": miss}
+
+
+def current_readiness(row, now, stale_h):
+    """A reader's check of a stored readiness: "Ready" was computed from evidence at computed_at; once that is older
+    than releases.stale_hours (the tick stopped, a source kept failing) it is shown as not ready, with why, until a
+    refresh confirms it again. Time passing never leaves a cached Ready standing."""
+    at = common.parse_ts(row.get("computed_at"))
+    if not row.get("ready"):
+        return row
+    if at is None or (now - at).total_seconds() > stale_h * 3600:
+        row = dict(row, ready=False, ready_expired=True,
+                   missing=list(row.get("missing") or []) + ["the evidence is from %s, older than %d h: refresh with "
+                                                             "/cg:check %s" % ((row.get("computed_at") or "never")[:16].replace("T", " "),
+                                                                               stale_h, row.get("key") or "")])
+    return row
 
 
 # --------------------------------------------------------------------------- the tick
@@ -1571,13 +1922,14 @@ def mine(tk, cfg, scope_issue=None, key=None):
     Code work on it. A ticket Jira now assigns to someone else (reassigned) is not mine any more, whatever I did on
     it before. Authoring a shared integration PR alone never makes a ticket mine."""
     s = settings(cfg)["scope"]
-    rel = tk.get("release") or {}
-    state, why = _me(cfg).ticket_state(key or tk.get("id"), tk)
+    pol = _me(cfg)
+    state, why = pol.ticket_state(key or tk.get("id"), tk)
     if state == "included":
         return True, why
-    if state in ("reassigned", "other"):
+    if state in ("reassigned", "other", "outside"):
         return False, ""
-    if s.get("assigned") and (state == "assigned" or rel.get("assignee_me") or (scope_issue or {}).get("assigned_scope")):
+    if s.get("assigned") and (state == "assigned" or pol.release_assignee(tk.get("release")) is True
+                              or (scope_issue or {}).get("assigned_scope")):
         return True, "assigned to you"
     if s.get("branches"):
         for x in ((tk.get("git") or {}).get("repos") or {}).values():
@@ -1594,18 +1946,21 @@ def mine(tk, cfg, scope_issue=None, key=None):
 def month_overview(month=None, cfg=None, now=None, store=None):
     """My tickets by planned release date for one month (YYYY-MM, default: this month in the configured day
     boundary), plus overdue tickets and tickets whose release date is unresolved, each with per-repo state."""
+    from . import profile
     from .store import Store
     cfg = cfg if cfg is not None else common.load_config()
     now = now or common.now()
-    today = common.workday(now, cfg)
+    today = profile.today(cfg, now)  # the profile's zone and day boundary, the same day My progress shows
     month = month or today[:7]
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month or ""):
         raise ValueError("month must be YYYY-MM")
     sc = common.read_json(scope_path(), {}) or {}
-    issues = sc.get("issues") or {}
     pol = _me(cfg)
+    bound = bool(pol.jira_ids()) and sc.get("binding") == pol.jira_binding()
+    issues = (sc.get("issues") or {}) if bound else {}  # rows compared with other accounts say nothing about you
     groups, overdue, unresolved = {}, [], []
     keys = set(Store.all_ticket_ids()) | set(issues)
+    stale_h = settings(cfg)["stale_hours"]
     for t in sorted(keys):
         if common.is_placeholder(t) or gitcmd.ignored(cfg, t):
             continue
@@ -1615,14 +1970,17 @@ def month_overview(month=None, cfg=None, now=None, store=None):
         rel = tk.get("release") if isinstance(tk.get("release"), dict) and tk["release"].get("v") else None
         if tk.get("jira_missing") or _excluded(tk, cfg, (iss or {}).get("status")):
             continue
-        # in the scope search: yours when Jira says so; with no Jira account confirmed in the profile, also when the
-        # search itself only returns the signed-in account's tickets (shown as such until you confirm the account)
-        assigned = bool(iss) and (iss.get("assignee_me") is True or (iss.get("assignee_me") is None and sc.get("mine_only")
-                                                                     and not pol.jira_account()))
+        # in the scope search: yours only when Jira assigns it to one of your confirmed accounts (rechecked when the
+        # row was stored, and bound to the accounts confirmed now); a signed-in account is never taken as yours
+        assigned = bool(iss) and iss.get("assignee_me") is True
         ok, why = mine(tk, cfg, {"assigned_scope": assigned}, key=t)
         if not ok:
             continue
         row = _row(t, tk, rel, iss, why, today)
+        if row is not None:
+            row = current_readiness(row, now, stale_h)
+            if iss and iss.get("stale"):
+                row["scope_stale"] = True
         if row is None:
             continue
         pd = row["planned_date"]
@@ -1633,9 +1991,16 @@ def month_overview(month=None, cfg=None, now=None, store=None):
             g["tickets"].append(row)
         elif pd < today and not row["ready"] and month >= today[:7]:
             overdue.append(row)
+    jql, why_not = scope_query(cfg)
     out = {"month": month, "today": today, "groups": sorted(groups.values(), key=lambda g: (g["planned_date"], g["release"])),
            "overdue": sorted(overdue, key=lambda r: r["planned_date"]), "unresolved": unresolved,
-           "scope": {"fetched_at": sc.get("fetched_at"), "error": sc.get("error"), "jql": sc.get("jql")},
+           "scope": {"fetched_at": sc.get("fetched_at"), "error": sc.get("error"), "failed_at": sc.get("failed_at"),
+                     "jql": sc.get("jql"), "complete": bool(sc.get("complete")) and bound,
+                     "complete_at": sc.get("complete_at"), "total": sc.get("total"), "collected": sc.get("collected"),
+                     "partial_reason": sc.get("partial_reason") or ("" if bound or not sc else
+                                                                   "the last search was for other Jira accounts"),
+                     "rejected": sc.get("rejected") or {}, "unconfigured": why_not,
+                     "stale": sum(1 for v in issues.values() if v.get("stale"))},
            "enabled": enabled(cfg)}
     for g in out["groups"]:
         g["tickets"].sort(key=lambda r: (r["ready"], r["key"]))

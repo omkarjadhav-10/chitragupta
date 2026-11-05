@@ -423,6 +423,9 @@ def build(key, sections=None, level=None, cfg=None, now=None):
     t = api.ticket(key)
     if not t:
         raise ShareError("nothing recorded for %s" % key)
+    if t.get("outside"):
+        raise ShareError("%s is outside your personal scope (%s); only your own work is shared" % (
+            key, (t.get("scope") or {}).get("reason") or "not yours"))
     t = json.loads(json.dumps(t, default=str))  # a private copy: api results may be cached
     now = now or common.now()
     deny_path = denylist_path(cfg)

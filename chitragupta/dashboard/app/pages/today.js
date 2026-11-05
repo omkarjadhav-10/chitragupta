@@ -5,6 +5,7 @@ import { html } from '../lib/html.js';
 import { useApi, fmtMin, fmtDay, fmtTs, mins, pad, addDays, slotFor, copyText, toast, plural, go, isoDay, runAction, notYours } from '../lib/core.js';
 import { Icon, Status, CopyButton, Empty, Load, PageHead, TicketLink, Scroll, Dialog } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
+import { FocusBand, ActiveTickets } from '../lib/focus.js';
 
 const SAVED_WORD = { sent: 'Sent to Slack', nudged: 'Reminder sent', failed: 'Send failed', composed: 'Composed, not sent yet', none: 'Nothing to send' };
 
@@ -185,6 +186,7 @@ export function TodayPage({ route }) {
   const day = route.name === 'day' ? route.arg : '';
   const res = useApi(day ? '/api/day/' + encodeURIComponent(day) : '/api/today');
   const tks = useApi('/api/tickets');
+  const prog = useApi('/api/progress' + (day ? '?date=' + encodeURIComponent(day) : ''));
   const d = res.data;
   // Stretches come from activity blocks; minutes come from the day file, like the summary, the
   // Timesheet and the ticket totals, so every number on the page agrees.
@@ -231,6 +233,9 @@ export function TodayPage({ route }) {
       <${PageHead} title=${fmtDay(d.day)} sub=${plural(d.sessions || 0, 'session') + ' · ' + plural(d.commits || 0, 'commit') + (d.closed ? ' · day closed' : '')}>
         ${dayTools}
       </${PageHead}>
+      ${prog.data ? html`<${FocusBand} d=${prog.data}>${isToday ? html`<${ActiveTickets} t=${prog.data.tickets} limit=${5} />` : null}
+        <p class="small focus-more"><a href=${'#/progress' + (day ? '?date=' + day : '')}>My progress</a> · <a href="#/history">History</a></p></${FocusBand}>`
+        : prog.error ? null : html`<div class="focus"><p class="muted small" aria-live="polite">Reading today's next steps…</p></div>`}
       <div class="day-total"><div><span class="tracked-total">${fmtMin(d.total_minutes)}</span><span class="total-target">${target ? 'of ' + fmtMin(target) : 'tracked'}</span></div>
         <p>${target ? d.total_minutes >= target ? 'Daily target reached.' : fmtMin(Math.max(0, target - d.total_minutes)) + ' to your daily target.' : ({ weekend: 'A weekend. No daily target.', holiday: 'A holiday. No daily target.', leave: 'On leave. No daily target.' }[dayKind] || 'No daily target.')}${d.updated_at ? html`<span class="updated-at">Updated ${fmtTs(d.updated_at)}</span>` : null}</p></div>
       ${d.summary ? html`<p class="lede">${d.summary}</p>` : null}

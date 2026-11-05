@@ -83,9 +83,20 @@ class Days(Case):
         self.cfg = self.config(watched_repos=[self.repo, other])
         self.ledger([commit("a", "2026-03-09T10:00:00+00:00")])
         self.ledger([], path=other, status="error")
+        led = common.read_json(activity.ledger_path(gitcmd.repo_key(other)))
+        led["commits"]["scanned_at"] = ""  # its scan never succeeded
+        common.write_json(activity.ledger_path(gitcmd.repo_key(other)), led)
         m = self.day("2026-03-09")
         self.assertEqual((m["commits"]["value"], m["commits"]["status"]), (1, "partial"))
         self.assertIn("web-app", m["commits"]["why"])
+        # a scan that failed after an earlier one succeeded: the earlier results stay, labelled "not current" from the
+        # day of that read on, with the failure; days that read finished are complete
+        led["commits"].update(scanned_at=(NOW - dt.timedelta(hours=26)).isoformat(timespec="seconds"), error="git log: synthetic")
+        common.write_json(activity.ledger_path(gitcmd.repo_key(other)), led)
+        m = self.day("2026-03-10")
+        self.assertEqual(m["commits"]["status"], "stale")
+        self.assertIn("synthetic", m["commits"]["why"])
+        self.assertEqual(self.day("2026-03-07")["commits"]["status"], "zero")
         # never collected: unknown
         os.remove(activity.ledger_path(gitcmd.repo_key(other)))
         self.cfg = self.config(watched_repos=[other])

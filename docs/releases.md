@@ -83,7 +83,9 @@ A merged PR proves that merge, not that later commits arrived or that anything w
 
 **PRs** are listed per destination (release, QA, UAT) with state, dates and notes such as *closed unmerged; superseded by #12* or *followed by #14*. A shared QA integration PR is linked to every ticket whose commits its head carries (same commit or same patch), marked *shared, carries 1/1*; it is never credited as ownership of those tickets and never invented for a ticket it doesn't carry.
 
-**Flags:** a development branch cut from another release branch (`wrong-base`, only for recorded starts: shared history alone never proves where a branch started), a release PR into another release branch (`wrong-target`), and the previous-release variants above.
+**Development or integration.** Each of the ticket's branches is classified first. An *integration* branch carries the ticket's commits without being named for it (linked by commit message or patch), or starts from `qa` / `uat` and is named or used as one (a `qa` / `uat` token in its last name segment, or a PR back into that base). Everything else is a *development* branch, whatever it started from, and is checked against the resolved release branch. A PR is classified by its source: from a base branch it is a promotion, from an integration branch it is integration, otherwise it is the ticket's development work.
+
+**Flags:** a development branch started from another release branch, from `main`, from `qa` / `uat` or any other base role (`wrong-base`, only for recorded starts: shared history alone never proves where a branch started); one started from a branch that isn't a known base stays *unproven*, listed, never dropped. A development PR into another release branch or into `main` (`wrong-target`) or straight into `qa` / `uat` (`dev-into-integration`), with the resolved release branch as the corrective target. Integration and promotion PRs are never flagged. The previous-release variants above stay.
 
 **Freshness** is kept apart from status: refs fetched time, a failed fetch, a failed PR source, and whether open PRs are visible at all (with PR data from merge commits only they aren't, so the next step says "skip this if it's already open").
 
@@ -99,14 +101,22 @@ A merged PR proves that merge, not that later commits arrived or that anything w
 
 `kind` is `pr` (a promotion branch from `from`, then a PR into the UAT branch), `sync` (the UAT branch receives `sync_from` at its next sync) or `unspecified` (your team's process; tracking still checks the branch). Without any of these, the UAT destination is reported as not configured.
 
-When UAT is required and a destination branch is set, it becomes one more column of the delivery check. Four facts stay separate: required; changes in the UAT branch; **deployed** to UAT; **accepted**. Deployment and acceptance count only with explicit evidence: Jira statuses you list in `releases.jira.uat_deployed_statuses` / `uat_accepted_statuses`. Otherwise they stay *unverified*.
+When UAT is required and a destination branch is set, it becomes one more column of the delivery check. Four facts stay separate: required; changes in the UAT branch; **deployed** to UAT; **accepted**.
+
+Deployment and acceptance belong to one **revision**: the exact set of the ticket's changes (every live repository's commits, by patch identity) that the UAT branch carries. When all of them are present a revision is recorded with the time it was first seen; a follow-up commit makes a new one. Evidence counts for a revision only when it came after that time:
+
+- your own confirmation for exactly that revision: `/cg:branch uat-deployed ABC-1001`, `/cg:branch uat-accepted ABC-1001` (a later commit needs it again);
+- a Jira status transition into a status listed in `releases.jira.uat_deployed_statuses` / `uat_accepted_statuses` (the evening check's status history), timed after the revision reached UAT;
+- a Jira status read after then that changed into a listed status.
+
+A status that already said *Accepted* before the latest changes reached UAT is the earlier changes' acceptance: kept under `uat.history`, shown as such, never the current one's ("Jira still says 'Accepted' from before the latest changes reached UAT: confirm it for the current ones"). A failed Jira read isn't an observation at all (its status is the last good card's), and with no read since the revision reached UAT the evidence is *unverified*. A ticket is ready only with deployment and acceptance for the revision in UAT now.
 
 ## Reminders
 
 Recomputed from the evidence on every tick; showing one never clears it. A reminder goes away only when the evidence changes:
 
 - UAT required but the changes aren't in the UAT branch (again after later commits) — with the next step.
-- UAT branch has the changes but deployment or acceptance is unverified.
+- UAT branch has the (latest) changes but their deployment or acceptance is unverified, with what was seen and how to confirm it.
 - UAT requirement unknown — asks you to settle it.
 - Several fix versions, an unconfirmed release branch, a wrong base or target.
 
@@ -133,16 +143,18 @@ Before development it names the base and the PR target; during development it fl
 
 ## The monthly overview
 
-`/cg:branches` with no key (or `/cg:branches 2026-12`), `list_tickets(release="2026-12")` in recall, and the dashboard's **Releases** page show your tickets grouped by the planned release date of the month (default: this month, by your `day_starts_at` day boundary), then **Overdue** (planned before today, not ready; listed when you look at the current month or a later one, so late work stays in sight while planning ahead) and **Release date unresolved**. Each ticket keeps its per-repository detail; a ticket is *ready* only when every affected repository has every required stage present on fresh refs, its release branches are confirmed, and UAT is settled (required UAT also needs deployment and acceptance evidence).
+`/cg:branches` with no key (or `/cg:branches 2026-12`), `list_tickets(release="2026-12")` in recall, and the dashboard's **Releases** page show your tickets grouped by the planned release date of the month (default: this month in your profile's time zone and `day_starts_at` boundary, the same day My progress shows), with **Overdue** (planned before today, not ready; listed when you look at the current month or a later one, so late work stays in sight while planning ahead) and **Release date unresolved**. Each ticket keeps its per-repository detail; a ticket is *ready* only when every affected repository has every required stage present on fresh refs, its release branches are confirmed, and UAT is settled (required UAT also needs deployment and acceptance evidence for the changes in UAT now). A *Ready* computed longer ago than `releases.stale_hours` is shown as not ready, with "refresh with /cg:check", until a refresh confirms it again.
 
-"My tickets" (`releases.scope`): assigned to you in Jira, a development branch named for the ticket with your commits, or Claude Code work you did on it. Authoring a shared integration PR never makes a ticket yours. Tickets in `branching.ignore_tickets`, placeholders, keys Jira says don't exist and tickets in `releases.jira.exclude_statuses` (cancelled and the like) are left out.
+On the dashboard, what needs attention comes first (Overdue, then Release date unresolved), then each release of the month. A ticket is one compact row: the repositories still pending and their first unfinished stage, UAT and flags in a line, and one next action. Its repositories (one stacked block each: release branch, Release / QA / UAT with their PRs, flags and the repository's next step), reminders, why it is yours and freshness open on request; ready tickets fold into a closed group. The page states whether the Jira scope search was complete, partial (and how far it got) or failed, and that nothing is treated as gone meanwhile. On a ticket, the release plan says the release once, then per repository the development base, development PR target, Release, QA and UAT and the next step; blockers are listed once, and the evidence (branches, PRs, how the base was found) and provenance (who chose the release, its history, earlier UAT evidence, freshness) open on request.
+
+"My tickets" (`releases.scope`): assigned to one of your confirmed Jira accounts, a development branch named for the ticket with your commits, or Claude Code work you did on it. An assignee answer is kept with the accounts it was compared with: after you change or remove a Jira account, an answer recorded for the old one is *unknown* until Jira is read again, never "assigned to you". Authoring a shared integration PR never makes a ticket yours. Tickets in `branching.ignore_tickets`, placeholders, keys Jira says don't exist and tickets in `releases.jira.exclude_statuses` (cancelled and the like) are left out.
 
 ## Jira reads
 
 All through the read-only Jira MCP harness, in the background tick, within `mcp.daily_call_budget` and never from the evening reserve:
 
 - **Ticket cards** (existing job, same single call) also read `fixVersions`, `assignee` and the configured fields.
-- **Scope search** (`releases.jira.scope_jql`, default your tickets with a fix version updated in 120 days): one `jira_search` every `scope_refresh_hours` (12). Kept as `data/jira/_releases/scope.json`, release facts only.
+- **Scope search** (`releases.jira.scope_jql`, default tickets with a fix version updated in 120 days), always narrowed to `assignee in (<your confirmed Jira ids>)` and `project in (<your Jira projects>)` (an `assignee = currentUser()` in your JQL is replaced: the signed-in account isn't evidence), ordered by key. Not run at all with no confirmed Jira account. One job every `scope_refresh_hours` (12) reads at most `scope_max_pages` (4) pages of `scope_limit` (50) rows in one model call; a pass that didn't reach the last page resumes from where it stopped 15 minutes later (within the daily budget), and a pass older than a day starts again. Every page is checked (an error object, a permission message or text is a failed page, never an empty result) and every row rechecked (another project or another assignee is rejected and counted under `rejected`) before `data/jira/_releases/scope.json` keeps its release facts. Rows are deduplicated by key. Only a complete pass, from the first page to the last, may drop a ticket it no longer returns (listed under `removed`); an unfinished or failed pass keeps earlier rows (marked `stale` until seen again) with the error and its time, so an overdue scope-only ticket stays in view.
 - **Versions catalog:** one `jira_get_project_versions` per project at most every `versions_refresh_hours` (24), for projects whose tickets have fix versions; `data/jira/_versions/<PROJECT>.json`. It supplies ids and release dates when the MCP returns version names only.
 
 At most two release jobs per tick. A failed job is recorded with its error and retried after the usual back-off; the release then shows its Jira read time and error rather than a guess.
@@ -155,7 +167,7 @@ At most two release jobs per tick. A failed job is recorded with its error and r
 "releases": {
   "enabled": true,
   "jira": {"uat_field": "customfield_10100", "uat_values": {"required": ["yes"], "not_required": ["no"]},
-           "uat_accepted_statuses": ["UAT Done"]},
+           "uat_accepted_statuses": ["UAT Done"], "scope_limit": 50, "scope_max_pages": 4},
   "repos": {
     "service-api": {"branches": {"10001": "release/ABC-9000/7th-dec-release"},
                     "uat": {"branch": "uat", "promotion": {"kind": "pr", "from": "uat", "brings": "cherry-pick"}}},
@@ -177,7 +189,11 @@ release-pick: <TICKET> "<release id or name>"|-
 release-branch: <TICKET> <repo> <branch>|-
 release-repos: <TICKET> <repo> [<repo> …]|-
 uat: <TICKET> required|not_required|unknown
+uat-deployed: <TICKET>
+uat-accepted: <TICKET>
 ```
+
+`uat-deployed` / `uat-accepted` record your confirmation for the changes in the UAT branch now (refused when they aren't all there yet); a later commit needs a new confirmation.
 
 ## Files
 
@@ -185,7 +201,7 @@ uat: <TICKET> required|not_required|unknown
 |---|---|
 | `data/tickets/<KEY>.json` → `release` | Releases, selection, history, per-repo branch resolution, dev branches, PRs per destination, shared PRs, stages, flags, next step, freshness; UAT facts, reminders, readiness |
 | `data/tickets/<KEY>.json` → `release_override` | Your per-ticket choices |
-| `data/jira/_releases/scope.json` | The scope search: release facts per issue |
+| `data/jira/_releases/scope.json` | The scope search: release facts per issue (with `seen_at`, `stale`), the accounts it was checked against (`binding`), `complete`, `total`, `collected`, the pass in progress (`cycle`), `rejected` counts, `removed`, `error` / `failed_at` |
 | `data/jira/_versions/<PROJECT>.json` | Versions catalog with previous names |
 
 The record is additive: existing data needs no migration, and switching tracking off removes only the `release` record (your overrides stay).

@@ -290,6 +290,14 @@ class Tickets(Base, unittest.TestCase):
         self.assertIn("PR open on ABC-1001", alerts)
         self.assertNotIn("PR open on ABC-1002", alerts)
         self.assertIn("Left out: alerts of 1 ticket(s) assigned to someone else", alerts)
+        # a record with none of your work on it (no session, note or commit of yours): outside your scope, not named
+        common.write_json(common.hp("data", "tickets", "ABC-1009.json"), dict(
+            S.new_ticket("ABC-1009"), ownership=self.own("other")["ownership"],
+            git={"alerts": [{"kind": "stale-pr", "text": "PR open on ABC-1009", "repo": "service-api"}]}))
+        alerts = mcpserver.tool_get_alerts({}, self.cfg_j)
+        self.assertNotIn("ABC-1009", alerts)
+        self.assertIn("Not shown: 1 ticket record(s) with none of your own work", alerts)
+        self.assertNotIn("ABC-1009", mcpserver.tool_list_tickets({}, self.cfg_j))
 
 
 class SettingsAndScope(Base, unittest.TestCase):
@@ -303,13 +311,17 @@ class SettingsAndScope(Base, unittest.TestCase):
             "profile.include_tickets": {"ABC-1002": ""},
             "profile.repos": [os.path.join(self.home, "elsewhere")],
             "profile.accounts": [{"provider": "github", "instance": "github.com", "id": "1"},
-                                 {"provider": "github", "instance": "github.com", "id": "2"}],
+                                 {"provider": "github", "instance": "github.com", "id": "1", "login": "dev"}],
             "profile.email": "not-an-email",
         }
         _, err = settings.validate(bad)
         self.assertEqual(sorted(err), sorted(bad))
         self.assertIn("secret", err["profile.focus"])
-        self.assertIn("already", err["profile.accounts"])
+        self.assertIn("listed twice", err["profile.accounts"])
+        # two different accounts of yours on the same instance are fine (a work and an older account)
+        _, err = settings.validate({"profile.accounts": [{"provider": "github", "instance": "github.com", "id": "1"},
+                                                         {"provider": "github", "instance": "github.com", "id": "2"}]})
+        self.assertEqual(err, {})
         good = {"profile.display_name": "Dev Example", "profile.timezone": "+05:30", "profile.focus": "Payments API v2",
                 "profile.include_tickets": {"ABC-1004": "pairing"}, "profile.repos": [self.repo],
                 "profile.accounts": [{"provider": "jira", "instance": "acme.atlassian.net",

@@ -281,8 +281,16 @@ def tool_search(args, cfg):
 # --------------------------------------------------------------------------- tickets
 
 def _ticket_record(key):
+    """A ticket record inside your personal scope, else None (another person's work isn't returned by key)."""
     from .dashboard import api
+    if not api.scope_of(key).get("visible"):
+        return None
     return api.read_json_cached(_home("data", "tickets", key + ".json"))
+
+
+def _outside_text(key, scope):
+    return ("%s is outside your personal scope: %s. Only your own work is returned; if you collaborate on it, include "
+            "it on the Profile page (Collaborative tickets) with a reason." % (key, (scope or {}).get("reason") or "not yours"))
 
 
 def _title_or_hint(t):
@@ -468,6 +476,8 @@ def tool_get_ticket(args, cfg):
     t = api.ticket(key)
     if t is None:
         raise ToolError("No ticket %s in the worklog (list_tickets shows the known ones)." % key)
+    if t.get("outside"):
+        raise ToolError(_outside_text(key, t["scope"]))
     L = _summary_lines(t)
     if section:
         if t.get("focused") and section in api.DETAIL_SECTIONS:
@@ -618,6 +628,10 @@ def tool_get_branch_status(args, cfg):
     repo = _arg(args, "repo")
     tk = _ticket_record(key)
     if not tk:
+        from .dashboard import api
+        s = api.scope_of(key)
+        if os.path.exists(_home("data", "tickets", key + ".json")) and not s.get("visible"):
+            raise ToolError(_outside_text(key, s))
         raise ToolError("No ticket %s in the worklog (list_tickets shows the known ones)." % key)
     if repo:
         g = dict(tk.get("git") or {})
@@ -692,9 +706,10 @@ def tool_get_db_table(args, cfg):
     if t.get("tickets"):
         L += ["", "Tickets: " + ", ".join(t["tickets"])]
     qs = []
+    idx = api.scope_index(cfg)
     for fn in api._listdir(_home("data", "tickets")):
         key = fn[:-5]
-        if not fn.endswith(".json") or not api.TICKET_RE.match(key):
+        if not fn.endswith(".json") or not api.TICKET_RE.match(key) or not (idx.get(key) or {}).get("visible"):
             continue
         tk = api.read_json_cached(_home("data", "tickets", fn)) or {}
         for q in (tk.get("queries") or {}).values():
@@ -714,9 +729,11 @@ def tool_get_alerts(args, cfg):
     from .dashboard import api
     L = ["# Alerts"]
     n = 0
-    all_t = api.tickets()["tickets"]
+    res = api.tickets(cfg=cfg)
+    all_t = res["tickets"]  # the personal projection: records of somebody else's work aren't among them at all
     # a ticket Jira assigns to someone else (or reassigned away from you) isn't yours to act on: its alerts are counted
-    yours = [t for t in all_t if t["ownership"]["state"] not in ("reassigned", "other")]
+    yours = [t for t in all_t if t["ownership"]["state"] not in ("reassigned", "other", "outside")
+             and (t.get("scope") or {}).get("basis") != "context"]
     left_out = [t for t in all_t if t not in yours and (t["alerts"] or t.get("reminders"))]
     for t in yours:
         for a in t["alerts"]:
@@ -733,6 +750,9 @@ def tool_get_alerts(args, cfg):
     if left_out:
         L += ["", "Left out: alerts of %d ticket(s) assigned to someone else in Jira (%s)." % (
             len(left_out), ", ".join(t["key"] for t in left_out[:8]))]
+    if res.get("outside"):
+        L += ["", "Not shown: %d ticket record(s) with none of your own work on them (outside your personal scope)." %
+              res["outside"]]
     h = api.read_json_cached(common.wl("health.json")) or {}
     warn = []
     if os.path.exists(common.wl("PAUSED")):
@@ -763,7 +783,7 @@ def tool_get_alerts(args, cfg):
         pass
     if warn:
         L += ["", "## Worklog health"] + ["- " + w for w in warn]
-    if len(L) == 1 or (len(L) == 3 and left_out):
+    if not any(x.startswith(("## ",)) for x in L):
         L.insert(1, "Nothing needs attention.")
     L.append("\nHealth: %s" % common.wl("health.json"))
     return "\n".join(L)
