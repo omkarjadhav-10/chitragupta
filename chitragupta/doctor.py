@@ -136,6 +136,24 @@ def model_row(health, cfg):
     return _row("model spend", not m["over"], detail)
 
 
+def profile_row(cfg):
+    """The developer profile per provider. Nothing confirmed yet isn't a fault (that provider's work just isn't counted
+    as yours); a time zone this machine can't resolve is."""
+    from . import profile
+    try:
+        st = profile.status(cfg)
+    except Exception as e:  # noqa: BLE001 - a broken profile is one row, never the whole doctor
+        return _row("profile", False, "can't read the profile: %s" % str(e)[:200])
+    bits = ["commits %s" % st["git"]["state"], "Jira %s" % st["jira"]["state"]] + \
+        ["%s %s" % (h["instance"], h["state"]) for h in st["hosts"]]
+    detail = ", ".join(bits)
+    if st["timezone"]["state"] == "error":
+        return _row("profile", False, "%s; %s" % (detail, st["timezone"]["why"]))
+    if any(x["state"] != "ok" for x in [st["git"], st["jira"]] + st["hosts"]):
+        detail += " (confirm your identities on the dashboard's Profile page or with /cg:setup)"
+    return _row("profile", True, detail)
+
+
 def errors_row(health):
     issues = []
     le = health.get("last_error") or ""
@@ -241,6 +259,7 @@ def run(probe=True, task_expected=True, mcp=None):
     rows.append(tick_row(health, task_expected))
     rows.append(push_row(cfg, health))
     rows.append(model_row(health, cfg))
+    rows.append(profile_row(cfg))
     rt = runtime.status()
     rows.append(_row("runtime", rt["current_ok"] and rt["launcher_exists"],
                      "%s current=%s, package %s%s" % (rt["path"], rt["current"], __version__,

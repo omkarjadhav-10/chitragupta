@@ -16,7 +16,7 @@ import re
 from urllib.parse import quote
 
 from . import common, mcpjobs
-from .hosts import SAFE_ARG, SAFE_NAME  # the same name rules as the CLI path
+from .hosts import SAFE_ARG, SAFE_NAME, author_of  # the same name rules as the CLI path
 from .safety.mcp import GIT_HOST_READ
 
 PROVIDERS = ("azure-devops", "github")
@@ -168,7 +168,7 @@ def ado_pr(p, info):
             "merge_commit": (p.get("lastMergeCommit") or {}).get("commitId") if state == "merged" else None,
             "head": head, "head_at_merge": head if state == "merged" else None,
             "url": "https://dev.azure.com/%s/%s/_git/%s/pullrequest/%s" % (quote(org), quote(project), quote(repo), n),
-            "src": "mcp:azure-devops"}
+            "src": "mcp:azure-devops", "author": author_of("mcp:azure-devops", p.get("createdBy"))}
 
 
 def gh_pr(p, info):
@@ -188,7 +188,7 @@ def gh_pr(p, info):
             "created_at": p.get("created_at"), "merged_at": p.get("merged_at") if merged else None,
             "merge_commit": p.get("merge_commit_sha") if merged else None,
             "head": sha, "head_at_merge": sha if merged else None, "url": p.get("html_url") or p.get("url"),
-            "src": "mcp:github"}
+            "src": "mcp:github", "author": author_of("mcp:github", p.get("user") or p.get("author"))}
 
 
 ADAPTER = {"azure-devops": ado_pr, "github": gh_pr}

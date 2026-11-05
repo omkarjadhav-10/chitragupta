@@ -7,6 +7,8 @@ import { route, useStore, useApi, go, href, startLive, connection, api, EXPORT, 
 import { Icon, Toasts, Dialog, themeMode } from './lib/ui.js';
 import { NAV, NAV_END, paletteOpen, keysOpen, morePagesOpen, pageKeys, setTheme, Desk } from './lib/shell.js';
 import { TodayPage } from './pages/today.js';
+import { ProgressPage } from './pages/progress.js';
+import { ProfilePage } from './pages/profile.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
 import { ReleasesPage } from './pages/releases.js';
 import { TimesheetPage } from './pages/timesheet.js';
@@ -28,7 +30,7 @@ function TopBar() {
   const r = useStore(route);
   const more = useStore(morePagesOpen);
   const problems = healthIssues(st.data);
-  const primary = NAV.concat(NAV_END).filter((n) => ['today', 'tickets', 'timesheet', 'knowledge', 'health', 'settings'].includes(n.id));
+  const primary = NAV.concat(NAV_END).filter((n) => ['today', 'progress', 'tickets', 'timesheet', 'knowledge', 'health', 'settings'].includes(n.id));
   const secondary = NAV.concat(NAV_END).filter((n) => !primary.includes(n));
   useEffect(() => {
     if (!more) return undefined;
@@ -141,8 +143,8 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
-  ['g then h', 'Health'], ['g then u', 'Setup'], ['g then e', 'Settings'],
+  ['g then t', 'Today'], ['g then p', 'My progress'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
+  ['g then h', 'Health'], ['g then i', 'Profile'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
 function KeysDialog() {
@@ -211,6 +213,8 @@ function Page() {
     case 'day': return html`<${TodayPage} route=${r} />`;
     case 'tickets': return r.arg ? html`<${TicketPage} key=${'t-' + r.arg} route=${r} />` : html`<${TicketsPage} route=${r} />`;
     case 'releases': return html`<${ReleasesPage} route=${r} />`;
+    case 'progress': return html`<${ProgressPage} route=${r} />`;
+    case 'profile': return html`<${ProfilePage} route=${r} />`;
     case 'timesheet': return html`<${TimesheetPage} route=${r} />`;
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
     case 'db': return html`<${DbPage} route=${r} />`;

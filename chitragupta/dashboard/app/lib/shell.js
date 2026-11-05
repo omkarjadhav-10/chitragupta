@@ -7,6 +7,7 @@ import { Icon, themeMode, effectiveDark } from './ui.js';
 
 export const NAV = [
   { id: 'today', label: 'Today', icon: 'today', key: 't' },
+  { id: 'progress', label: 'My progress', icon: 'progress', key: 'p' },
   { id: 'tickets', label: 'Tickets', icon: 'tickets', key: 'k' },
   { id: 'releases', label: 'Releases', icon: 'release', key: 'r' },
   { id: 'timesheet', label: 'Timesheet', icon: 'timesheet', key: 's' },
@@ -17,6 +18,7 @@ export const NAV = [
   { id: 'health', label: 'Health', icon: 'health', key: 'h' },
 ];
 export const NAV_END = [
+  { id: 'profile', label: 'Profile', icon: 'profile', key: 'i' },
   { id: 'setup', label: 'Setup', icon: 'setup', key: 'u' },
   { id: 'settings', label: 'Settings', icon: 'settings', key: 'e' },
 ];

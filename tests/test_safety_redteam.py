@@ -1168,7 +1168,13 @@ class AllowedTests(SafetyCase):
                      ["az", "repos", "pr", "list", "--output", "json"], ["az", "repos", "pr", "show", "--id", "1", "-o", "json"],
                      ["az", "repos", "ref", "list", "--output", "json"], ["az", "boards", "work-item", "show", "--id", "1",
                                                                           "--output", "json"],
-                     ["az", "account", "show", "--output", "json"]):
+                     ["az", "account", "show", "--output", "json"],
+                     # your own PRs (activity.py): author-filtered lists, read-only
+                     ["gh", "pr", "list", "--repo", "o/r", "--author", "dev-example", "--state", "all", "--limit", "200",
+                      "--search", "updated:2026-08-01..*", "--json", "number,author"],
+                     ["glab", "mr", "list", "--repo", "o/r", "--author", "dev-example", "--all", "--output", "json"],
+                     ["az", "repos", "pr", "list", "--creator", "developer@acme.test", "--status", "all", "--top", "200",
+                      "--output", "json"]):
             with self.subTest(argv=argv):
                 self.assertIsNone(commands.reason(argv, "host", cfg=cfg))
         xml = common.wl("cache", "Chitragupta.xml")

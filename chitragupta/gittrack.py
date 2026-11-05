@@ -23,6 +23,7 @@ from . import branches as legacy
 from . import common
 from . import gitro
 from . import hosts
+from . import profile
 from .gitcmd import (  # noqa: F401 - settings and command parsing live in the light module (the guard uses it)
     DEFAULT_BASES, DEFAULT_STRATEGIES, DEFAULT_SUFFIXES, FETCH, MAX_OWN, PR_REFRESH_MINUTES, RELEASE_LOOKBACK_DAYS,
     STATUSES, URL_RX, _list, ignored, is_pattern_role, parse_command, pr_urls, repo_conf, repo_key, role_of, settings,
@@ -530,7 +531,7 @@ class Tracker:
     # ---- branches
     def candidates(self, r, known_tickets, active):
         """Work branches worth tracking: every local one, and remote ones that name one of my tickets or are mine."""
-        emails = {e.lower() for e in self.cfg.get("git_author_emails") or [] if e}
+        pol = profile.Policy(self.cfg)
         prefixes = self.cfg.get("ticket_prefixes") or []
         cutoff = (self.now - _days(60)).isoformat()
         out = {}
@@ -549,7 +550,7 @@ class Tracker:
                 out[name] = True
                 continue
             t = common.ticket_from_branch(name, prefixes)
-            if (t and t in active) or (ref["email"] in emails and ref["date"] >= cutoff):
+            if (t and t in active) or (pol.email_mine(ref["email"]) and ref["date"] >= cutoff):
                 out[name] = True
         return list(out)
 
@@ -702,9 +703,10 @@ class Tracker:
                 fork = mb
             rec["fork_sha"] = fork
         own = r.commits("%s..%s" % (fork, tip_ref)) if tip and fork else []
-        emails = {e.lower() for e in self.cfg.get("git_author_emails") or [] if e}
+        pol = profile.Policy(self.cfg)
+        # yours only by a confirmed email; with none confirmed it is unknown (None), never "everyone's"
         rec["own"] = [{"sha": c["sha"], "short": c["short"], "date": c["date"], "subject": c["subject"],
-                       "mine": (c["email"] in emails) if emails else True,
+                       "mine": pol.commit_mine(c["email"]),
                        "picked_from": _picked_from(c["body"])} for c in own]
         rec["ahead"] = len(own)
         rec["behind"] = r.count("%s..%s" % (tip_ref, base)) if base and tip else None

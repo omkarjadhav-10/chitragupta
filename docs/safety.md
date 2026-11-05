@@ -65,6 +65,8 @@ The dashboard reads with GET and HEAD. It writes only through a short allowlist 
 | `capture-pause`, `capture-resume` | Creates or removes the `PAUSED` file in the data home | no |
 | `scheduler-repair` | Re-registers Chitragupta's own background job when it is missing or differs (the same as `setup scheduler --repair`) | no |
 | `share-ticket` | Shares a ticket: writes the redacted bundle to your share target, only when the scan passes (the same as `cli share KEY --yes`) | no |
+| `profile-discover` | Find my Git host accounts: refreshes the identity suggestions (`git config --get user.email` in watched repos; with `hosts`, `gh api user` / `glab api user` / `az account show`) into a cache in the data home; confirms nothing | with `jira`: one read-only Jira job (`jira_get_user_profile`), within the daily budget |
+| `reflection-save` | Saves your reflection note for one day to `data/reflections/` (local only, at most 1000 characters, secrets masked) | no |
 
 Chitragupta never edits `~/.claude/settings.json`, `~/.claude.json` or any other Claude Code settings file. Connecting Slack prints the one `claude mcp add --scope local …` command for you to run yourself.
 

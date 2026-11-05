@@ -39,8 +39,13 @@ Everything in the data home stays on your machine except the push allowlist belo
 - structured data, including Jira and database caches (`data\`)
 - the Bruno collection (`bruno\`)
 - `inbox.md` and `_drop\`
+- your developer profile's derived data: the activity ledgers (`data\activity\`), your reflection notes (`data\reflections\`) and the identity suggestions (`.worklog\cache\profile-*`)
 
 The same goes for the settings folder `%USERPROFILE%\.chitragupta\`.
+
+## Your developer profile
+
+The profile ([progress.md](progress.md)) holds your name, primary email, confirmed commit emails and provider account ids in `config.json`, and never a token or password (values that look like one are refused). Emails and account ids are masked on the dashboard and in CLI output unless you choose to show them. They are left out of every progress answer, the session-start line, copied weekly wins, ticket exports and shared bundles. The `get_progress` MCP tool shows them only with `include_ids=true`. For other people, Chitragupta keeps only what establishes your own contribution: whether a ticket's assignee was you (never who else), PR authors only for the recheck (only your own PRs are stored), and no committer emails. Your reflection notes are labelled self-reported and never reach the pushed `daily\` files.
 
 ## What is pushed
 
@@ -133,7 +138,9 @@ The plugin's own MCP server (`chitragupta`, see [mcp.md](mcp.md)) runs inside yo
 | `git fetch` / `git push` | Push: to `github_remote` only. Fetch: in watched repos with tickets active in the last 14 days, at most every 30 minutes and before 20:00, base and ticket branches only, into remote-tracking refs, never pruning (branch tracking; `branching.fetch.enabled: false` turns it off) |
 | `git ls-remote --heads` | With each fetch, to notice branches deleted on the remote |
 | `gh` / `glab` / `az repos` | PR data for active tickets' branches (hourly for open PRs, and before 20:00), with the CLI's own sign-in; never a token stored |
-| Slack, Jira and database MCP servers | Only through the MCP jobs above, and only when you've connected them |
+| `gh pr list --author`, `glab mr list --author`, `az repos pr list --creator` | Your own PRs in your profile's repositories, hourly, only for a host where your account is confirmed |
+| `gh api user`, `glab api user`, `az account show` | Only when you press Find my Git host accounts or run `profile discover --hosts`: which account each CLI is signed in as, as a suggestion |
+| Slack, Jira and database MCP servers | Only through the MCP jobs above, and only when you've connected them (the Jira account lookup for your profile runs only when you ask) |
 
 The dashboard makes no external requests. Mermaid is served from the plugin itself, not from a CDN.
 

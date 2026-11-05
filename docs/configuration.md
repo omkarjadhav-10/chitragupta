@@ -32,7 +32,7 @@ A minimal config after setup:
 | `capture_scope.include_paths` | list of paths | `[]` | If not empty, capture happens only under these folders. Empty means everywhere. |
 | `capture_scope.exclude_paths` | list of paths | `[]` | Never capture under these folders. The data home itself is always time-only (see [privacy.md](privacy.md)). |
 | `watched_repos` | list of paths | `[]` | Repos scanned for your commits and branch activity. Grows by itself from captured sessions, with the same limits as `ticket_prefixes`. |
-| `git_author_emails` | list of strings | `[]` | Your commit emails, for example `["you@acme.test"]`. They filter "my commits" and identify you in Jira facts. The last one is also the default Slack lookup email. |
+| `git_author_emails` | list of strings | `[]` | Your **confirmed** commit emails, for example `["developer@acme.test"]`. A commit is yours only when its author email is exactly one of these (any case; no dot or `+tag` stripping), everywhere: the worklog, tickets, branch tracking, progress. Empty: no commit counts as yours (never everyone's). Bot and service addresses are refused. They also identify you in Jira facts, and the last one is the default Slack lookup email. Edited on the Profile page; see [progress.md](progress.md). |
 | `bruno_collections` | list of paths | `[]` | Bruno collections outside the data home. Request edits there show up under "Outside Claude Code". |
 | `sql_script_dirs` | list of paths | `[]` | Folders of `.sql` scripts to watch. |
 | `sql_script_globs` | list of globs | `[]` | Glob patterns for more SQL script folders, for example `["C:/Users/you/AppData/Roaming/SomeIDE/consoles/db/*"]`. |
@@ -95,6 +95,36 @@ Release tracking: the ticket's Jira release, its release branch per repo, releas
 | `releases.jira.scope_limit` | int | `50` | Issues read per scope search (at most 100). |
 | `releases.jira.versions_refresh_hours` | int | `24` | How often each project's versions catalog is re-read. |
 | `releases.scope` | object | `{"assigned": true, "branches": true, "worked": true}` | What makes a ticket yours for the overview: Jira assignment, a branch named for it with your commits, Claude Code work on it. |
+
+## `profile`
+
+Your developer profile: who you are and which identities and scope are yours. Every key is edited on the dashboard's Profile page (or through `profile confirm` / `/cg:setup`) and goes through the settings write path. See [progress.md](progress.md).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `profile.display_name` | string | `""` | How summaries greet you (at most 80 characters). Never used to match work. |
+| `profile.email` | string | `""` | Your primary work email, for example `developer@acme.test`. Shown to you only (masked by default); the Jira account lookup uses it. Not proof of authorship by itself. |
+| `profile.accounts` | list | `[]` | Confirmed provider accounts, each `{"provider": "jira" \| "github" \| "gitlab" \| "azure" \| "bitbucket", "instance", "id", "login"}` plus the `source` it was confirmed from. `instance` is lower case: `github.com`, `dev.azure.com/<org>`, a GitLab host, a Jira site. The stable `id` decides when the provider reports one; else the exact `login`. One account per provider instance; bot logins and token-like values are refused. |
+| `profile.repos` | list of paths | `[]` | Watched repositories in scope. Empty: every `watched_repos` entry. |
+| `profile.jira_projects` | list of strings | `[]` | Jira projects in scope. Empty: `ticket_prefixes`. |
+| `profile.focus` | string | `""` | Current projects or responsibilities (at most 400 characters), given to Claude as planning context. |
+| `profile.role` | string | `""` | Optional planning context. |
+| `profile.technologies` | list of strings | `[]` | Optional planning context. |
+| `profile.timezone` | string | `""` | Empty: this machine's zone. Or a UTC offset such as `+05:30`, or a zone name this machine has data for (Windows needs the `tzdata` package for names). Progress days and reminders follow it, with `day_starts_at`. |
+| `profile.tracking_start` | `YYYY-MM-DD` | `""` | History before this day isn't collected. Empty: the day Chitragupta first ran. |
+| `profile.backfill_days` | int | `90` | At most this many days of commits and PRs are imported (1 to 365). |
+| `profile.include_tickets` | object key → reason | `{}` | Collaborative tickets assigned to someone else that count as yours, for example `{"ABC-1003": "pairing on the API contract"}`. Only your own activity on them is counted. |
+| `profile.bot_patterns` | list of regexes | `[bot]`, `noreply@github.com`, dependabot / renovate / github-actions, `…bot@` | Identities that can never be yours. |
+| `profile.celebrations` | bool | `true` | Short factual milestone messages. |
+| `profile.animations` | bool | `true` | Motion on the progress page (reduced motion is always respected). |
+| `profile.reflection` | bool | `true` | The daily reflection box. |
+
+## `progress`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `progress.exclude_globs` | list of globs | lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `poetry.lock`, `Cargo.lock`, `go.sum`, …), `vendor/**`, `node_modules/**`, `dist/**`, `build/**`, `out/**`, `target/**`, `*.min.js`, `*.min.css`, `*.map`, `*.generated.*`, `*.g.cs`, `*.designer.cs`, `*_pb2.py`, `*.pb.go` | Paths left out of the committed-changes line counts and shown separately. `dir/**` matches that folder anywhere; a pattern with `/` matches the whole path; others match the file name. |
+| `progress.done_statuses` | list of strings | `["done", "closed", "resolved"]` | Jira statuses (any case) whose transition counts as a completed ticket that day. |
 
 ## `models`
 
@@ -230,7 +260,7 @@ MCP jobs stay off until you configure them. Each job is a read-only `claude -p` 
 | `mcp.jira.cards` | bool | `true` | With Jira on, read the cards (title, type, status, summary) of the tickets worked in the last 7 days whose card is missing or older than their last active day: missing first, then the oldest, at most 2 per tick and never from the evening worklog's reserve. A key Jira recently said doesn't exist is skipped for a week. |
 | `mcp.jira.evening` | bool | `true` | With Jira on, read what is already logged in Jira before the evening message, so it isn't logged twice. |
 | `mcp.jira.server` | string | `"mcp-atlassian"` | Name of the Jira MCP server in your Claude Code user scope. The read allowlist entry and the server's own read-only mode (`READ_ONLY_MODE`, `ENABLED_TOOLS`) follow this name. |
-| `mcp.jira.account_id` | string | `""` | Your Atlassian account id. It identifies your comments and worklogs, in addition to `git_author_emails`. |
+| `mcp.jira.account_id` | string | `""` | Your Atlassian account id (the older setting). Read only when `profile.accounts` has no Jira account; the profile's account wins. It identifies your comments, worklogs and assigned tickets. |
 | `mcp.git_host.<provider>` | object | — | `{"server", "enabled"}` for `azure-devops` or `github`: the user-scope MCP server PRs are read through when the host CLI isn't installed. Set by `setup use-git-host <server>`, which allows only that provider's classified PR and branch read tools. |
 | `mcp.database.enabled` | bool | `false` | Run the database jobs: schema cards, QA trace and link map. Set by `setup use-database`. |
 | `mcp.database.trace` | bool | `true` | With the database MCP on, run the QA trace of a ticket's records. |

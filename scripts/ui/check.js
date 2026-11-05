@@ -14,7 +14,8 @@ const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/t
   ['ticket-branches', '#/tickets/ABC-1001?tab=branches'], ['ticket-dbflow', '#/tickets/ABC-1001?tab=dbflow'],
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
-  ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders'], ['team', '#/team']];
+  ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders'], ['team', '#/team'],
+  ['progress', '#/progress'], ['progress-day', '#/progress?date=' + today], ['profile', '#/profile']];
 let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 
@@ -149,7 +150,7 @@ async function launch() {
   await page.setViewportSize({ width: 900, height: 900 });
   await page.goto(base + '#/today');
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
-  check(await page.locator('#more-pages a').count() === 11, 'compact navigation exposes every page');
+  check(await page.locator('#more-pages a').count() === 13, 'compact navigation exposes every page');
   await page.keyboard.press('Escape');
   check(await page.locator('#more-pages').count() === 0, 'Escape closes navigation from its trigger');
   await page.locator('.dayline-span').first().click();

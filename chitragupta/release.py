@@ -212,25 +212,19 @@ def parse_versions(raw, project):
 
 
 def _me(cfg):
-    emails = {e.lower() for e in (cfg or {}).get("git_author_emails") or [] if e}
-    acct = (((cfg or {}).get("mcp") or {}).get("jira") or {}).get("account_id")
-    return emails, acct
+    """The ownership policy (profile.Policy): your confirmed Jira account and commit emails."""
+    from . import profile
+    return profile.Policy(cfg or {})
 
 
 def assignee_is_me(a, cfg):
-    """True / False when the assignee can be compared with you (git_author_emails, mcp.jira.account_id), else None."""
+    """True / False when the assignee can be compared with your confirmed identity (the profile's Jira account, else
+    an exact confirmed email), else None. No assignee is False."""
     if a is None:
         return False
     if not isinstance(a, dict):
         return None
-    emails, acct = _me(cfg)
-    em = str(a.get("email") or a.get("emailAddress") or "").lower()
-    aid = a.get("account_id") or a.get("accountId")
-    if (em and em in emails) or (acct and aid == acct):
-        return True
-    if (em and emails) or (aid and acct):
-        return False
-    return None
+    return _me(cfg).person_mine(a)
 
 
 def issue_facts(iss, cfg, key=None, requested=None):
@@ -1571,13 +1565,19 @@ def _excluded(tk, cfg, facts_status=""):
     return st in settings(cfg)["jira"]["exclude_statuses"]
 
 
-def mine(tk, cfg, scope_issue=None):
-    """(bool, why) — is this one of my tickets for the overview? Jira assignment, my own development branches
-    (my commits on a branch linked to the ticket), or my Claude Code work on it. Authoring a shared integration PR
-    alone never makes a ticket mine."""
+def mine(tk, cfg, scope_issue=None, key=None):
+    """(bool, why) — is this one of my tickets for the overview? Jira assignment to your confirmed account, a ticket
+    you included yourself, my own development branches (my commits on a branch linked to the ticket), or my Claude
+    Code work on it. A ticket Jira now assigns to someone else (reassigned) is not mine any more, whatever I did on
+    it before. Authoring a shared integration PR alone never makes a ticket mine."""
     s = settings(cfg)["scope"]
     rel = tk.get("release") or {}
-    if s.get("assigned") and (rel.get("assignee_me") or (scope_issue or {}).get("assigned_scope")):
+    state, why = _me(cfg).ticket_state(key or tk.get("id"), tk)
+    if state == "included":
+        return True, why
+    if state in ("reassigned", "other"):
+        return False, ""
+    if s.get("assigned") and (state == "assigned" or rel.get("assignee_me") or (scope_issue or {}).get("assigned_scope")):
         return True, "assigned to you"
     if s.get("branches"):
         for x in ((tk.get("git") or {}).get("repos") or {}).values():
@@ -1603,6 +1603,7 @@ def month_overview(month=None, cfg=None, now=None, store=None):
         raise ValueError("month must be YYYY-MM")
     sc = common.read_json(scope_path(), {}) or {}
     issues = sc.get("issues") or {}
+    pol = _me(cfg)
     groups, overdue, unresolved = {}, [], []
     keys = set(Store.all_ticket_ids()) | set(issues)
     for t in sorted(keys):
@@ -1614,9 +1615,11 @@ def month_overview(month=None, cfg=None, now=None, store=None):
         rel = tk.get("release") if isinstance(tk.get("release"), dict) and tk["release"].get("v") else None
         if tk.get("jira_missing") or _excluded(tk, cfg, (iss or {}).get("status")):
             continue
-        # in the scope search: yours when Jira says so, or when the search itself only returns your tickets
-        assigned = bool(iss) and (iss.get("assignee_me") is True or (iss.get("assignee_me") is None and sc.get("mine_only")))
-        ok, why = mine(tk, cfg, {"assigned_scope": assigned})
+        # in the scope search: yours when Jira says so; with no Jira account confirmed in the profile, also when the
+        # search itself only returns the signed-in account's tickets (shown as such until you confirm the account)
+        assigned = bool(iss) and (iss.get("assignee_me") is True or (iss.get("assignee_me") is None and sc.get("mine_only")
+                                                                     and not pol.jira_account()))
+        ok, why = mine(tk, cfg, {"assigned_scope": assigned}, key=t)
         if not ok:
             continue
         row = _row(t, tk, rel, iss, why, today)

@@ -57,7 +57,7 @@ class Adapters(Case):
                 exp = {r["number"]: r for r in expected(provider)}
                 self.assertEqual(got, exp)
                 keys = {"number", "title", "source", "target", "state", "review", "created_at", "merged_at",
-                        "merge_commit", "head", "head_at_merge", "url", "src"}
+                        "merge_commit", "head", "head_at_merge", "url", "src", "author"}
                 for r in got.values():
                     self.assertEqual(set(r), keys)
                     self.assertEqual(r["src"], "mcp:" + provider)

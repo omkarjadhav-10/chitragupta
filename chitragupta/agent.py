@@ -807,6 +807,8 @@ class Agent:
             day = common.workday(c["date"], cfg)
             dd = self.store.day(day)
             rec = {k: c[k] for k in ("sha", "short", "repo_name", "date", "ref", "subject", "ticket")}
+            if c.get("ae"):
+                rec["ae"] = c["ae"]  # the author email the scan matched exactly: lets a later profile change recheck it
             rec["files_count"] = len(c["files"])
             if c["sha"] not in [x["sha"] for x in dd["commits"]]:
                 dd["commits"].append(rec)
@@ -1263,6 +1265,16 @@ class Agent:
             self._timed("extractions",self.run_extractions)
             self._timed("fallbacks",self.refresh_fallbacks)
             self._timed("sources",self.run_sources)
+            try:
+                from . import profile
+                self._timed("profile",profile.tick,self.store,self.cfg,self.state)  # identity changes, context line
+            except Exception:
+                common.log("agent", "profile failed: " + traceback.format_exc())
+            try:
+                from . import activity
+                self._timed("activity",activity.tick,self.store,self.cfg,self.state)  # your commits and PRs (progress)
+            except Exception:
+                common.log("agent", "activity failed: " + traceback.format_exc())
             try:
                 if configstore.on(self.cfg, "artifacts.enabled"):  # off: queued files wait until it's back on
                     self._timed("artifacts",self.features.process_artifacts)

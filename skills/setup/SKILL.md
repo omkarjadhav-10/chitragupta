@@ -62,7 +62,17 @@ Run each of these only after they agree.
 
 If they decline Slack or Jira for good, ask whether to stop the weekly "connect Slack/Jira" reminder; if yes, run `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" setup reminders off` (`on` turns it back on).
 
-## 5. Check
+## 5. Your developer profile (optional)
+
+This decides which commits, PRs and tickets count as theirs everywhere (see the plugin's `docs/progress.md`). Nothing is confirmed without them.
+
+`py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" profile discover --hosts`
+
+It lists suggestions with where each came from: a repo's `git config user.email`, and the account `gh` / `glab` / `az` is signed in as (one read each). Show them as a short list with the source, and say plainly that a repo's email or a CLI's account may not be theirs. Ask which ones are theirs. Never pick for them, and never offer bot identities. For each one they name, run `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" profile confirm <id>`. If they use Jira and have set a primary work email, offer `profile discover --jira` (one read-only Jira lookup) and confirm the same way. Then show `profile check`. A provider left unconfirmed stays visibly "unconfigured": that is fine.
+
+Name, focus, time zone, scope and preferences are set on the dashboard's Profile page (`/cg:dashboard`, then `g i`).
+
+## 6. Check
 
 `py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py" doctor`
 

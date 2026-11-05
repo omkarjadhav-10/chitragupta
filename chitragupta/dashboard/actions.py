@@ -203,6 +203,59 @@ def scheduler_repair(body):
     return (200 if res.get("ok") else 502), dict(res, status=scheduler.status(common.load_config()))
 
 
+@action("profile-discover", cap=256)
+def profile_discover(body):
+    """Find identity suggestions: git config in the watched repos always (local); with {"hosts": true} the account each
+    host CLI is signed in as (one read each); with {"jira": true} one Jira lookup for your primary email (a read-only
+    MCP job within the daily MCP budget, the 20:00 reserve kept). Nothing is confirmed: suggestions only."""
+    from .. import jiraworklog, mcpjobs, profile
+    hosts_too, jira = body.get("hosts", False), body.get("jira", False)
+    if not isinstance(hosts_too, bool) or not isinstance(jira, bool):
+        return 400, {"error": "hosts and jira are true or false."}
+    if jira:
+        def go(a):
+            if not mcpjobs.enabled(a.cfg, "jira"):
+                return {"ok": False, "skipped": "Jira is off (mcp.jira.enabled)"}
+            if jiraworklog._over_budget(a):
+                return {"ok": False, "skipped": jiraworklog._BUDGET}
+            return {"ok": True, "res": profile.discover(a.cfg, hosts_too=hosts_too, jira=True, health=a.health)}
+        got = jiraworklog._locked(3, go)
+    else:
+        try:
+            got = {"ok": True, "res": profile.discover(common.load_config(), hosts_too=hosts_too)}
+        except Exception as e:  # noqa: BLE001
+            got = {"ok": False, "skipped": str(e)[:200] or e.__class__.__name__}
+    if not got.get("ok"):
+        record_action("profile-discover", False, got.get("skipped") or "")
+        return 200, {"ok": False, "skipped": got.get("skipped") or "skipped"}
+    res = got["res"]
+    errors = res.get("errors") or {}
+    record_action("profile-discover", True, "%d suggestion(s)%s" % (len(res.get("candidates") or []),
+                                                                    "; " + ", ".join(sorted(errors)) if errors else ""))
+    return 200, {"ok": True, "candidates": len(res.get("candidates") or []), "errors": errors}
+
+
+@action("reflection-save", cap=2048)
+def reflection_save(body):
+    """Your note for a day ("What moved forward today?"): self-reported, kept in data/reflections on this machine, never
+    in the pushed daily files."""
+    from .. import configstore, profile, progress
+    cfg = common.load_config()
+    if not configstore.on(cfg, "profile.reflection"):
+        return 403, {"error": "The daily reflection is switched off in your profile."}
+    day, text = _day({"day": body.get("date")}), body.get("text")
+    if not day or not isinstance(text, str):
+        return 400, {"error": "Give the date as YYYY-MM-DD and the note as text."}
+    if day > max(profile.today(cfg), common.workday(common.now(), cfg)):  # days follow the profile's zone
+        return 400, {"error": "That day hasn't happened yet."}
+    try:
+        rec = progress.save_reflection(day, text)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    record_action("reflection-save", True, day)
+    return 200, {"ok": True, "date": day, "reflection": rec}
+
+
 @action("share-ticket", cap=2048)
 def share_ticket(body):
     """Share a ticket: the same as `cli share KEY --yes`. The bundle is written only when the scan passes."""

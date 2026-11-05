@@ -863,6 +863,20 @@ def parser():
     s.add_argument("--notes", action="store_true", help="list the team notes (read-only)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_share)
+    s = sub.add_parser("profile", help="your developer profile: show, candidates, discover, confirm, check")
+    s.add_argument("action", nargs="?", default="show", choices=("show", "candidates", "discover", "confirm", "check"))
+    s.add_argument("id", nargs="?", default="")
+    s.add_argument("--hosts", action="store_true", help="discover: also ask gh / glab / az which account they use")
+    s.add_argument("--jira", action="store_true", help="discover: one Jira lookup for your primary email")
+    s.add_argument("--reveal", action="store_true", help="show emails and account ids unmasked")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_profile)
+    s = sub.add_parser("progress", help="your progress: today, week, month, records, wins; reflect saves a note")
+    s.add_argument("period", nargs="?", default="today", choices=("today", "week", "month", "records", "wins", "reflect"))
+    s.add_argument("text", nargs="?", default=None, help="reflect: the note (what moved forward)")
+    s.add_argument("--date", help="YYYY-MM-DD (default: today)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_progress)
     for name, fn in (("pause", cmd_pause), ("resume", cmd_resume), ("status", cmd_status)):
         sub.add_parser(name).set_defaults(fn=fn)
     return p
@@ -918,6 +932,99 @@ def cmd_share(a):
     if res.get("committed"):
         out("Committed%s" % (" and pushed" if res["pushed"] else "; push failed: %s" % res["push_error"]))
     return 0 if res["ok"] else 1
+
+
+def cmd_progress(a):
+    """`progress [today|week|month|records|wins] [--date D] [--json]` your recorded progress (no model call, no email
+    or account id); `progress reflect "text" [--date D]` saves your note for the day (self-reported, local only)."""
+    from . import progress
+    cfg = common.load_config()
+    if a.period == "reflect":
+        if a.text is None:
+            rec = progress.read_reflection(a.date or progress.Ctx(cfg).today)
+            out(rec["text"] if rec else "No note for that day yet.")
+            return 0
+        try:
+            rec = progress.save_reflection(a.date or progress.Ctx(cfg).today, a.text)
+        except ValueError as e:
+            out("Not saved: %s" % e)
+            return 2
+        out("Saved your note (%d characters, kept on this machine only)." % len(rec["text"]))
+        return 0
+    if a.json:
+        fn = {"today": lambda: progress.today(cfg, day=a.date), "week": lambda: progress.week(cfg, a.date),
+              "month": lambda: progress.month(cfg, (a.date or "")[:7] or None), "records": lambda: progress.records_answer(cfg),
+              "wins": lambda: progress.weekly_wins(cfg, a.date)}[a.period]
+        out(json.dumps(fn(), indent=1, ensure_ascii=False))
+        return 0
+    out(progress.markdown(a.period, a.date, cfg).rstrip())
+    return 0
+
+
+def cmd_profile(a):
+    """`profile show [--reveal]` your profile and what is unresolved per provider; `profile candidates` the identity
+    suggestions with their provenance; `profile discover [--hosts] [--jira]` refreshes them (git config always, the
+    host CLIs' signed-in accounts with --hosts, one budgeted Jira lookup with --jira); `profile confirm <id>` makes one
+    yours through the settings write path; `profile check` the status per provider. Emails and ids are masked unless
+    --reveal (the output may land in a transcript)."""
+    from . import profile
+    cfg = common.load_config()
+    mask = (lambda x: x) if a.reveal else profile.mask
+    if a.action == "confirm":
+        if not a.id:
+            out("Name the suggestion: profile confirm <id> (ids: profile candidates).")
+            return 2
+        try:
+            res = profile.confirm(a.id, cfg)
+        except ValueError as e:
+            out("Not confirmed: %s" % e)
+            return 2
+        out("Confirmed (%d change%s recorded; undo it on the Settings page)." % (
+            len(res["changes"]), "" if len(res["changes"]) == 1 else "s"))
+        return 0
+    if a.action == "discover":
+        if a.jira:
+            os.environ["CHITRAGUPTA_MCP_MANUAL"] = os.environ["WORKLOG_MCP_MANUAL"] = "1"  # asked for: outside the budget
+        res = profile.discover(cfg, hosts_too=a.hosts, jira=a.jira,
+                               health=common.read_json(common.wl("health.json"), {}) or {})
+        out("%d suggestion(s)%s." % (len(res["candidates"]), "; problems: " + "; ".join(
+            "%s: %s" % kv for kv in sorted(res["errors"].items())) if res["errors"] else ""))
+        a.action = "candidates"
+        cfg = common.load_config()
+    if a.action == "candidates":
+        c = profile.read_candidates(cfg)
+        if a.json:
+            out(json.dumps(c if a.reveal else profile.masked_candidates(c), indent=1, ensure_ascii=False))
+            return 0
+        if not c["candidates"]:
+            out("No suggestions yet: run profile discover (add --hosts for your Git host accounts).")
+        for x in c["candidates"]:
+            what = mask(x["value"]) if x["kind"] == "email" else "%s %s %s" % (
+                x["provider"], x["instance"], x.get("login") or mask(x.get("id") or ""))
+            state = "confirmed" if x["confirmed"] else ("bot: can't be confirmed" if x["bot"] else
+                                                       "confirm with: profile confirm %s" % x["cid"])
+            out("- %s  %s  (from %s) · %s" % (x["cid"], what, x["source"], state))
+        return 0
+    st = profile.status(cfg)
+    if a.json:
+        out(json.dumps(st, indent=1, ensure_ascii=False))
+        return 0
+    if a.action == "show":
+        p = profile.load(cfg)
+        out("Profile: %s%s" % (p["display_name"] or "(no name)", " · " + mask(p["email"]) if p["email"] else ""))
+        out("Commit emails: %s" % (", ".join(mask(e) for e in p["aliases"]) or "none confirmed"))
+        accts = [a_ for a_ in p["accounts"]] + ([p["jira"]] if p["jira"] and p["jira"].get("legacy") else [])
+        for x in accts:
+            out("Account: %s %s %s" % (x["provider"], x["instance"] or "(any instance)", x.get("login") or mask(x["id"])))
+        if p["settings"]["focus"]:
+            out("Focus: %s" % p["settings"]["focus"])
+    for k in ("git", "jira"):
+        out("%s: %s — %s" % ("Git" if k == "git" else "Jira", st[k]["state"], st[k]["why"]))
+    for h in st["hosts"]:
+        out("%s %s: %s — %s" % (h["provider"], h["instance"], h["state"], h["why"]))
+    out("Time zone: %s — %s" % (st["timezone"]["state"], st["timezone"]["why"]))
+    out("History: %s" % st["coverage"]["label"])
+    return 0
 
 
 def _check_date(s):

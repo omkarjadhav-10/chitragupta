@@ -188,6 +188,34 @@ const cases = {
       check(await page.locator('#git-alerts[role="alert"]').count() === 1, 'one delivery alert region is announced');
     } finally { await ctx.close(); }
   },
+  async ownership(browser, base, check) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    try {
+      const page = await ctx.newPage();
+      // ABC-1001 is yours with an alert; ABC-1002 carries an alert but Jira assigns it to someone else
+      await page.route('**/api/tickets', async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        data.tickets = data.tickets.map((t) => t.key === 'ABC-1001'
+          ? { ...t, alerts: [{ kind: 'missing', text: 'Synthetic change has not reached QA.' }], ownership: { state: 'assigned', current: true, reason: 'assigned to you in Jira' } }
+          : t.key === 'ABC-1002'
+            ? { ...t, alerts: [{ kind: 'missing', text: 'Someone else\'s change has not reached QA.' }], ownership: { state: 'other', current: false, reason: 'assigned to someone else in Jira' } }
+            : t);
+        await route.fulfill({ json: data });
+      });
+      await page.goto(base + '#/today');
+      const margin = page.locator('aside.day-margin');
+      await margin.getByText('Synthetic change has not reached QA.').waitFor();
+      const text = await margin.innerText();
+      check(!text.includes('Someone else\'s change') && /assigned to someone else in Jira left out \(ABC-1002\)/.test(text),
+        'Needs you leaves out an alert of a ticket assigned to someone else, and says so');
+      await page.goto(base + '#/tickets?mine=1');
+      await page.locator('#page-title').waitFor();
+      await page.getByText('Yours: assigned to you in Jira').first().waitFor();
+      const rows = await page.locator('table tbody tr').allInnerTexts();
+      check(rows.length > 0 && rows.every((r) => !r.includes('ABC-1002')), 'Only mine now hides a ticket assigned to someone else');
+    } finally { await ctx.close(); }
+  },
   async releases(browser, base, check) {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     try {

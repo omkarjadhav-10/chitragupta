@@ -6,7 +6,7 @@ Chitragupta has five parts:
 2. **The tick** is a background job that turns those events into notes. It runs from the OS's scheduler (`chitragupta/scheduler.py`: Task Scheduler, launchd, a systemd user timer or cron; see [scheduling.md](scheduling.md)) and uses a stable copy of the engine.
 3. **The data home** holds what the tick writes: plain Markdown and JSON.
 4. **The dashboard** is a local server over the data home. It reads with GET, and writes only through a short allowlist of protected routes (settings and a few actions).
-5. **The MCP server** (`chitragupta/mcpserver.py`) lets Claude Code sessions query the data home through 8 read-only tools. Claude Code starts it over stdio from `bin/cg-mcp`. See [mcp.md](mcp.md).
+5. **The MCP server** (`chitragupta/mcpserver.py`) lets Claude Code sessions query the data home through 9 read-only tools. Claude Code starts it over stdio from `bin/cg-mcp`. See [mcp.md](mcp.md).
 
 Everything is Python standard library code in one package, `chitragupta`. A few modules every part shares:
 
@@ -66,7 +66,7 @@ Each event is redacted and appended to `.worklog/raw/<work day>/<session>.jsonl`
 The `Chitragupta` scheduled task runs `agent tick --from-task` through the stable launcher at logon and then every 5 minutes; `--from-task` also starts the dashboard if it is not running. It runs hidden, never overlaps itself and has a 20-minute limit. One lock makes the tick the single writer. Each tick:
 
 1. **Ingests** new raw events, plus the transcript safety net: Claude Code transcripts from the last 48 hours whose hooks didn't fire. It applies the hooks' rules (`common.capture_mode`: time-only in the data home and the home folder itself, nothing outside the scope, in an ignored folder or in Chitragupta's folders) to each message's folder, and recovers full content only inside a git repo or an include path. The same rules are checked again whenever raw events are read (ingest, minutes, extraction, fallbacks, backfill; `Agent._captured`, once per folder per run): events from a folder that has since become ignored or out of scope are dropped, and events from a now time-only folder keep only their time and the ticket named.
-2. **Reads extra sources:** your commits in watched repos, Bruno request edits, SQL scripts, `inbox.md` lines and files in `_drop/`; then **branch tracking** (read-only git and the host CLI, no model): events, branches, parents, PRs and each active ticket's delivery check (see [branch-tracking.md](branch-tracking.md)). With release tracking on, `release.py` runs around that check: before it, each ticket's Jira release and per-repo release branch are resolved and pinned; after it, the stages, flags, next steps and reminders are evaluated (see [releases.md](releases.md)).
+2. **Reads extra sources:** your commits in watched repos, Bruno request edits, SQL scripts, `inbox.md` lines and files in `_drop/`; then **branch tracking** (read-only git and the host CLI, no model): events, branches, parents, PRs and each active ticket's delivery check (see [branch-tracking.md](branch-tracking.md)). With release tracking on, `release.py` runs around that check: before it, each ticket's Jira release and per-repo release branch are resolved and pinned; after it, the stages, flags, next steps and reminders are evaluated (see [releases.md](releases.md)). Then the **developer profile** step (`profile.py`) refreshes local identity suggestions daily, reconciles records after an identity or scope change (backed up first) and caches the session-start profile line, and the **activity** step (`activity.py`) updates your per-repository ledger of authored commits and PRs (see [progress.md](progress.md)).
 3. **Extracts.** Once a session has enough new text and is idle, ended or 20 minutes old, it makes one `claude -p` call per chunk. Each call gets a redacted digest, with a `=== TURN ticket=<KEY> (<src>) ===` line where each turn starts; chunks split at turn boundaries, and an item the model leaves without a ticket goes to its turn's ticket (items keep `src`). It returns structured JSON: findings, queries, APIs, tables, request calls, DB-flow steps and worklog lines. If the call fails, it backs off and writes a deterministic fallback summary.
 4. **Merges** the results into `data/` with stable hash ids, so re-running never duplicates anything.
 5. **Renders** the changed Markdown. Your `My notes` sections survive every re-render.
@@ -134,6 +134,8 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
   bruno\                                     one Bruno collection, a folder per ticket; .env never read
   data\meta.json  catalog.json  generated.json  calendar.json  (branches.json: pre-0.2.0, kept as it was)
   data\git\<repo>\events.jsonl  branches.json  prs.json  patch-ids.json  repo.json   branch tracking
+  data\activity\<repo>.json                 your authored commits (numstat, state) and PRs for progress (local only)
+  data\reflections\YYYY-MM.json             your daily reflection notes, self-reported (local only, never pushed)
   data\days\YYYY\YYYY-MM-DD.json             per-day structured record
   data\tickets\<KEY>.json                    per-ticket structured record
   data\timesheets\YYYY-MM-DD.json            the evening worklog as composed / sent
@@ -142,6 +144,7 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
     config.json  state.json  health.json  README.md
     raw\<day>\<session>.jsonl  raw\<day>\time\<session>.jsonl
     cache\  logs\  locks\  backups\  sandbox\  prompts\ (optional overrides)
+    cache\profile-candidates.json  cache\profile-context.md   identity suggestions; the session-start profile line
     logs\ticks.jsonl                         the last 50 background runs: ok, error, skipped-busy, skipped-upgrade
     cache\condense\YYYY-MM-DD.json           condensed worklog lines (14 days), shared by the sender and the preview
     resend_requests.json                     ids of recent Resend requests (2-minute double-click window)

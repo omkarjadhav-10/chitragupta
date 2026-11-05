@@ -2,7 +2,7 @@
 // DB flow · Requests · Queries · Artifacts · Timeline · Notes), plus the export links.
 import { useEffect, useMemo, useRef, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
-import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT, parseDay, isoDay } from '../lib/core.js';
+import { useApi, fmtMin, fmtTs, fmtDay, setParams, href, plural, isHttp, EXPORT, parseDay, isoDay, notYours } from '../lib/core.js';
 import { Icon, Status, CopyButton, CodeBlock, Empty, Load, PageHead, TicketLink, Chip, Tabs, TabPanel, DataTable, Markdown, Diagram, Scroll } from '../lib/ui.js';
 import { Desk, pageKeys } from '../lib/shell.js';
 import { ShareButton } from '../lib/share.js';
@@ -17,8 +17,16 @@ function filterTickets(list, p) {
   return list.filter((t) => (!q || (t.key + ' ' + t.title + ' ' + (t.title_hint || '') + ' ' + t.tldr).toLowerCase().indexOf(q) >= 0)
     && (!p.status || (t.status || 'No status') === p.status)
     && (!p.repo || (t.repos || []).indexOf(p.repo) >= 0)
-    && (!p.alerts || (t.alerts || []).length)
+    && (!p.alerts || ((t.alerts || []).length && !notYours(t.ownership)))
+    && (!p.mine || (t.ownership && t.ownership.current))
     && (!p.since || (t.last || '') >= sinceDay(+p.since)));
+}
+// Why a ticket is (or isn't) yours, in words: profile.Policy's state. Unknown says nothing (no Jira account / no card).
+const OWN = { assigned: 'Yours: assigned to you in Jira', included: 'Yours: included by you', reassigned: 'Reassigned in Jira: your earlier work is kept',
+  other: 'Assigned to someone else in Jira', unassigned: 'Unassigned in Jira' };
+function Ownership({ o }) {
+  const label = o && OWN[o.state];
+  return label ? html`<div class="muted small" title=${o.reason || ''}>${label}</div>` : null;
 }
 function counts(list, f) {
   const m = {};
@@ -28,7 +36,7 @@ function counts(list, f) {
 function TicketFilters({ list, p }) {
   const statuses = counts(list, (t) => t.status || 'No status');
   const repos = counts(list, (t) => t.repos || []);
-  const active = p.q || p.status || p.repo || p.alerts || p.since;
+  const active = p.q || p.status || p.repo || p.alerts || p.since || p.mine;
   return html`<div class="ticket-filters">
       <label class="sr" for="tk-q">Filter tickets</label>
       <input id="tk-q" type="search" placeholder="Filter by key, title or summary" value=${p.q || ''} autocomplete="off"
@@ -37,7 +45,8 @@ function TicketFilters({ list, p }) {
       <label>Status<select value=${p.status || ''} onChange=${(e) => setParams({ status: e.currentTarget.value })}><option value="">Any status</option>${statuses.map(([v, n]) => html`<option key=${v} value=${v}>${v} (${n})</option>`)}</select></label>
       <label>Repo<select value=${p.repo || ''} onChange=${(e) => setParams({ repo: e.currentTarget.value })}><option value="">Any repo</option>${repos.map(([v, n]) => html`<option key=${v} value=${v}>${v} (${n})</option>`)}</select></label>
       <label class="check"><input type="checkbox" checked=${!!p.alerts} onChange=${(e) => setParams({ alerts: e.currentTarget.checked ? '1' : '' })} />Only those that need you</label>
-      ${active ? html`<button type="button" class="btn quiet" onClick=${() => setParams({ q: '', status: '', repo: '', alerts: '', since: '' })}><${Icon} name="close" size=${15} />Clear filters</button>` : null}
+      <label class="check"><input type="checkbox" checked=${!!p.mine} onChange=${(e) => setParams({ mine: e.currentTarget.checked ? '1' : '' })} />Only mine now</label>
+      ${active ? html`<button type="button" class="btn quiet" onClick=${() => setParams({ q: '', status: '', repo: '', alerts: '', since: '', mine: '' })}><${Icon} name="close" size=${15} />Clear filters</button>` : null}
     </div>`;
 }
 
@@ -46,10 +55,11 @@ export function TicketsPage({ route }) {
   const p = route.params;
   useEffect(() => { document.title = 'Tickets · Chitragupta'; pageKeys.set({}); }, []);
   const all = (res.data && res.data.tickets) || [];
-  const shown = useMemo(() => filterTickets(all, p), [all, p.q, p.status, p.repo, p.alerts, p.since]);
+  const shown = useMemo(() => filterTickets(all, p), [all, p.q, p.status, p.repo, p.alerts, p.since, p.mine]);
   const cols = [
     { id: 'key', label: 'Ticket', value: (t) => t.key, render: (t) => html`<${TicketLink} k=${t.key} />${(t.alerts || []).length ? html` <${Icon} name="warn" size=${15} label=${plural(t.alerts.length, 'delivery alert')} />` : null}
-      ${(t.reminders || []).length ? html`<div><${Chip} icon="release" title=${t.reminders.map((r) => r.text).join(' | ')}>${plural(t.reminders.length, 'reminder')}</${Chip}></div>` : null}` },
+      ${(t.reminders || []).length ? html`<div><${Chip} icon="release" title=${t.reminders.map((r) => r.text).join(' | ')}>${plural(t.reminders.length, 'reminder')}</${Chip}></div>` : null}
+      <${Ownership} o=${t.ownership} />` },
     { id: 'title', label: 'Title', cls: 'wide', value: (t) => (t.title || '').toLowerCase(), render: (t) => html`<div>${t.title || html`<${Hint} t=${t} />`}</div>${t.tldr ? html`<div class="muted small">${t.tldr.length > 120 ? t.tldr.slice(0, 117) + '…' : t.tldr}</div>` : null}` },
     { id: 'status', label: 'Status and repos', hideSm: true, value: (t) => t.status || '', render: (t) => html`${t.status ? html`<${StatusChips} t=${t} />` : html`<span class="muted">No status</span>`}
       ${(t.repos || []).length ? html`<div class="muted small" style="margin-top:4px;overflow-wrap:anywhere">${t.repos.join(', ')}</div>` : null}` },

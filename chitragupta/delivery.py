@@ -105,7 +105,7 @@ def rows_for(r, key, counted, cfg):
     for b in counted:
         for c in b.get("own") or []:
             ts = _subject_tickets(c["subject"], cfg)
-            if key in ts or (not ts and c.get("mine", True)):
+            if key in ts or (not ts and c.get("mine", True) is not False):  # unknown authorship stays in the check
                 picked.append((b["branch"], c))
     pids = r.patch_ids([c["sha"] for _, c in picked])
     rows = {}
@@ -372,7 +372,7 @@ def compute(r, key, tk, cfg, now=None):
             "prs": [p["number"] for p in prs if p.get("source") == b["branch"]], "unpushed": b.get("unpushed") or 0,
             "ahead": b.get("ahead"), "behind": b.get("behind"), "last_commit": b.get("last_commit"),
             "local": b.get("local"), "on_remote": b.get("on_remote"), "own": len(b.get("own") or []),
-            "mine": sum(1 for c in b.get("own") or [] if c.get("mine", True)),
+            "mine": sum(1 for c in b.get("own") or [] if c.get("mine") is True),
             "commits": [{"sha": c["sha"][:9], "subject": c["subject"], "date": c["date"]} for c in (b.get("own") or [])[:40]]})
     for p in prs:
         out["prs"].append({k: p.get(k) for k in ("number", "title", "source", "target", "state", "review", "created_at",
