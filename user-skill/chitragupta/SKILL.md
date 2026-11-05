@@ -173,7 +173,7 @@ and what is uncertain. Rules:
   unverified unless the plan says yes.
 "What's scheduled this month?" → `list_tickets(release="this-month")` or `cli branches <YYYY-MM>`: groups by planned
 release date, then overdue and unresolved-date tickets, with per-repo state and the next step.
-Release decisions are `/cg:branch release-map|release-unmap|release-pick|release-branch|release-repos|uat …` (or the
+Release decisions are `/cg:branch release-map|release-unmap|release-pick|release-branch|release-repos|uat|uat-deployed|uat-accepted …` (or the
 matching `release-map:` … `uat:` line in `inbox.md` when the user asks).
 Never run git in the user's repos for this. To fix tracking, the user runs `/cg:branch link|unlink|abandon|restore|strategy …`
 (or you append the matching `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` line
@@ -201,7 +201,7 @@ replay.sh or any other request against an API. If the user wants one of those, t
 - Append one line to `{{HOME}}\inbox.md` (prefix `TICKET-123:` to attach it; `ABC-1234: pin curl ...` pins a request;
   `time:` / `leave:` / `half-day:` / `holiday:` / `workday:` / `clear:` / `resend:` lines for the Jira worklog, and
   `branch-link:` / `branch-unlink:` / `branch-abandon:` / `branch-restore:` / `strategy:` lines for branch tracking;
-  `release-map:` / `release-unmap:` / `release-pick:` / `release-branch:` / `release-repos:` / `uat:` lines for release
+  `release-map:` / `release-unmap:` / `release-pick:` / `release-branch:` / `release-repos:` / `uat:` / `uat-deployed:` / `uat-accepted:` lines for release
   tracking;
   `ABC-1234: keep <item id>` keeps a "Needs review" item on its ticket, `ABC-1234: move <item id> ABC-1235` copies it
   to ABC-1235 and archives it on ABC-1234, never deleting it).

@@ -47,6 +47,9 @@ DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _OFFSET = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.I)
 CONTEXT_MAX = 600
 HISTORY_MAX = 50
+# Reconciliation rules version: a new one re-runs reconcile once (backed up) even when the profile didn't change.
+# 2: commit records whose author can't be verified are quarantined instead of left in place.
+POLICY_V = 2
 LOCAL = object()  # day_of(..., tz=LOCAL): this machine's zone, whatever the profile says
 
 
@@ -131,17 +134,27 @@ def _accounts(rows):
     return out
 
 
+def account_key(a):
+    """An account's identity: provider, instance and its stable id (else its login, case-insensitive). Two accounts
+    of yours on the same instance differ here; the same account entered twice doesn't."""
+    a = a if isinstance(a, dict) else {}
+    ident = str(a.get("id") or "").strip() or "login:" + str(a.get("login") or "").strip().lower()
+    return (str(a.get("provider") or "").strip().lower(), str(a.get("instance") or "").strip().lower().rstrip("/"), ident)
+
+
 def load(cfg):
     """The confirmed identity and scope. Reads only the config."""
     cfg = cfg or {}
     s = settings(cfg)
     aliases = sorted({norm_email(e) for e in cfg.get("git_author_emails") or [] if norm_email(e)})
     accounts = _accounts(s["accounts"])
-    jira = next((a for a in accounts if a["provider"] == "jira"), None)
+    jiras = [a for a in accounts if a["provider"] == "jira"]
+    jira = jiras[0] if jiras else None
     legacy = str((((cfg.get("mcp") or {}).get("jira") or {}).get("account_id")) or "").strip()
     if jira is None and legacy:
         jira = {"provider": "jira", "instance": "", "id": legacy, "login": "", "legacy": True,
                 "source": "mcp.jira.account_id (the older setting)", "confirmed_at": ""}
+        jiras = [jira]
     watched = [r for r in cfg.get("watched_repos") or [] if isinstance(r, str) and r.strip()]
     sel = [r for r in s["repos"] if isinstance(r, str) and r.strip()]
     if sel:
@@ -153,8 +166,8 @@ def load(cfg):
     projects = [p for p in (s["jira_projects"] or cfg.get("ticket_prefixes") or []) if isinstance(p, str) and p]
     include = {str(k).upper(): str(v) for k, v in (s["include_tickets"] or {}).items() if str(v).strip()}
     return {"display_name": s["display_name"].strip(), "email": norm_email(s["email"]), "aliases": aliases,
-            "accounts": accounts, "jira": jira, "repos": repos, "repos_missing": missing, "repos_selected": bool(sel),
-            "projects": projects, "include": include, "settings": s}
+            "accounts": accounts, "jira": jira, "jira_accounts": jiras, "repos": repos, "repos_missing": missing,
+            "repos_selected": bool(sel), "projects": projects, "include": include, "settings": s}
 
 
 def signature(cfg):
@@ -165,7 +178,8 @@ def signature(cfg):
     basis = {
         "aliases": p["aliases"],
         "accounts": sorted([a["provider"], a["instance"], a["id"], a["node_id"], a["login"].lower()] for a in p["accounts"]),
-        "jira": [(p["jira"] or {}).get("instance", ""), (p["jira"] or {}).get("id", "")],
+        "jira": [(p["jira"] or {}).get("instance", ""), (p["jira"] or {}).get("id", "")] if len(p["jira_accounts"]) < 2
+        else sorted([a.get("instance", ""), a.get("id", "")] for a in p["jira_accounts"]),
         "repos": sorted(common.norm_path(r) for r in p["repos"]), "projects": sorted(p["projects"]),
         "include": sorted(p["include"]), "timezone": s["timezone"], "day_starts_at": (cfg or {}).get("day_starts_at") or "04:00",
         "tracking_start": s["tracking_start"], "backfill_days": s["backfill_days"], "bots": s["bot_patterns"],
@@ -315,6 +329,7 @@ class Policy:
                 continue
         self._repos = {common.norm_path(r) for r in self.p["repos"]}
         self._projects = set(self.p["projects"])
+        self._jira_ids = {str(a.get("id") or "").strip() for a in self.p.get("jira_accounts") or [] if a.get("id")}
 
     # ---- people
     def is_bot(self, value):
@@ -347,10 +362,9 @@ class Policy:
         confirmed account id decides when both sides have one; else an exact confirmed email."""
         if not isinstance(person, dict):
             return None
-        acct = (self.p["jira"] or {}).get("id")
         aid = str(person.get("account_id") or person.get("accountId") or "").strip()
-        if acct and aid:
-            return aid == acct
+        if self._jira_ids and aid:
+            return aid in self._jira_ids
         em = norm_email(person.get("email") or person.get("emailAddress"))
         if em and self.emails:
             return em in self.emails and not self.is_bot(em)
@@ -365,28 +379,21 @@ class Policy:
         m = self.person_mine(assignee)
         return None if m is None else ("you" if m else "other")
 
-    def account(self, provider, instance=None):
-        """Your confirmed account on a provider instance (an account without an instance only for Jira's legacy id)."""
+    def accounts(self, provider, instance=None):
+        """Every confirmed account of yours on a provider instance: one person may have several on the same host (a
+        work and an older account). Jira: the confirmed Jira accounts (or the legacy id)."""
         prov, inst = str(provider or "").lower(), str(instance or "").lower().rstrip("/")
         if prov == "jira":
-            return self.p["jira"]
-        for a in self.p["accounts"]:
-            if a["provider"] == prov and a["instance"] and a["instance"] == inst:
-                return a
-        return None
+            return list(self.p.get("jira_accounts") or ([self.p["jira"]] if self.p["jira"] else []))
+        return [a for a in self.p["accounts"] if a["provider"] == prov and a["instance"] and a["instance"] == inst]
 
-    def pr_mine(self, author, provider, instance):
-        """True / False, None when no account is confirmed for that instance or the source gave no author. Stable ids
-        decide when both sides have the same kind (REST id, or GitHub's GraphQL node id); else the exact login."""
-        acct = self.account(provider, instance)
-        if not acct or not isinstance(author, dict):
-            return None
-        aid, nid = str(author.get("id") or "").strip(), str(author.get("node_id") or "").strip()
-        login = str(author.get("login") or author.get("username") or author.get("uniqueName") or "").strip()
-        if not (aid or nid or login):
-            return None
-        if author.get("is_bot") or self.is_bot(login):
-            return False
+    def account(self, provider, instance=None):
+        """The first confirmed account on a provider instance (see accounts() for all of them), or None."""
+        got = self.accounts(provider, instance)
+        return got[0] if got else None
+
+    @staticmethod
+    def _pr_match(acct, aid, nid, login):
         if acct["id"] and aid:
             return acct["id"] == aid
         if acct.get("node_id") and nid:
@@ -395,33 +402,84 @@ class Policy:
             return acct["login"].lower() == login.lower()
         return None
 
+    def pr_mine(self, author, provider, instance):
+        """True / False, None when no account is confirmed for that instance or the source gave no author. Every
+        confirmed account on the instance is compared: stable ids decide when both sides have the same kind (REST id,
+        or GitHub's GraphQL node id); else the exact login. True only on a positive match."""
+        accts = self.accounts(provider, instance)
+        if not accts or not isinstance(author, dict):
+            return None
+        aid, nid = str(author.get("id") or "").strip(), str(author.get("node_id") or "").strip()
+        login = str(author.get("login") or author.get("username") or author.get("uniqueName") or "").strip()
+        if not (aid or nid or login):
+            return None
+        if author.get("is_bot") or self.is_bot(login):
+            return False
+        verdicts = [self._pr_match(a, aid, nid, login) for a in accts]
+        if True in verdicts:
+            return True
+        return None if None in verdicts else False
+
     # ---- tickets
+    def jira_ids(self):
+        return set(self._jira_ids)
+
+    def jira_binding(self):
+        """The confirmed Jira account set as one comparable string (one id stays exactly that id, so records written
+        before several accounts were possible still match). Assignment evidence is stored with it."""
+        return ",".join(sorted(self._jira_ids))
+
     def jira_id(self):
-        return str((self.p["jira"] or {}).get("id") or "")
+        return self.jira_binding()
+
+    def bound(self, account, state):
+        """Does an assignee state recorded against `account` (a binding string) still say something about you? "you"
+        holds while every account it was compared with is still yours; "unassigned" holds whatever was compared;
+        "other" only against exactly the accounts confirmed now (a newly added account could be the assignee)."""
+        ids = {x for x in str(account or "").split(",") if x}
+        if not ids or not self._jira_ids:
+            return False
+        if state == "you":
+            return ids <= self._jira_ids
+        if state == "unassigned":
+            return True
+        return ids == self._jira_ids
 
     def ownership_of(self, tk):
-        """(state, history) of a ticket's recorded Jira assignee, as compared with the Jira account confirmed now. A
-        state or history entry recorded against another account (before the account was changed or removed) says
+        """(state, history) of a ticket's recorded Jira assignee, as compared with the Jira accounts confirmed now. A
+        state or history entry recorded against other accounts (before an account was changed or removed) says
         nothing about you, so it is left out: the ticket is unknown until its card is read again."""
         own = (tk or {}).get("ownership") if isinstance((tk or {}).get("ownership"), dict) else {}
-        acct = self.jira_id()
-        if not acct:
+        if not self._jira_ids:
             return None, []
-        hist = [h for h in own.get("history") or [] if isinstance(h, dict) and str(h.get("account") or "") == acct]
-        state = own.get("state") if str(own.get("account") or "") == acct else None
+        hist = [h for h in own.get("history") or [] if isinstance(h, dict) and self.bound(h.get("account"), h.get("state"))]
+        state = own.get("state") if self.bound(own.get("account"), own.get("state")) else None
         return state, hist
 
+    def release_assignee(self, rel):
+        """Release tracking's cached assignee answer, only when it was computed against the Jira accounts confirmed
+        now (assignee_binding); an unbound or other-account answer is unknown (None) until Jira is read again."""
+        rel = rel if isinstance(rel, dict) else {}
+        am = rel.get("assignee_me")
+        if am not in (True, False) or not self._jira_ids:
+            return None
+        return am if self.bound(rel.get("assignee_binding"), "you" if am else "other") else None
+
     def ticket_state(self, key, tk):
-        """(state, reason). assigned: Jira assigns it to your confirmed account now; included: you chose it (your
-        reason); reassigned: it was yours, now someone else's (your own activity on it is kept); other: assigned to
-        someone else; unassigned; unknown: no confirmed Jira account or no assignee read yet."""
+        """(state, reason). assigned: Jira assigns it to your confirmed account now (in a Jira project of your scope);
+        included: you chose it (your reason); reassigned: it was yours, now someone else's (your own activity on it is
+        kept); other: assigned to someone else; unassigned; outside: assigned to you in a project outside your scope;
+        unknown: no confirmed Jira account or no assignee read yet."""
         tk = tk or {}
         state, hist = self.ownership_of(tk)
         was_you = any(h.get("state") == "you" for h in hist)
-        if state is None:  # no card with an assignee yet: release tracking's view of the same field
-            am = ((tk.get("release") or {}) if isinstance(tk.get("release"), dict) else {}).get("assignee_me")
+        if state is None:  # no card with an assignee yet: release tracking's view of the same field, if still bound
+            am = self.release_assignee(tk.get("release"))
             state = {True: "you", False: "other"}.get(am)
-        inc = self.p["include"].get(str(key or tk.get("id") or "").upper())
+        k = str(key or tk.get("id") or "").upper()
+        inc = self.p["include"].get(k)
+        if state == "you" and not inc and not self.project_in_scope(k):
+            return "outside", "assigned to you in Jira, but %s isn't one of your profile's Jira projects" % k.split("-")[0]
         if state == "you":
             return "assigned", "assigned to you in Jira"
         if inc:
@@ -444,8 +502,67 @@ class Policy:
         own = (tk or {}).get("ownership") if isinstance((tk or {}).get("ownership"), dict) else {}
         _, hist = self.ownership_of(tk)
         return {"state": st, "reason": why, "current": st in ("assigned", "included"),
-                "checked_at": (own.get("checked_at") or "") if own.get("account") == self.jira_id() else "",
+                "checked_at": (own.get("checked_at") or "") if self.bound(own.get("account"), own.get("state")) else "",
                 "history": [{"at": h.get("at"), "state": h.get("state")} for h in hist][-10:]}
+
+    # ---- the personal projection: what of a ticket record may appear on your surfaces
+    def own_evidence(self, tk):
+        """Why a ticket record carries your own work, independent of who Jira assigns it to now: time from your Claude
+        Code sessions or your own logged time, findings / queries / requests extracted from your sessions and notes,
+        commits whose recorded author is one of your confirmed emails, your own commits on a ticket branch, or a
+        recorded Jira assignment to you. -> [reasons] (empty: nothing of yours is recorded)."""
+        tk = tk or {}
+        out = []
+        if any(int((v or {}).get("minutes") or 0) > 0 for v in (tk.get("timeline") or {}).values() if isinstance(v, dict)):
+            out.append("time from your own sessions")
+        if tk.get("items") or tk.get("queries") or tk.get("api_calls") or ((tk.get("replay") or {}).get("final")):
+            out.append("findings from your own sessions or notes")
+        if any(isinstance(c, dict) and self.email_mine(c.get("ae")) for c in (tk.get("commits") or {}).values()):
+            out.append("your commits")
+        repos = ((tk.get("git") or {}).get("repos")) if isinstance(tk.get("git"), dict) else None
+        for x in (repos.values() if isinstance(repos, dict) else []):
+            branches = (x or {}).get("branches") if isinstance(x, dict) else None
+            # a branch record's `own` is its list of commits; the delivery view keeps counts (`own`, `mine`)
+            def mine_on(b):
+                if isinstance(b.get("own"), list):
+                    return any(isinstance(c, dict) and c.get("mine") is True for c in b["own"])
+                return isinstance(b.get("mine"), int) and not isinstance(b.get("mine"), bool) and b["mine"] > 0
+            bl = [b for b in (branches if isinstance(branches, list) else []) if isinstance(b, dict)]
+            if any(mine_on(b) for b in bl):
+                out.append("your commits on a ticket branch")
+                break
+            if any(b.get("local") and (b.get("link") if isinstance(b.get("link"), str) else (b.get("link") or {}).get("how"))
+                   in ("branch name", "session", "manual") for b in bl):
+                out.append("a branch for it in your own clone")
+                break
+        _, hist = self.ownership_of(tk)
+        if any(h.get("state") == "you" for h in hist):
+            out.append("it was assigned to you")
+        if not out and (tk.get("first") or tk.get("last")):
+            # worked on: first / last come from your own sessions, notes and confirmed-email commits; a record whose
+            # commits are all someone else's (or couldn't be verified) doesn't count through them
+            recs = [c for part in ("commits", "commits_excluded") for c in ((tk.get(part) or {}).values()
+                                                                         if isinstance(tk.get(part), dict) else [])]
+            if not any(isinstance(c, dict) and not self.email_mine(c.get("ae")) for c in recs):
+                out.append("you worked on it")
+        return out
+
+    def ticket_scope(self, key, tk):
+        """Where a ticket stands in your personal projection. -> {visible, basis, current, reason, own}
+        basis: current (assigned to you / included by you) | history (your own earlier or collaborative work: only
+        that is yours) | outside (nothing of yours is recorded: another person's work, never shown as yours).
+        A parent kept as context for one of your tickets is decided by the caller (it needs every ticket)."""
+        st, why = self.ticket_state(key, tk)
+        own = self.own_evidence(tk)
+        if st in ("assigned", "included"):
+            return {"visible": True, "basis": "current", "current": True, "reason": why, "own": own, "state": st}
+        if own:
+            lead = {"reassigned": "reassigned in Jira", "other": "assigned to someone else in Jira",
+                    "outside": why, "unassigned": "unassigned in Jira"}.get(st, "no current Jira assignment to you")
+            return {"visible": True, "basis": "history", "current": False, "state": st,
+                    "reason": "%s; your own work on it is kept: %s" % (lead, ", ".join(own)), "own": own}
+        return {"visible": False, "basis": "outside", "current": False, "state": st, "own": [],
+                "reason": "none of your own work is recorded on it (%s)" % why}
 
     # ---- scope
     def repo_in_scope(self, path):
@@ -455,6 +572,32 @@ class Policy:
         if not self._projects:
             return True
         return str(key or "").split("-")[0].upper() in self._projects
+
+
+def projection(pol, records):
+    """{key: ticket_scope} for every ticket record ({key: record}), plus parents kept as context: a ticket with nothing
+    of yours on it is still shown, labelled "context", when it is the Jira parent (an Epic, say) of one of your visible
+    tickets. Context is never counted as your work."""
+    out = {k: pol.ticket_scope(k, tk) for k, tk in records.items()}
+    parents = {}
+    for k, tk in records.items():
+        if out[k]["visible"]:
+            p = str(((tk or {}).get("jira") or {}).get("parent") or "").strip().upper()
+            if p and p != k:
+                parents.setdefault(p, k)
+    for p, child in parents.items():
+        s = out.get(p)
+        if s is not None and not s["visible"]:
+            out[p] = dict(s, visible=True, basis="context",
+                          reason="the parent of %s, kept as context; none of your own work is recorded on it" % child)
+    return out
+
+
+def ticket_scope_of(key, cfg=None, tk=None):
+    """The personal projection of one ticket, for the readers that get a key directly (MCP, CLI, export, sharing):
+    the same answer the ticket list gives (see dashboard.api.scope_index)."""
+    from .dashboard import api
+    return api.scope_of(str(key or "").upper(), cfg)
 
 
 def record_ownership(tk, state, at, account):
@@ -504,6 +647,66 @@ def repo_hosts(cfg, repos):
     return out
 
 
+CONN_STALE_S = 3 * 3600
+
+
+def _conn(rows, now):
+    """One source's connection from its reads [(status, at, why)]: failing | partial | stale | ok | never. Being
+    configured says nothing here: only a read that happened, and how it went."""
+    if not rows:
+        return {"state": "never", "why": "Not read yet.", "at": ""}
+    bad = [r for r in rows if r[0] == "error"]
+    if bad:
+        return {"state": "failing", "why": "The last read failed: %s" % (bad[0][2] or "error")[:200], "at": bad[0][1] or ""}
+    ats = [common.parse_ts(r[1]) for r in rows if r[1]]
+    oldest = min([a for a in ats if a] or [None]) if any(ats) else None
+    if oldest is None:
+        return {"state": "never", "why": "Not read yet.", "at": ""}
+    at = oldest.isoformat(timespec="seconds")
+    if (now - oldest).total_seconds() > CONN_STALE_S:
+        return {"state": "stale", "why": "Last read %s." % at[:16].replace("T", " "), "at": at}
+    part = [r for r in rows if r[0] == "partial"]
+    if part:
+        return {"state": "partial", "why": (part[0][2] or "partly collected")[:200], "at": at}
+    return {"state": "ok", "why": "Last read %s." % at[:16].replace("T", " "), "at": at}
+
+
+def connections(cfg, p=None, state=None, now=None):
+    """How each source's last refresh went, apart from whether an identity is confirmed: git (the commit scans of the
+    in-scope repositories), each Git host instance (their PR reads) and Jira (the MCP's last answer). The same answer
+    Profile, My progress and Health show."""
+    from . import activity, mcpjobs
+    p = p or load(cfg)
+    now = now or common.now()
+    commits, hosts_ = [], {}
+    for r in p["repos"]:
+        led = activity.load(r) or {}
+        c, pr = led.get("commits") or {}, led.get("prs") or {}
+        if c.get("status") and c["status"] not in ("unconfigured",):
+            commits.append((c["status"], c.get("scanned_at") or "", c.get("error") or c.get("why") or ""))
+        rp = (led.get("repo") or {})
+        if rp.get("provider") and pr.get("status") not in (None, "unconfigured", "unavailable"):
+            hosts_.setdefault((rp["provider"], rp.get("instance") or ""), []).append(
+                (pr["status"], pr.get("fetched_at") or "", pr.get("error") or pr.get("why") or ""))
+    out = {"git": _conn(commits, now), "hosts": {k: _conn(v, now) for k, v in hosts_.items()}}
+    h = common.read_json(common.wl("health.json"), {}) or {}
+    srv = mcpjobs.server_name(cfg, "jira")
+    off = ((h.get("mcp") or {}).get("offline") or {}).get(srv)
+    ok_at = str((h.get("mcp") or {}).get("jira_auth_ok") or "")
+    if not mcpjobs.enabled(cfg, "jira"):
+        out["jira"] = {"state": "off", "why": "The Jira MCP is off.", "at": ""}
+    elif off and (not ok_at or str(off) >= ok_at):
+        out["jira"] = {"state": "failing", "why": "Jira was unreachable or signed out at %s." % str(off)[:16].replace("T", " "),
+                       "at": str(off)}
+    elif ok_at:
+        out["jira"] = _conn([("ok", ok_at, "")], now) if common.parse_ts(ok_at) else {"state": "never", "why": "", "at": ""}
+        if out["jira"]["state"] == "stale":
+            out["jira"]["why"] = "Last answered %s." % ok_at[:16].replace("T", " ")
+    else:
+        out["jira"] = {"state": "never", "why": "No Jira read has succeeded yet.", "at": ""}
+    return out
+
+
 def status(cfg, state=None):
     """Per provider: {"state": ok | unconfigured | partial | error, "why", ...}. One provider's gap never hides the
     others; nothing here is a reason to collect anyone else's work."""
@@ -542,6 +745,12 @@ def status(cfg, state=None):
             h.update(state="unconfigured", why="No confirmed %s account for %s, so PRs aren't counted for %s." % (
                 prov, inst, ", ".join(sorted(repos))))
         out_hosts.append(h)
+    conn = connections(cfg, p, st)
+    git["connection"] = conn["git"]
+    jira["connection"] = conn["jira"]
+    for h in out_hosts:
+        h["connection"] = conn["hosts"].get((h["provider"], h["instance"])) or \
+            {"state": "never", "why": "No PR read yet for these repositories.", "at": ""}
     tz = {"name": p["settings"]["timezone"] or "", "state": "ok", "why": "This machine's time zone."}
     if tz["name"]:
         try:
@@ -579,10 +788,9 @@ def read_candidates(cfg=None):
         if c.get("kind") == "email":
             c["confirmed"] = norm_email(c.get("value")) in pol.emails
         else:
-            a = pol.account(c.get("provider"), c.get("instance"))
-            c["confirmed"] = bool(a) and ((c.get("id") and a.get("id") == c.get("id")) or
-                                         (not c.get("id") and c.get("login") and
-                                          a.get("login", "").lower() == str(c.get("login")).lower()))
+            c["confirmed"] = any((c.get("id") and a.get("id") == c.get("id")) or
+                                 (not c.get("id") and c.get("login") and a.get("login", "").lower() == str(c.get("login")).lower())
+                                 for a in pol.accounts(c.get("provider"), c.get("instance")))
         c["bot"] = bool(c.get("bot")) or pol.is_bot(c.get("value") or c.get("login"))
         out.append(c)
     return {"at": data.get("at") or "", "candidates": out, "errors": data.get("errors") or {}}
@@ -738,8 +946,9 @@ def confirm(cid, cfg=None, source="cli"):
         cur = [e for e in cfg.get("git_author_emails") or [] if e]
         changes = {"git_author_emails": cur + [c["value"]]}
     else:
-        cur = [a for a in settings(cfg)["accounts"] if isinstance(a, dict) and
-               not (str(a.get("provider")).lower() == c["provider"] and str(a.get("instance") or "").lower() == c["instance"])]
+        # added next to any other account on the same instance (one person may have several); only the same
+        # account confirmed again is replaced
+        cur = [a for a in settings(cfg)["accounts"] if isinstance(a, dict) and account_key(a) != account_key(c)]
         acct = {"provider": c["provider"], "instance": c["instance"], "id": c.get("id") or "",
                 "login": c.get("login") or "", "source": c.get("source") or "", "confirmed_at": common.now_iso()}
         if c.get("node_id"):
@@ -833,7 +1042,7 @@ def reconcile(store, cfg, state, now=None):
     always; day records only for today and days whose evening worklog wasn't sent (a sent message is history).
     Files are backed up before the first change. Idempotent. -> summary dict, or None when nothing was due."""
     sig = signature(cfg)
-    if state.get("profile_sig") == sig:
+    if state.get("profile_sig") == sig and state.get("profile_policy") == POLICY_V:
         return None
     now = now or common.now()
     at = now.isoformat(timespec="seconds")
@@ -872,7 +1081,8 @@ def reconcile(store, cfg, state, now=None):
         return not pol.p["repos_selected"] or any(os.path.basename(str(r).rstrip("/\\")) == name for r in pol.p["repos"])
 
     def verdict(rec):
-        """True keep, False archive, None unverifiable (left in place)."""
+        """True keep, False archive, None unverifiable: quarantined like an archived record (kept apart, labelled, never
+        shown as yours) and moved back once git confirms a confirmed email wrote it."""
         a = author(rec)
         if not a:
             return None
@@ -881,14 +1091,14 @@ def reconcile(store, cfg, state, now=None):
     t_moves, d_moves, unverified = {}, {}, 0
     for t in tickets:
         tk = store.ticket(t)
-        out_ = [s for s, rec in (tk.get("commits") or {}).items() if verdict(rec) is False]
+        out_ = [s for s, rec in (tk.get("commits") or {}).items() if verdict(rec) is not True]
         back = [s for s, rec in (tk.get("commits_excluded") or {}).items() if verdict(rec) is True]
         unverified += sum(1 for rec in (tk.get("commits") or {}).values() if verdict(rec) is None)
         if out_ or back:
             t_moves[t] = (out_, back)
     for d in days:
         dd = store.day(d)
-        out_ = [i for i, rec in enumerate(dd.get("commits") or []) if verdict(rec) is False]
+        out_ = [i for i, rec in enumerate(dd.get("commits") or []) if verdict(rec) is not True]
         back = [i for i, rec in enumerate(dd.get("commits_excluded") or []) if verdict(rec) is True]
         unverified += sum(1 for rec in dd.get("commits") or [] if verdict(rec) is None)
         if out_ or back:
@@ -915,7 +1125,9 @@ def reconcile(store, cfg, state, now=None):
             owned += 1
     # 3. apply
     def excluded(rec):
-        why = "its repository is outside your profile's scope" if pol.email_mine(author(rec)) else \
+        a = author(rec)
+        why = "its author couldn't be verified from git (quarantined until it can be)" if not a else \
+            "its repository is outside your profile's scope" if pol.email_mine(a) else \
             "not authored by a confirmed email in your profile"
         return dict({k: v for k, v in rec.items() if k != "ae"}, excluded={"reason": why, "at": at})
 
@@ -968,6 +1180,7 @@ def reconcile(store, cfg, state, now=None):
     state["profile_aliases"] = pol.p["aliases"]
     state["profile_jira"] = jira_id
     state["profile_sig"] = sig
+    state["profile_policy"] = POLICY_V
     res = {"signature": sig, "archived": archived, "restored": restored, "unverified": unverified, "backup": backup,
            "ownership": owned, "at": at}
     state["profile_reconciled"] = res

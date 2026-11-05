@@ -14,6 +14,17 @@ function Card({ title, status, big, lines, id }) {
     ${(lines || []).filter(Boolean).map((l, i) => html`<p key=${i}>${l}</p>`)}</section>`;
 }
 
+// Your own sources, worded as on the Profile page: whether the last read worked, never just whether an identity is set.
+const CONN = { ok: ['ok', 'Last read worked'], partial: ['warn', 'Partly read'], stale: ['warn', 'Not read recently'],
+  failing: ['bad', 'Last read failed'], never: ['off', 'Not read yet'], off: ['off', 'Switched off'] };
+function PersonalCard({ p }) {
+  if (!p || !p.git) return null;
+  const rows = [['Commits', p.git], ['Jira', p.jira]].concat((p.hosts || []).map((h) => ['PRs on ' + h.instance, h]));
+  const worst = rows.some(([, c]) => c && c.state === 'failing') ? 'failing' : rows.some(([, c]) => c && ['stale', 'partial'].includes(c.state)) ? 'stale' : 'ok';
+  return html`<${Card} id="h-personal" title="Your sources" status=${html`<${Status} kind=${CONN[worst][0]}>${worst === 'ok' ? 'Current' : CONN[worst][1]}</${Status}>`}
+    lines=${rows.map(([n, c]) => n + ': ' + ((CONN[(c || {}).state] || CONN.never)[1]) + ((c || {}).why ? ' · ' + c.why : ''))} />`;
+}
+
 function slackState(sl) {
   const last = (sl.recent || [])[0];
   if (sl.enabled === false) return ['off', 'Off'];
@@ -102,6 +113,7 @@ export function HealthPage() {
           lines=${[sl.send_at ? 'Sends at ' + sl.send_at : '', last && last.sent_at ? 'Sent ' + fmtTs(last.sent_at) : '', sl.send_warning || '', last && last.last_error ? last.last_error : '',
             ss[1] === 'Not connected' ? "Slack isn't connected; the worklog is still written to the daily file. Connect it with /cg:setup." : '']} />
         <${SchedulerPanel} card />
+        <${PersonalCard} p=${s.personal} />
         <${Card} id="h-model" title="Model spend today" status=${md.over ? html`<${Status} kind="warn">Cap reached</${Status}>` : html`<${Status} kind="ok">Within cap</${Status}>`}
           big=${'$' + (md.usd || 0).toFixed(2) + (md.cap != null ? ' of $' + Number(md.cap).toFixed(2) : '')}
           lines=${[plural(md.calls || 0, 'model call') + ' · ' + (md.in || 0).toLocaleString() + ' tokens in · ' + (md.out || 0).toLocaleString() + ' out',

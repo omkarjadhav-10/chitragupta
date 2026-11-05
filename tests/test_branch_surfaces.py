@@ -167,7 +167,9 @@ class Commands(AgentCase):
 
     def test_branches_report(self):
         from chitragupta import common
-        common.write_json(common.hp("data", "tickets", "ABC-1.json"), {"id": "ABC-1", "git": git_block([LOST])})
+        # a ticket you worked on (first / last come from your own sessions): inside your personal scope
+        common.write_json(common.hp("data", "tickets", "ABC-1.json"), {"id": "ABC-1", "first": "2026-10-14", "last": "2026-10-15",
+                                                                       "git": git_block([LOST])})
         rc, out, _ = self.cli("branches", "ABC-1")
         self.assertEqual(rc, 0)
         self.assertIn("## shop-api · strategy release-then-qa (repo default) · PRs from gh", out)

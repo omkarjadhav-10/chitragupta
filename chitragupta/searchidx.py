@@ -698,8 +698,23 @@ def _day_arg(s, name):
     return s
 
 
-def _where(types, ticket, repo, frm, to):
+def _outside():
+    """Ticket keys outside your personal scope (dashboard.api.scope_index): their units never come back from a search,
+    whatever the query or filter, and a unit tied only to such tickets is left out too. Applied at query time, so a
+    profile change takes effect on the next search without waiting for a rebuild."""
+    try:
+        from .dashboard import api
+        return sorted(k for k, s in api.scope_index().items() if not s.get("visible"))
+    except Exception:  # noqa: BLE001 - no projection (a broken record): leave nothing out rather than fail the search
+        return []
+
+
+def _where(types, ticket, repo, frm, to, outside=()):
     conds, args = ["u.type IN (%s)" % ", ".join("?" * len(types))], list(types)
+    if outside:
+        marks = ", ".join("?" * len(outside))
+        conds.append("(u.ticket = '' OR u.ticket NOT IN (%s))" % marks)
+        args += list(outside)
     if ticket:
         conds.append("(u.ticket = ? OR instr(',' || u.tickets || ',', ',' || ? || ',') > 0)")
         args += [ticket, ticket]
@@ -778,7 +793,7 @@ def search(q, types=None, ticket=None, repo=None, frm=None, to=None, limit=40, e
 def _search(out, v, q, terms, wanted, ticket, repo, frm, to, limit, engine, t0):
     if engine == "fts5" and not v.fts:
         out["engine"] = engine = "scan"
-    where, args = _where(wanted, ticket, repo, frm, to)
+    where, args = _where(wanted, ticket, repo, frm, to, _outside())
     matched = _match(v, engine, terms, where, args)
     info = dict(matched)
     ranked = [i for i, _ in matched]

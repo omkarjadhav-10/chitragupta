@@ -23,6 +23,7 @@ people's identities are never stored.
 """
 import datetime as _dt
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -47,6 +48,28 @@ def ledger_path(key):
     return common.hp("data", "activity", key + ".json")
 
 
+def ledger_key(path):
+    """The ledger file of one repository location: its folder name plus a hash of where it is, so two different
+    repositories that share a folder name never read or overwrite each other's ledger. Two locations (clones,
+    worktrees) of the same repository keep a ledger each; progress counts their events once by canonical id."""
+    from . import gitcmd
+    loc = common.norm_path(os.path.realpath(path))
+    return "%s-%s" % (gitcmd.repo_key(path), hashlib.sha1(loc.encode("utf-8")).hexdigest()[:8])
+
+
+def _same_place(led, path):
+    rp = ((led or {}).get("repo") or {}).get("path")
+    return bool(rp) and common.norm_path(rp) == common.norm_path(path)
+
+
+def _legacy(path):
+    """A ledger an earlier version kept under the folder name alone: read only when it records this very folder (a
+    same-named repository elsewhere never answers for this one). Moved to the new name by the next refresh."""
+    from . import gitcmd
+    led = common.read_json(ledger_path(gitcmd.repo_key(path)), None)
+    return led if isinstance(led, dict) and led.get("v") == V and _same_place(led, path) else None
+
+
 def new_ledger(repo=None):
     return {"v": V, "repo": repo or {}, "profile_sig": "", "window_start": "",
             "commits": {"status": "unconfigured", "why": "", "scanned_at": "", "full_at": "", "since": "", "error": "",
@@ -56,10 +79,13 @@ def new_ledger(repo=None):
 
 
 def load(path_or_key):
-    """The ledger of a repo (path or repo key), or None."""
-    from . import gitcmd
-    key = gitcmd.repo_key(path_or_key) if ("/" in path_or_key or "\\" in path_or_key) else path_or_key
-    led = common.read_json(ledger_path(key), None)
+    """The ledger of a repo location (a path; a bare key reads that file), or None."""
+    if "/" in path_or_key or "\\" in path_or_key:
+        led = common.read_json(ledger_path(ledger_key(path_or_key)), None)
+        if isinstance(led, dict) and led.get("v") == V and (_same_place(led, path_or_key) or not (led.get("repo") or {}).get("path")):
+            return led
+        return _legacy(path_or_key)
+    led = common.read_json(ledger_path(path_or_key), None)
     return led if isinstance(led, dict) and led.get("v") == V else None
 
 
@@ -186,8 +212,11 @@ def scan(cfg, pol, path, since_iso, globs, prefixes):
     from .sources import stash_commit
     emails = sorted(pol.emails)
     found = {}
-    for role, extra in (("author", ["--author=" + re.escape(e) for e in emails]),
-                        ("coauthor", ["--grep=" + re.escape(e) for e in emails])):
+    # literal, case-insensitive narrowing (`-F`): a confirmed address such as developer+work@acme.test is a fixed
+    # string, not a pattern ("+" is an operator in git's default regex dialect and matched nothing); look-alikes the
+    # substring match lets through are dropped by the exact recheck below
+    for role, extra in (("author", ["--fixed-strings"] + ["--author=" + e for e in emails]),
+                        ("coauthor", ["--fixed-strings"] + ["--grep=" + e for e in emails])):
         rc, so, se = _log(cfg, path, since_iso, extra)
         if rc != 0:
             return False, {}, ("git log: " + (se or "failed").strip())[:300]
@@ -296,17 +325,21 @@ def collect_prs(cfg, pol, repo, prs, window, run=None, now=None):
     from . import gitcmd, hosts
     prefixes = cfg.get("ticket_prefixes") or []
     prov, inst = repo.get("provider"), repo.get("instance")
-    prs["fetched_at"] = (now or common.now()).isoformat(timespec="seconds")
+    # fetched_at is the last read that answered (also "unconfigured" / "unavailable"); attempted_at every try, so a
+    # failed read keeps the time of the results it leaves on screen
+    at = (now or common.now()).isoformat(timespec="seconds")
+    prs["attempted_at"] = at
+    prs["fetched_at"] = at if prs.get("status") != "error" or not prs.get("fetched_at") else prs["fetched_at"]
     if not prov:
         prs.update(status="unavailable", why="The remote isn't on a supported Git host, so PR authors can't be read.",
                    error="")
         return
-    acct = pol.account(prov, inst)
-    if not acct:
+    accts = pol.accounts(prov, inst)
+    if not accts:
         prs.update(status="unconfigured", why="No confirmed %s account for %s in your profile." % (prov, inst), error="",
                    account="")
         return
-    prs["account"] = "%s:%s:%s" % (prov, inst, acct.get("id") or acct.get("login"))
+    prs["account"] = ",".join("%s:%s:%s" % (prov, inst, a.get("id") or a.get("login")) for a in accts)
     pref = gitcmd.repo_conf(cfg, repo.get("key") or gitcmd.repo_key(repo["path"])).get("pr_source")
     info = dict(repo.get("remote") or {})
     src = hosts.source_for(cfg, info, pref)
@@ -314,7 +347,11 @@ def collect_prs(cfg, pol, repo, prs, window, run=None, now=None):
     capped, why = False, ""
     try:
         if src in ("gh", "glab", "az"):
-            rows, capped = hosts.authored_prs(cfg, info, src, acct, window, run=run or hosts._run)
+            rows = []
+            for acct in accts:  # one author-filtered request per confirmed account: never everyone's PRs
+                got, cap = hosts.authored_prs(cfg, info, src, acct, window, run=run or hosts._run)
+                rows += [dict(r, _by=list(profile.account_key(acct))) for r in got]
+                capped = capped or cap
         elif src.startswith("mcp:"):
             from .gittrack import RepoData
             rows = [p for p in RepoData(repo.get("key") or gitcmd.repo_key(repo["path"])).prs.values() if isinstance(p, dict)]
@@ -328,14 +365,19 @@ def collect_prs(cfg, pol, repo, prs, window, run=None, now=None):
     except ValueError as e:
         prs.update(status="unconfigured", why=str(e)[:200], error="")
         return
-    except Exception as e:  # noqa: BLE001 - one repo's failure keeps its last good items
-        prs.update(status="error", error=str(e)[:300], why="The last PR read failed; earlier PRs are kept.")
+    except Exception as e:  # noqa: BLE001 - one repo's failure keeps its last good items (and when they were read)
+        prev = prs.get("last_ok_at") or ""
+        prs.update(status="error", error=str(e)[:300], why="The last PR read failed; earlier PRs are kept.", fetched_at=prev)
         return
     items = dict(prs.get("items") or {})
     for p in rows:
         if pol.pr_mine(p.get("author"), prov, inst) is not True or p.get("number") is None:
             continue  # rechecked: a PR the host returned that isn't by your confirmed account is never stored
-        items[str(p["number"])] = _pr_item(p, prefixes)
+        by = p.get("_by") or next((list(profile.account_key(a)) for a in accts
+                                   if pol._pr_match(a, str((p.get("author") or {}).get("id") or ""),
+                                                    str((p.get("author") or {}).get("node_id") or ""),
+                                                    str((p.get("author") or {}).get("login") or "")) is True), [])
+        items[str(p["number"])] = dict(_pr_item(p, prefixes), by=by)  # which of your accounts it is attributed to
     start = profile.day_bounds(window, cfg)[0] if window else None
     if start is not None:
         items = {k: v for k, v in items.items()
@@ -343,6 +385,7 @@ def collect_prs(cfg, pol, repo, prs, window, run=None, now=None):
                  or v.get("state") in ("open", "draft")}
     prs["items"] = items
     prs["capped"] = bool(capped)
+    prs["last_ok_at"] = at
     if capped:
         prs.update(status="partial", why="The host returned its maximum page; older PRs may be missing.", error="")
     elif why:
@@ -355,11 +398,12 @@ def collect_prs(cfg, pol, repo, prs, window, run=None, now=None):
 
 def refresh_repo(cfg, pol, sig, window, path, now, run=None, force=False):
     """One repository's ledger. -> a short summary dict."""
-    from . import gitcmd
-    key = gitcmd.repo_key(path)
-    p = ledger_path(key)
-    led = common.read_json(p, None)
-    led = led if isinstance(led, dict) and led.get("v") == V else new_ledger()
+    p = ledger_path(ledger_key(path))
+    led = load(path)
+    moved = led is not None and not os.path.exists(p)  # an older folder-name ledger of this very folder: carried over
+    led = led if led is not None else new_ledger()
+    if moved:
+        led["migrated_from"] = os.path.basename(ledger_path(led["repo"].get("key") or ""))
     before = json.dumps(led, sort_keys=True)
     reset = led.get("profile_sig") != sig
     if reset:  # who or what counts changed: nothing collected under the old rules is kept
@@ -393,7 +437,7 @@ def refresh_repo(cfg, pol, sig, window, path, now, run=None, force=False):
             res["commits"] = len(found)
         else:
             com.update(status="error", error=err, why="The last commit scan failed; earlier results are kept.")
-    if reset or force or _age(prs.get("fetched_at"), now) >= PR_S:
+    if reset or force or _age(prs.get("attempted_at") or prs.get("fetched_at"), now) >= PR_S:
         collect_prs(cfg, pol, led["repo"], prs, window, run=run, now=now)
         res["prs"] = prs["status"]
     items = com.get("items") or {}

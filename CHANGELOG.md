@@ -21,8 +21,22 @@ All notable changes to this project are documented here. The format follows [Kee
 - Session start adds one compact profile line (name, focus, scope, ownership rule, what isn't confirmed; no email or id). `list_tickets(mine=true)` and `get_progress` are new on the MCP server (9 tools).
 - Settings: a *Developer profile* group (`profile.*`, `progress.exclude_globs`, `progress.done_statuses`).
 - The Tickets page says why each ticket is yours or not and gains an *Only mine now* filter; `/cg:doctor` reports the profile per provider (an unresolvable time zone fails it; nothing confirmed yet doesn't).
+- One personal projection for every ticket reader ([docs/progress.md](docs/progress.md#the-personal-projection)): a record is *current*, *history* (your own earlier or collaborative work), *context* (the Jira parent of one of your tickets) or *outside* (none of your work on it). Outside records aren't listed, returned by key (dashboard, `get_ticket`, `get_branch_status`, `/cg:ticket`, `/cg:branches`), searched, exported, shared or alerted on; they answer only that they are outside and why.
+- Several confirmed accounts per provider instance (a work and an older account on `github.com`): PRs are asked for once per account and attributed to it, and the profile preview counts only the removed account's PRs.
+- `/cg:branch uat-deployed|uat-accepted <KEY>`: your own confirmation of UAT deployment or acceptance for exactly the changes in the UAT branch now.
+- Dashboard: a **History** page (`#/history`, `g y`) with weekly wins, the activity calendar and personal records; Today and My progress open with a source line, the next action and five metric buttons, each opening its own definition, counted events, what was left out and its sources; Health lists *Your sources* with the same connection words as Profile.
 
 ### Changed
+- Navigation is Today, Tickets, Releases, History, then Profile and Health; My progress, Timesheet, Knowledge, DB map, Search, Team notes, Setup and Settings are under More (every address still works).
+- Releases puts Overdue and Release date unresolved first, shows each ticket as one row (pending repositories, one next action) with stacked per-repository blocks on request instead of a wide table, and folds ready tickets. The ticket's release plan says the release once, then per repository the development base, PR target, Release, QA, UAT and next step; blockers once; evidence and provenance on request.
+- Profile has three groups (Identity with the suggestions beside your confirmed identities, Scope, Preferences and tracking), one review button each, and keeps unsaved edits as page-level drafts.
+- The Jira scope search is always narrowed to your confirmed Jira accounts and Jira projects (an `assignee = currentUser()` is replaced; no confirmed account, no search), read page by page (`releases.jira.scope_max_pages`, default 4, resumable), every row rechecked before it is kept. The default `scope_jql` no longer names the assignee.
+- UAT deployment and acceptance count only for the revision (the exact changes) now in the UAT branch, from evidence observed after it got there; earlier changes' evidence is kept as history.
+- Development branches and PRs are told apart from integration and promotion ones; a development branch from `main`, `qa` or another base, and a development PR into `main` or straight into `qa` / `uat`, are flagged with the resolved release branch as the target.
+- The monthly release view, overdue releases and reminders use the profile's time zone and day boundary; a cached *Ready* older than `releases.stale_hours` is shown as not ready until refreshed.
+- Personal records come only from completely collected days; milestones and weekly wins say "at least" for a partial or stale count and never compare it with a record. A recorded PR approval from a disconnected or stale source becomes "check its current state", and setup and recovery come first among next steps. Profile, My progress and Health report a confirmed identity apart from whether the last read worked.
+- Activity ledgers are kept per repository location (`data/activity/<folder>-<hash>.json`); a folder-name ledger is read only for the same folder and carried over. Two clones of one repository count their commits and PRs once.
+- Reconciling the profile (rules version 2, once, backed up) quarantines commit records whose author can't be verified, like other archived records.
 - The delivery check uses the release branch confirmed for the ticket's Jira release as its release target when release tracking is on, and checks the UAT branch when UAT is required.
 - The branch guard also warns when a new ticket branch is cut from, or a PR targets, another release branch than the one confirmed for the ticket's Jira release.
 - `get_alerts`, release and UAT reminders and the monthly release overview leave out tickets Jira assigns to someone else (or reassigned away from you); `get_alerts` and the dashboard's *Needs you* strip say how many they left out. The release overview counts a "your development branch" ticket only from commits authored by a confirmed email.
@@ -30,6 +44,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - After an identity or scope change the next tick backs up and moves commit records no longer authored by a confirmed email to `commits_excluded` (kept and labelled, restored when they are yours again), in ticket records and in day records whose evening worklog wasn't sent, and imports the newly confirmed email's commits.
 
 ### Fixed
+- A ticket or recall request by key returned another developer's cached ticket in full (dashboard API, `get_ticket`, search, export).
+- After changing or removing the Jira account, release tracking's cached "assigned to you" kept the old account's tickets yours; assignee answers are now bound to the confirmed accounts and unknown otherwise.
+- A Jira scope search that returned one page, or an error object, replaced the whole scope as if complete, so tickets vanished from the month view.
+- An old Jira *Accepted* status (even from a failed read) could make later UAT changes ready.
+- A confirmed commit email with `+` (or other regex characters) collected nothing: git's `--author` treated it as a pattern. Author and co-author filters are now literal (`--fixed-strings`).
+- Two clones of the same repository doubled commits, lines and PRs; two repositories with the same folder name shared one activity ledger.
+- Adding a second account on the same host replaced the first.
+- Showing emails and ids on the Profile page discarded an unsaved edit.
+- Releases and Profile scrolled sideways on narrow screens.
+- Ticket completions near midnight could be missed when the profile's time zone and this machine's put them on different days.
 - MCP jobs on macOS and Linux read a large tool result that Claude Code saved to a file (a POSIX path); only Windows drive paths were recognised before.
 - Tests no longer assume the machine's clock is UTC+05:30 (fixtures use the local timezone), and the Windows-only path-guard tests are skipped elsewhere, so CI passes on its UTC runners.
 - The commit scan's `--author` pattern also matched look-alike addresses (`dev@acme.test` matched `xdev@acme.test`); every result is now rechecked exactly.

@@ -198,7 +198,11 @@ class KBJobs:
         n = 0
         sc = common.read_json(release.scope_path(), {}) or {}
         last = common.parse_ts(max(sc.get("failed_at") or "", sc.get("fetched_at") or "") or None)
-        if j.get("scope_jql") and (not last or (now - last).total_seconds() >= float(j["scope_refresh_hours"]) * 3600):
+        every = float(j["scope_refresh_hours"]) * 3600
+        cyc = sc.get("cycle") if isinstance(sc.get("cycle"), dict) else {}
+        if cyc and not cyc.get("done") and not sc.get("error"):
+            every = min(every, release.SCOPE_RESUME_S)  # an unfinished pass: its next pages come soon, not in 12 h
+        if release.scope_query(self.cfg)[0] and (not last or (now - last).total_seconds() >= every):
             try:
                 mcpjobs.jira_release_scope(self.cfg, self.a.health)
                 n += 1

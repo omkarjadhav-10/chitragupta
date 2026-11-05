@@ -36,6 +36,8 @@ def _branch_name(date, key):
     return "release/ABC-%d/%s-%s-release" % (key, _ordinal(date.day), MONTHS[date.month - 1][:3].lower())
 
 
+JIRA_ID = "557058:0f0e1d2c-dev-example"  # the synthetic Jira account of tests/test_dashboard_progress.py
+
 def add_release_fixtures(home, days):
     """Release records as release.resolve() + evaluate() leave them, written onto the synthetic tickets:
     ABC-1001 ships this month from two repos (service-api complete through QA and in UAT, service-ui with its release
@@ -134,7 +136,7 @@ def add_release_fixtures(home, days):
                 "accepted": {"state": "unknown", "source": "Jira status 'In Progress' doesn't say accepted"}},
         "repos": {"service-api": api_repo, "service-ui": ui_repo, "service-batch": batch_repo},
         "pins": {"service-api": {"release": RB, "uat": "uat"}, "service-ui": {"release": RB, "uat": "uat"}},
-        "assignee_me": True, "summary": "Order total is wrong for discounted items",
+        "assignee_me": True, "assignee_binding": JIRA_ID, "summary": "Order total is wrong for discounted items",
         "reminders": [{"id": "wrong-target:service-ui:40", "kind": "wrong-target", "repo": "service-ui", "severity": "alert",
                        "text": "service-ui: " + wrong["text"]},
                       {"id": "uat-missing:service-ui", "kind": "uat-missing", "repo": "service-ui", "severity": "alert",
@@ -177,7 +179,8 @@ def add_release_fixtures(home, days):
                     "origin/qa`), merge %s into it (`git merge origin/%s`), resolve conflicts there, push, then PR "
                     "feature/ABC-1003-refund-report-qa → qa (open PRs aren't visible from merge commits: skip this if it's "
                     "already open)." % (OLD, OLD)}},
-        "pins": {"service-api": {"release": OLD, "uat": None}}, "assignee_me": True, "summary": "Refund report",
+        "pins": {"service-api": {"release": OLD, "uat": None}}, "assignee_me": True, "assignee_binding": JIRA_ID,
+        "summary": "Refund report",
         "reminders": [], "flags": [],
         "readiness": {"ready": False, "missing": ["service-api: qa unknown", "service-api: refs " + stale_why]},
         "computed_at": computed}
@@ -207,7 +210,8 @@ def add_release_fixtures(home, days):
             "flags": [],
             "next": "Resolve the release branch first: no release selected for the ticket. No development base is "
                     "recommended until then."}},
-        "pins": {"shop-api": {"release": None, "uat": None}}, "assignee_me": True, "summary": "Checkout timeout",
+        "pins": {"shop-api": {"release": None, "uat": None}}, "assignee_me": True, "assignee_binding": JIRA_ID,
+        "summary": "Checkout timeout",
         "reminders": [{"id": "release-ambiguous", "kind": "release-ambiguous", "repo": "", "severity": "warn",
                        "text": "ABC-1002: %s (`/cg:branch release-pick ABC-1002 \"<release>\"`)." % amb},
                       {"id": "map:shop-api", "kind": "mapping", "repo": "shop-api", "severity": "warn",
@@ -225,7 +229,7 @@ def add_release_fixtures(home, days):
         _w(p, tk)
     _w(os.path.join(home, "data", "jira", "_releases", "scope.json"), {
         "fetched_at": jira_at, "jql": "assignee = currentUser() AND fixVersion is not EMPTY AND updated >= -120d",
-        "mine_only": True, "error": None, "issues": {"ABC-1005": {
+        "binding": JIRA_ID, "complete": True, "error": None, "issues": {"ABC-1005": {
             "versions": [{"id": cur["id"], "name": cur["name"], "project": "ABC", "release_date": end.isoformat()}],
             "planned_date": None, "uat_values": [], "uat_seen": False, "labels": [], "status": "To Do",
             "summary": "Export refunds as CSV", "assignee_me": True}}})
@@ -233,6 +237,9 @@ def add_release_fixtures(home, days):
     with open(p, encoding="utf-8") as f:
         cfg = json.load(f)
     cfg["releases"] = {"enabled": True, "jira": {"uat_field": UAT_FIELD}}
+    # the confirmed Jira account the release records' assignee answers were compared with (the same synthetic account
+    # add_progress_fixtures confirms); an answer without it would be unknown
+    cfg.setdefault("profile", {})["accounts"] = [{"provider": "jira", "instance": "acme.atlassian.net", "id": JIRA_ID}]
     _w(p, cfg)
     return {"month": day[:7], "release": cur["name"], "planned": end.isoformat(), "release_branch": RB}
 

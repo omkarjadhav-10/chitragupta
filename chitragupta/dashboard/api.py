@@ -152,27 +152,74 @@ def _alerts(tk):
     return out
 
 
-def tickets(q=None):
-    """All known tickets, newest activity first; `q` filters by key / title / TL;DR (case-insensitive). Each carries
-    `ownership` from the profile's policy (assigned / included / reassigned / other / unassigned / unknown)."""
-    from .. import profile
-    pol = profile.Policy(common.load_config())
+_SCOPE = {}
+
+
+def _ticket_records():
+    """{key: record} of every ticket record (each read through the mtime cache)."""
     d = common.hp("data", "tickets")
-    out = []
+    out = {}
     for fn in _listdir(d):
-        if not fn.endswith(".json"):
-            continue
-        key = fn[:-5]
-        if not TICKET_RE.match(key):
+        if not fn.endswith(".json") or not TICKET_RE.match(fn[:-5]):
             continue
         tk = read_json_cached(os.path.join(d, fn))
         if isinstance(tk, dict):
-            out.append(dict(ticket_summary(key, tk), ownership=pol.ticket_ownership(key, tk)))
+            out[fn[:-5]] = tk
+    return out
+
+
+def scope_index(cfg=None):
+    """{key: profile.ticket_scope} for every ticket record under the profile as it is now: the one personal projection
+    every reader applies (ticket list and page, lazy sections, MCP, CLI, search, alerts, exports, sharing). Recomputed
+    when a ticket record or the profile signature changes, so a profile edit takes effect on the next read."""
+    from .. import profile
+    cfg = cfg if cfg is not None else common.load_config()
+    recs = _ticket_records()
+    pol = profile.Policy(cfg)
+    sig = (profile.signature(cfg), pol.jira_binding(), json.dumps(sorted(pol.p["include"].items())),
+           tuple(sorted((k, id(v)) for k, v in recs.items())))
+    hit = _SCOPE.get("idx")
+    if hit and hit[0] == sig:
+        return hit[1]
+    idx = profile.projection(pol, recs)
+    _SCOPE["idx"] = (sig, idx)
+    return idx
+
+
+def scope_of(key, cfg=None):
+    """One ticket's place in the personal projection; a key with no record is outside (nothing of yours)."""
+    s = scope_index(cfg).get(str(key or "").upper())
+    return s or {"visible": False, "basis": "outside", "current": False, "state": "unknown", "own": [],
+                 "reason": "no record of your own work on it"}
+
+
+def outside_view(key, s):
+    """What a reader may say about a ticket outside your scope: that it is outside, and why. No title or content."""
+    return {"key": key, "outside": True, "scope": {k: s.get(k) for k in ("basis", "reason", "state")}}
+
+
+def tickets(q=None, cfg=None):
+    """Your tickets, newest activity first; `q` filters by key / title / TL;DR (case-insensitive). Only records the
+    personal projection makes visible are listed: current ones, ones with your own earlier or collaborative work, and
+    parents kept as context; a record of somebody else's work never is, whatever the caller asks. Each carries
+    `ownership` (assigned / included / reassigned / other / unassigned / outside / unknown) and `scope`."""
+    from .. import profile
+    cfg = cfg if cfg is not None else common.load_config()
+    pol = profile.Policy(cfg)
+    idx = scope_index(cfg)
+    out, hidden = [], 0
+    for key, tk in _ticket_records().items():
+        s = idx.get(key) or {}
+        if not s.get("visible"):
+            hidden += 1
+            continue
+        out.append(dict(ticket_summary(key, tk), ownership=pol.ticket_ownership(key, tk),
+                        scope={k: s.get(k) for k in ("basis", "reason", "current")}))
     if q:
         ql = q.strip().lower()
         out = [t for t in out if ql in ("%s %s %s %s" % (t["key"], t["title"], t["title_hint"], t["tldr"])).lower()]
     out.sort(key=lambda t: (t["last"], t["key"]), reverse=True)
-    return {"tickets": out, "count": len(out), "q": q or ""}
+    return {"tickets": out, "count": len(out), "q": q or "", "outside": hidden}
 
 
 def _items(tk):
@@ -360,8 +407,14 @@ def ticket(key):
     paths = ticket_paths(key)
     if not tk and not paths:
         return None
+    if tk:
+        s = scope_of(key)
+        if not s.get("visible"):  # somebody else's work: asking for it by key doesn't make it yours
+            return outside_view(key, s)
     tk = tk or {}
     out = ticket_summary(key, tk)
+    if tk:
+        out["scope"] = {k: scope_of(key).get(k) for k in ("basis", "reason", "current")}
     from .. import relevance
     focus = relevance.focused(tk)
     from ..render import change_label
@@ -422,7 +475,7 @@ def ticket_detail(key, section):
     if not TICKET_RE.fullmatch(key or "") or section not in DETAIL_SECTIONS:
         return None
     tk = read_json_cached(common.hp("data", "tickets", key + ".json"))
-    if not isinstance(tk, dict):
+    if not isinstance(tk, dict) or not scope_of(key).get("visible"):
         return None
     paths = ticket_paths(key)
     out = {"key": key, "section": section}
@@ -1121,8 +1174,21 @@ def status(cfg=None, now=None, server=None):
         "dashboard": server or {},
         "search": _search_stats(),
         "pr_sources": h.get("pr_sources") or [],
+        "personal": _personal(cfg, now),
         "safety": _safety(cfg),
     }
+
+
+def _personal(cfg, now):
+    """Your own sources' connections (profile.connections): the same answer Profile and My progress give, so Health
+    never calls a source fine that the other pages say failed (or the other way round)."""
+    try:
+        from .. import profile
+        c = profile.connections(cfg, now=now)
+    except Exception:  # noqa: BLE001 - a broken ledger never takes the Health page down
+        return {}
+    return {"git": c["git"], "jira": c["jira"],
+            "hosts": [dict(v, provider=k[0], instance=k[1]) for k, v in sorted(c["hosts"].items())]}
 
 
 def _ticks(now):
@@ -1471,10 +1537,14 @@ def profile_preview(raw, cfg=None):
             commits_out += sum(1 for it in items.values() if it.get("state") == "counted")
         info = led.get("repo") or {}
         prov, inst = info.get("provider"), info.get("instance")
-        oa = old_pol.account(prov, inst) if prov else None
-        na = new_pol.account(prov, inst) if prov else None
-        if k not in new_repos or (oa and (not na or _akey(oa) != _akey(na))):
-            prs_out += len((led.get("prs") or {}).get("items") or {})
+        oa = {profile.account_key(a) for a in old_pol.accounts(prov, inst)} if prov else set()
+        na = {profile.account_key(a) for a in new_pol.accounts(prov, inst)} if prov else set()
+        pitems = ((led.get("prs") or {}).get("items") or {}).values()
+        if k not in new_repos or (oa and not na):
+            prs_out += len(list(pitems))
+        elif oa - na:  # only the PRs attributed to a removed account leave; another account's stay
+            gone = oa - na
+            prs_out += sum(1 for p in pitems if (tuple(p.get("by") or ()) in gone) or (not p.get("by") and len(oa) == 1))
     d = common.hp("data", "tickets")
     if a_del and new_p["aliases"]:
         gone, shas = set(a_del), set()

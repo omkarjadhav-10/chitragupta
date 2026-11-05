@@ -697,24 +697,51 @@ def jira_versions(project, cfg, health):
 
 
 def jira_release_scope(cfg, health):
-    """Release tracking: one read-only jira_search with releases.jira.scope_jql (by default your tickets with a fix
-    version), fields limited to what release tracking reads. Kept as data/jira/_releases/scope.json, only the release
-    facts per issue. -> that record."""
+    """Release tracking: the scope search (release.scope_query: releases.jira.scope_jql narrowed to your confirmed Jira
+    accounts and Jira projects), read a page at a time: at most releases.jira.scope_max_pages pages of scope_limit
+    rows in one read-only job (one model call, within the daily MCP budget), resuming where an unfinished pass
+    stopped. Pages are checked and every row rechecked by release.merge_scope before anything is kept in
+    data/jira/_releases/scope.json; a partial pass or a failed page never replaces what was known. -> that record."""
     from . import release
     j = release.settings(cfg)["jira"]
+    path = release.scope_path()
+    old = common.read_json(path, {}) or {}
+    jql, why = release.scope_query(cfg)
+    if not jql:
+        release.save_scope(None, None, cfg, common.now_iso(), error=why)
+        raise JobError(why, skip=True)
     srv = server_name(cfg, "jira")
-    jql, limit = j["scope_jql"], max(1, min(100, int(j.get("scope_limit") or 50)))
-    task = ("Call jira_search exactly once with jql=%s, fields=%s, limit=%d and no other arguments. Results may be "
-            "saved to files: that is expected, do not retry or read them. Then return {\"done\": true}." % (
-                json.dumps(jql), json.dumps(release.scope_fields(cfg)), limit))
-    res = run("jira-release-scope", {srv: ["jira_search"]}, [mcp_tool(srv, "jira_search")], _writes(srv, cfg), task,
-              DONE_SCHEMA, cfg, health, max_turns=3, timeout=400)
-    got = [unwrap(v) for _, v in tool_results(res, "jira_search")]
-    if not got or not isinstance(got[0], dict):
-        err = next((c["result"] for c in res["calls"] if c.get("is_error")), res.get("result"))
-        release.save_scope(None, jql, cfg, common.now_iso(), error=err or "no result")
+    size = max(1, min(100, int(j.get("scope_limit") or 50)))
+    pages = max(1, min(20, int(j.get("scope_max_pages") or 4)))
+    from . import profile
+    cyc = release.scope_cycle(old, jql, profile.Policy(cfg).jira_binding(), common.now())
+    start, tok = int(cyc.get("next") or 0), cyc.get("token")
+    first = ("start_at=%d" % start) if not tok else ("page_token=%s" % json.dumps(tok))
+    task = ("Call jira_search with jql=%s, fields=%s, limit=%d and %s, and no other arguments. If that page's result "
+            "says more issues follow (start_at plus the issues returned is below total, or it gives a nextPageToken and "
+            "isLast is not true), call jira_search again with the same jql, fields and limit and the next start_at (or "
+            "page_token=<nextPageToken>), at most %d calls in all. Results may be saved to files: that is expected, do "
+            "not read them. Then return {\"done\": true}." % (json.dumps(jql), json.dumps(release.scope_fields(cfg)),
+                                                              size, first, pages))
+    try:
+        res = run("jira-release-scope", {srv: ["jira_search"]}, [mcp_tool(srv, "jira_search")], _writes(srv, cfg), task,
+                  DONE_SCHEMA, cfg, health, max_turns=pages + 2, timeout=400)
+    except JobError as e:  # timeout, signed out, budget: recorded, the last good rows kept
+        release.save_scope(None, jql, cfg, common.now_iso(), error=str(e))
+        raise
+    got = [(inp if isinstance(inp, dict) else {}, unwrap(v)) for inp, v in tool_results(res, "jira_search")][:pages]
+    errs = [c["result"] for c in res["calls"] if c.get("is_error") and str(c.get("name") or "").endswith("__jira_search")]
+    if not got:
+        err = (errs[0] if errs else None) or res.get("result") or "no result"
+        release.save_scope(None, jql, cfg, common.now_iso(), error=err)
         raise JobError("jira_search returned nothing usable: %s" % str(err)[:200], skip=True)
-    return release.save_scope(got[0].get("issues") or [], jql, cfg, common.now_iso())
+    if errs and len(got) < pages:  # a later page failed (permissions, a timeout): it counts as a failed page
+        got.append(({}, {"error": str(errs[-1])[:200]}))
+    rec = release.merge_scope(old, got, cfg, common.now_iso(), jql, size, cycle=cyc)
+    common.write_json(path, rec)
+    if rec.get("error"):
+        raise JobError("jira_search: %s" % rec["error"][:200], skip=True)
+    return rec
 
 
 def jira_evening(day, tickets, cfg, health):
@@ -772,7 +799,10 @@ def evening_facts(day, search, changes, cfg):
     start, end = common.day_bounds(day, cfg)
     pol = _me(cfg)
     ids = {}
-    out = {"comments": [], "worklogs": [], "status_changes": []}
+    # status_history: every status change in the changelogs, whatever day it fell on (times kept exactly). Personal
+    # progress reads it across neighbouring evening files, so a completion near midnight in another time zone than
+    # this machine's is counted on the right profile day, once.
+    out = {"comments": [], "worklogs": [], "status_changes": [], "status_history": []}
     for iss in search.get("issues") or []:
         key = iss.get("key")
         ids[str(iss.get("id"))] = key
@@ -790,6 +820,12 @@ def evening_facts(day, search, changes, cfg):
         key = ids.get(str(ch.get("issue_id"))) or ch.get("issue_key") or ch.get("key")
         for h in ch.get("changelogs") or []:
             t = _local(h.get("created"))
+            if t:
+                for it in h.get("items") or []:
+                    if it.get("field") == "status":
+                        out["status_history"].append({"ticket": key, "time": t.isoformat(timespec="seconds"),
+                                                      "from": it.get("from_string"), "to": it.get("to_string"),
+                                                      "mine": _mine(h.get("author"), pol)})
             if not (t and start <= t < end):
                 continue
             for it in h.get("items") or []:

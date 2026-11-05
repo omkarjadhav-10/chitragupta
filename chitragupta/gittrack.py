@@ -392,7 +392,9 @@ class Tracker:
         self.flush_session_events()
         out = {}
         self._fetch_attempts = 0
-        paths = list(repos if repos is not None else (self.cfg.get("watched_repos") or []))
+        # the profile's repositories (every watched one when none is picked): a repository outside your scope is
+        # neither fetched nor asked for PRs
+        paths = list(repos if repos is not None else profile.Policy(self.cfg).p["repos"])
         cursor = self.state.get("fetch_cursor")
         names = [repo_key(p) for p in paths]
         if not self.force_fetch and cursor in names:

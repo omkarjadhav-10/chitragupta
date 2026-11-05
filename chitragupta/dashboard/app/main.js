@@ -8,6 +8,7 @@ import { Icon, Toasts, Dialog, themeMode } from './lib/ui.js';
 import { NAV, NAV_END, paletteOpen, keysOpen, morePagesOpen, pageKeys, setTheme, Desk } from './lib/shell.js';
 import { TodayPage } from './pages/today.js';
 import { ProgressPage } from './pages/progress.js';
+import { HistoryPage } from './pages/history.js';
 import { ProfilePage } from './pages/profile.js';
 import { TicketsPage, TicketPage } from './pages/tickets.js';
 import { ReleasesPage } from './pages/releases.js';
@@ -30,8 +31,12 @@ function TopBar() {
   const r = useStore(route);
   const more = useStore(morePagesOpen);
   const problems = healthIssues(st.data);
-  const primary = NAV.concat(NAV_END).filter((n) => ['today', 'progress', 'tickets', 'timesheet', 'knowledge', 'health', 'settings'].includes(n.id));
-  const secondary = NAV.concat(NAV_END).filter((n) => !primary.includes(n));
+  // Daily work first (Today, Tickets, Releases, History); your profile and the sources' health next to it; every other
+  // page under More (and the palette, and the g shortcuts), so nothing that existed before is out of reach.
+  const all = NAV.concat(NAV_END);
+  const primary = ['today', 'tickets', 'releases', 'history'].map((id) => all.find((n) => n.id === id));
+  const side = ['profile', 'health'].map((id) => all.find((n) => n.id === id));
+  const secondary = all.filter((n) => !primary.includes(n) && !side.includes(n));
   useEffect(() => {
     if (!more) return undefined;
     const close = (e) => { if (!e.target.closest('.top')) morePagesOpen.set(false); };
@@ -43,7 +48,7 @@ function TopBar() {
     ${n.label}${n.id === 'health' && problems.length ? html`<span class="health-count">${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}</span>` : null}</a>`;
   return html`<header class="top" onKeyDown=${(e) => { if (more && e.key === 'Escape') { morePagesOpen.set(false); document.querySelector('.more-pages').focus(); } }}>
     <a class="brand" href="#/today">Chitragupta</a>
-    <nav class="primary-nav" aria-label="Pages">${primary.map((n) => item(n))}</nav>
+    <nav class="primary-nav" aria-label="Pages">${primary.map((n) => item(n))}<span class="nav-gap" aria-hidden="true"></span>${side.map((n) => item(n, 'side'))}</nav>
     <div class="top-right">
       ${conn === 'offline' ? html`<a class="offline-status" href="#/health">Offline</a>` : null}
       <button type="button" class="btn quiet more-pages" aria-expanded=${more ? 'true' : 'false'} aria-controls=${more ? 'more-pages' : null}
@@ -54,7 +59,7 @@ function TopBar() {
         <${Icon} name=${theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'system'} size=${16} /></button>
     </div>
     ${more ? html`<nav id="more-pages" class="more-nav" aria-label="More pages" onKeyDown=${(e) => { if (e.key === 'Escape') { morePagesOpen.set(false); document.querySelector('.more-pages').focus(); } }}>
-      <div class="mobile-primary">${primary.map((n) => item(n))}</div>${secondary.map((n) => item(n))}</nav>` : null}
+      <div class="mobile-primary">${primary.concat(side).map((n) => item(n))}</div>${secondary.map((n) => item(n))}</nav>` : null}
   </header>`;
 }
 
@@ -143,7 +148,7 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then p', 'My progress'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
+  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then y', 'History'], ['g then p', 'My progress'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'DB map'], ['g then f', 'Search'], ['g then m', 'Team notes'],
   ['g then h', 'Health'], ['g then i', 'Profile'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
@@ -214,6 +219,7 @@ function Page() {
     case 'tickets': return r.arg ? html`<${TicketPage} key=${'t-' + r.arg} route=${r} />` : html`<${TicketsPage} route=${r} />`;
     case 'releases': return html`<${ReleasesPage} route=${r} />`;
     case 'progress': return html`<${ProgressPage} route=${r} />`;
+    case 'history': return html`<${HistoryPage} route=${r} />`;
     case 'profile': return html`<${ProfilePage} route=${r} />`;
     case 'timesheet': return html`<${TimesheetPage} route=${r} />`;
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
