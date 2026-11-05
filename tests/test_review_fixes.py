@@ -138,6 +138,21 @@ class Projection(Home, unittest.TestCase):
         self.config(profile={"include_tickets": {}})
         self.assertFalse(api.scope_of("ABC-1999")["visible"])
 
+    def test_session_only_records_are_yours(self):
+        """Records your sessions made without time or findings yet: saved requests, artifacts, edited files, tables,
+        or branch names seen in a session. They are your work (history), never outside."""
+        from chitragupta.dashboard import api
+        self.ticket("ABC-1101", {"branches": ["feature/ABC-1101-x", "feature/ABC-1101-y"]})
+        self.ticket("ABC-1102", {"artifacts": {"a1": {"name": "analysis.md"}}, "commits_excluded": {
+            "c" * 40: {"sha": "c" * 40, "repo_name": "gone", "excluded": {"reason": "its author couldn't be verified"}}}})
+        self.ticket("ABC-1103", {"bruno": {"folder": "bruno/ABC-1103"}})
+        self.ticket("ABC-1104", {"branches": ["refs/stash"], "timeline": {"2026-11-01": {"minutes": 0}}})
+        idx = api.scope_index()
+        self.assertEqual({k: idx[k]["basis"] for k in ("ABC-1101", "ABC-1102", "ABC-1103")},
+                         {"ABC-1101": "history", "ABC-1102": "history", "ABC-1103": "history"})
+        self.assertFalse(idx["ABC-1104"]["visible"])  # nothing of yours: a stash ref and a 0-minute day
+        self.assertFalse(idx["ABC-1999"]["visible"])
+
     def test_legacy_unverifiable_commits_are_quarantined_with_a_backup(self):
         from chitragupta import common, profile
         from chitragupta.store import Store

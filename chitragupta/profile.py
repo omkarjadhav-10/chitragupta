@@ -517,6 +517,10 @@ class Policy:
             out.append("time from your own sessions")
         if tk.get("items") or tk.get("queries") or tk.get("api_calls") or ((tk.get("replay") or {}).get("final")):
             out.append("findings from your own sessions or notes")
+        if any(tk.get(f) for f in ("artifacts", "files", "bruno", "tables", "apis", "data_flow", "integrations")):
+            out.append("files, artifacts, saved requests or knowledge from your own sessions")
+        if any(isinstance(b, str) and b and not b.startswith("refs/") for b in tk.get("branches") or []):
+            out.append("branches you worked on in your own sessions")
         if any(isinstance(c, dict) and self.email_mine(c.get("ae")) for c in (tk.get("commits") or {}).values()):
             out.append("your commits")
         repos = ((tk.get("git") or {}).get("repos")) if isinstance(tk.get("git"), dict) else None

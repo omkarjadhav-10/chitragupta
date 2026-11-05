@@ -98,7 +98,7 @@ Ticket records can hold more than your own work: a branch tracked by name, an ol
 | Basis | When | Shown |
 |---|---|---|
 | current | assigned to one of your confirmed Jira accounts (in your projects), or included by you | everywhere |
-| history | not yours now, but your own work is recorded on it: time from your sessions, findings / queries / requests from your sessions or notes, commits whose recorded author is a confirmed email, your own commits on a ticket branch, or an earlier assignment to you | everywhere, labelled; only your own activity counts |
+| history | not yours now, but your own work is recorded on it: time from your sessions; findings, queries, requests, saved Bruno requests, artifacts, edited files, tables, APIs or data flow from your sessions or notes; branch names seen in your sessions; commits whose recorded author is a confirmed email, or your own commits on a ticket branch; a day you worked on it (unless every commit recorded on it is someone else's or unverifiable); or an earlier assignment to you | everywhere, labelled; only your own activity counts |
 | context | the Jira parent (an Epic) of one of your visible tickets, with none of your work on it | listed as context, never counted |
 | outside | none of the above | nowhere: not listed, not returned by key (the ticket page, `get_ticket`, `get_branch_status`, `/cg:ticket`, `/cg:branches` say only that it is outside and why), not searchable, not exported or shared, not in alerts |
 
