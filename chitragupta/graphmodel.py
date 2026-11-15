@@ -26,7 +26,7 @@ LABEL_LIMIT = 300
 ATTR_LIMIT = 1000
 NODE_COLUMNS = {"lifecycle": "current", "repo_id": "", "location": "", "workflow": "", "source_ref": "",
                 "observed_at": ""}
-EDGE_COLUMNS = {"lifecycle": "current", "observed_at": "", "generation": 0}
+EDGE_COLUMNS = {"lifecycle": "current", "observed_at": "", "workflow": "", "generation": 0}
 _SCALAR = (str, int, float, bool, type(None))
 
 

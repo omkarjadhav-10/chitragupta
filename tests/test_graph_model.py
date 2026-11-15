@@ -121,7 +121,8 @@ class Edges(unittest.TestCase):
         row = gm.edge("HAS_EVIDENCE", self.src, self.dst, TICKET, "observed", evidence_ref="commit:" + SHA,
                       attrs={"how": "commit message"}, generation=4)
         self.assertEqual(set(row), {"id", "type", "src", "dst", "ticket", "basis", "evidence_ref", "observed_at",
-                                    "scope", "generation", "confidence", "lifecycle", "attrs", "version"})
+                                    "scope", "generation", "confidence", "lifecycle", "attrs", "version",
+                                    "workflow"})
         self.assertEqual(row["id"], gm.edge_id("HAS_EVIDENCE", self.src, self.dst, "", "observed"))
         self.assertIsNone(row["confidence"])
         self.assertEqual(row["generation"], 4)
