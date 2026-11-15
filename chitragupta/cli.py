@@ -10,11 +10,31 @@
   log <directive…>                      append ONE time:/leave:/half-day:/holiday:/workday:/clear:/resend: line to inbox.md
   log --today                            print the current work day (for resolving "Monday", "yesterday")
   pause | resume | status                the PAUSED switch (<home>/.worklog/PAUSED)
+  db table <name|id> [--env E]           a database object's passport from cached records (several matches: candidates)
+  db flow <start> [--kind K] [--env E] [--no-save]   a business operation's flow (ticket, api, symbol, table, text)
+  db flows | db resolve <text> [--kind K]            saved flows; candidates for a start
+  db ingest                              rebuild the database-flow records from local files (no query, no model)
+  db map-confirm --from A --to B [--via Event.field] [--transform T] [--note N]   record a mapping you confirmed
+  db plan <flow|start> --env E --object O --key field=value ... [--connection C ...] [--run [--wait]]
+                                         review a bounded trace plan for one record (keys never in a file name or log)
+  db run <plan> --fingerprint F [--wait] | db status <job> | db cancel <job>   run / follow / stop a reviewed plan
+  db investigations [text] | db investigation <id> | db note <id> --text T --revision N | db handoff <id>
+  [--regenerate] [--copy] | db context [--flow F] [--investigation I]          your saved record investigations
+  db impact [<object|column>] [--change KIND] [--refresh]   cached change impact (rename, type, nullability, default,
+                                         semantic, application_only); --refresh recomputes from cached metadata
+  db compare [<left> <right>] [--objects A,B] [--confirm schema.table[=other]] [--refresh]   cached metadata
+                                         comparison of two permitted connections or two snapshots (conn@snapshot)
+  db reconcile | db snapshots <connection>   mark flows needing revalidation; list a connection's metadata snapshots
 
 Everything is read-only except `log` (one line appended to inbox.md), `pause`/`resume`, `search --rebuild`
-(rewrites the search index cache, .worklog/cache/search.sqlite) and `check` (refreshes Chitragupta's own branch, PR and
-delivery data, like the background tick; it fetches remote-tracking refs only when fetching is on).
-No command calls a model, Jira, Slack or the database MCP.
+(rewrites the search index cache, .worklog/cache/search.sqlite), `check` (refreshes Chitragupta's own branch, PR and
+delivery data, like the background tick; it fetches remote-tracking refs only when fetching is on) and the `db`
+commands that keep their result in data/db/: `db ingest`, `db map-confirm` and `db flow` (saves a new flow version
+only when the flow changed; --no-save shows it without saving), `db plan` / `db run` / `db cancel` / `db note` /
+`db handoff --regenerate` (personal investigation records; a run is executed by the agent, `agent db-trace`), and
+`db impact` / `db compare` (cache a result computed from cached metadata) and `db reconcile` (review marks).
+No command calls a model, Jira, Slack or the database MCP itself: `db run` and `db plan --run` start the agent's
+record-trace runner through the safety layer, and --wait only reads the job record until it ends.
 """
 import argparse
 import csv
@@ -591,13 +611,18 @@ def cmd_trace(a):
         tr = qa.get("trace") or {}
         out("Fetched %s (%s, connection %s)." % (qa.get("fetched_at") or "?", qa.get("env") or "qa",
                                                 qa.get("connection") or "?"))
+        if (qa.get("start") or {}).get("how"):
+            out("Start `%s`: %s." % (qa["start"].get("table"), qa["start"]["how"]))
+        for d in qa.get("declined") or []:
+            out("Declined: %s." % d)
         if tr.get("summary"):
             out(tr["summary"])
         for s in tr.get("steps") or []:
             out("- `%s` where %s: %s%s" % (s.get("table"), s.get("key"), s.get("values"),
                                            (" (%s)" % s["note"]) if s.get("note") else ""))
         for c in tr.get("changes") or []:
-            out("- changed `%s.%s`: %s -> %s" % (c.get("table"), c.get("column"), c.get("before"), c.get("after")))
+            out("- changed `%s.%s`: %s -> %s%s" % (c.get("table"), c.get("column"), c.get("before"), c.get("after"),
+                                                   "" if c.get("validated") else " (model summary, unvalidated)"))
     else:
         out("No QA worked example saved for %s." % key)
     out()
@@ -901,9 +926,129 @@ def parser():
     s.add_argument("--date", help="YYYY-MM-DD (default: today)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_progress)
+    s = sub.add_parser("db", help="database investigation from cached records: table, flow, flows, resolve, ingest, "
+                                  "map-confirm (no query, no model)")
+    s.add_argument("action", choices=("table", "flow", "flows", "resolve", "ingest", "map-confirm", "plan", "run",
+                                      "status", "cancel", "investigations", "investigation", "note", "handoff",
+                                      "context", "impact", "compare", "reconcile", "snapshots"))
+    s.add_argument("target", nargs="*")
+    s.add_argument("--env")
+    s.add_argument("--kind", choices=("ticket", "api", "symbol", "table", "text"))
+    s.add_argument("--cursor", help="continue a long answer (printed at its end)")
+    s.add_argument("--no-save", action="store_true", help="flow: show it without saving a version")
+    s.add_argument("--from", dest="map_from", action="append", default=[])
+    s.add_argument("--to", dest="map_to", action="append", default=[])
+    s.add_argument("--via", default="")
+    s.add_argument("--transform", default="")
+    s.add_argument("--note", default="")
+    s.add_argument("--key", action="append", default=[],
+                   help="plan: one key field as field=value (repeat). Chitragupta keeps it only until the run takes "
+                        "it, but your shell may keep it in its history")
+    s.add_argument("--object", help="plan: the start object (o_ ID, schema.table or connection:schema.table)")
+    s.add_argument("--connection", action="append", default=[], help="plan: limit to these connections (repeat)")
+    s.add_argument("--objective", help="plan: what this investigation is for")
+    s.add_argument("--run", action="store_true", help="plan: run it now (the explicit execution option)")
+    s.add_argument("--wait", action="store_true", help="plan --run / run: wait until the job ends")
+    s.add_argument("--fingerprint", help="run: the reviewed plan's fingerprint")
+    s.add_argument("--text", help="note: your notes text")
+    s.add_argument("--revision", type=int, help="note: the notes' revision you edited")
+    s.add_argument("--regenerate", action="store_true", help="handoff: regenerate the draft from the evidence")
+    s.add_argument("--copy", action="store_true", help="handoff: print the redacted copy text")
+    s.add_argument("--flow", help="context: a saved flow ID")
+    s.add_argument("--investigation", help="context / plan: an investigation ID")
+    s.add_argument("--change", choices=("rename", "type", "nullability", "default", "semantic", "application_only"),
+                   help="impact: the kind of change")
+    s.add_argument("--refresh", action="store_true", help="impact / compare: recompute from cached metadata (no query)")
+    s.add_argument("--objects", action="append", default=[], help="compare: only these objects (schema.table, ...)")
+    s.add_argument("--confirm", action="append", default=[],
+                   help="compare: record that schema.table (=its name on the right) is the same object on both sides")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_db)
+    s = sub.add_parser("companion", help="task companion text from cached records: planner, resume TICKET|w_ID, "
+                                         "review, verification, handoff, changes, draft (read-only; not capture "
+                                         "resume)")
+    s.add_argument("action", choices=("planner", "resume", "review", "verification", "handoff", "changes", "draft"))
+    s.add_argument("target", nargs="*")
+    s.add_argument("--audience", choices=("pr", "qa", "session"),
+                   help="draft: PR reviewer, QA tester or next developer session (prints the current version or a "
+                        "preview; never saves)")
+    s.add_argument("--cursor", help="continue a long answer (printed at its end)")
+    s.add_argument("--group", help="planner: one stage group (new, planned, review_incomplete, in_development, "
+                                   "paused, awaiting_verification, pr_review, completed)")
+    s.add_argument("--privacy", action="store_true", help="hide ticket titles in summaries")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_companion)
     for name, fn in (("pause", cmd_pause), ("resume", cmd_resume), ("status", cmd_status)):
         sub.add_parser(name).set_defaults(fn=fn)
     return p
+
+
+def cmd_db(a):
+    """`db …`: the database-investigation views (dbviews) as text; `ingest`, `map-confirm` and `flow` keep their
+    result in data/db/. Nothing here queries a database or calls a model."""
+    from . import dbaccess, dbflows, dbingest, dbviews
+    cfg = common.load_config()
+    text = " ".join(a.target).strip()
+
+    def show(env):
+        out(json.dumps(env, ensure_ascii=False, indent=1) if a.json else dbviews.render_text(env).rstrip())
+        return 0
+    from . import dbcli
+    if a.action in dbcli.ACTIONS:  # record investigations (dbcli)
+        try:
+            return dbcli.run(a, cfg, out, show)
+        except (dbviews.ViewError, dbviews.CursorError, dbflows.FlowError) as e:
+            out("Not possible: %s" % e)
+            return 2
+    try:
+        if a.action == "ingest":
+            s = dbingest.run(cfg)
+            if a.json:
+                out(json.dumps(s, ensure_ascii=False, indent=1))
+                return 0
+            out("Ingested %d schema card(s), %d ticket(s)%s%s; %d source(s) unchanged, %d record(s) rejected." % (
+                s["cards"], s["tickets"], ", the link map" if s["linkmap"] else "",
+                ", your mappings" if s["mappings"] else "", s["unchanged"], s["rejected"]))
+            for src, why in s["skipped"][:20]:
+                out("  skipped %s: %s" % (src, why))
+            return 0
+        if a.action == "map-confirm":
+            if not a.map_from or not a.map_to:
+                out("Name both sides: db map-confirm --from shop.orders.id --to billing.refunds.order_ref "
+                    "[--via OrderCancelled.orderRef] [--transform T] [--note N]")
+                return 2
+            rec = dbingest.confirm_mapping(cfg, a.map_from, a.map_to, via=a.via, transform=a.transform, note=a.note)
+            dbingest.run(cfg, only={"mappings"})
+            out("Recorded your mapping %s -> %s%s (You confirmed: self-reported evidence)." % (
+                ", ".join(rec["from"]), ", ".join(rec["to"]), " via " + rec["via"] if rec["via"] else ""))
+            return 0
+        ctx = dbaccess.AccessContext(cfg)
+        if a.action == "flows":
+            return show(dbviews.flows_list(ctx, cursor=a.cursor, cfg=cfg))
+        if not text:
+            out("Name what to look up: db %s <name>" % a.action)
+            return 2
+        if a.action == "table":
+            return show(dbviews.table_view(ctx, text, env=a.env, cursor=a.cursor, cfg=cfg))
+        if a.action == "resolve":
+            return show(dbviews.resolve(ctx, text, a.kind, cfg=cfg))
+        r = dbviews.resolve(ctx, text, a.kind, cfg=cfg)
+        start = r["data"]["start"]
+        if r["data"]["state"] != "resolved" or not start:
+            return show(r)
+        if a.no_save or a.cursor:
+            return show(dbviews.flow_view(ctx, start=start, env=a.env, cursor=a.cursor, cfg=cfg))
+        f = dbflows.build_flow(ctx, start, env=a.env, save=True, cfg=cfg)
+        return show(dbviews.flow_view(ctx, fid=f["id"], cfg=cfg))
+    except (dbviews.ViewError, dbviews.CursorError, dbflows.FlowError, dbflows.NotFound, dbingest.MappingError) as e:
+        out("Not possible: %s" % e)
+        return 2
+
+
+def cmd_companion(a):
+    """`companion …`: the task companion's read-only text fallback (companioncli). Never global capture resume."""
+    from . import companioncli
+    return companioncli.run(a, out)
 
 
 def cmd_share(a):

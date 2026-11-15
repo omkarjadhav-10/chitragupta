@@ -47,6 +47,10 @@ The same goes for the settings folder `%USERPROFILE%\.chitragupta\`.
 
 The profile ([progress.md](progress.md)) holds your name, primary email, confirmed commit emails and provider account ids in `config.json`, and never a token or password (values that look like one are refused). Emails and account ids are masked on the dashboard and in CLI output unless you choose to show them. They are left out of every progress answer, the session-start line, copied weekly wins, ticket exports and shared bundles. The `get_progress` MCP tool shows them only with `include_ids=true`. For other people, Chitragupta keeps only what establishes your own contribution: whether a ticket's assignee was one of your accounts (never who else), PR authors only for the recheck (your progress counts only your own PRs), and no committer emails. Release tracking keeps a little shared metadata as supporting evidence for your own tickets: the PRs on a ticket's tracked branches, such as a shared QA integration PR someone else raised, labelled *shared* and never counted as yours. A ticket record with none of your own work on it is outside your personal scope: it isn't listed, returned by key, searched, exported or shared (see [progress.md](progress.md#the-personal-projection)). Masking is a separate safeguard and isn't what decides whose work something is. Your reflection notes are labelled self-reported and never reach the pushed `daily\` files.
 
+The Companion's task records (`data/workflows/`: requirement baselines, plan versions, approvals, checkpoints, job
+states and the spend ledger) stay local too. They hold redacted, bounded text you saved or approved and references to
+evidence, never transcripts, repository files, test output or credentials.
+
 ## What is pushed
 
 Nothing is pushed unless `github_remote` is set. If it is set:
@@ -85,6 +89,22 @@ These references are never masked: `{{var}}`, `${VAR}`, `$VAR`, `$(…)`. You ca
 - Database samples are capped at `qa_data.max_rows_per_query` rows (default 20).
 - Database MCP jobs read only connections listed for an allowed environment, and never a connection whose name contains `prod`.
 - QA values never go into anything pushed or sent: the `public` pass masks known QA values and hosts.
+- **Record traces** (database investigation: `cli db plan`, the dashboard's *Record journey*) keep only sanitized
+  observations: the columns the plan lists as kept, with key columns masked, columns the catalog flags as personal data
+  never selected, and at most 256 KiB of values per run, in `data/db/investigations/` (yours only; search indexes only
+  an investigation's flow and object names, for you, never a value, key, SQL, objective or note; included in the
+  local backup like the rest of `data/`, while `.worklog/cache/db-jobs/` is never backed up, indexed or exported).
+  The start key is stored only as a keyed fingerprint
+  (an HMAC with this data home's secret: not anonymisation, used only to group runs of the same record); its values
+  wait in `.worklog/cache/db-jobs/` until the run takes them (at most an hour) and raw rows stay in memory; the job's
+  transient files are deleted when it ends, in every state. There is no option to keep raw rows. The rows still pass
+  through the read-only MCP job: the raw tool output is visible to that model call and its provider, and can't be
+  removed from there afterwards. A trace job keeps no copy of that stream: its `.worklog/cache/mcp/<job>.last.jsonl`
+  holds only the job's summary line. The key never appears in a URL, a log line or the settings history (the
+  dashboard sends it only in the request body). Revoking a connection or changing your identity hides these records
+  everywhere at once; see [Database investigation](database.md#scope-and-approval).
+- `/cg:trace`'s older QA worked example (`agent qa-trace`) stores the rows it sampled in `data/qa-trace/<KEY>.json`
+  (secrets masked, kept locally, never pushed).
 
 ## What goes to Slack
 
@@ -102,6 +122,13 @@ Every model call is a headless `claude -p`:
 - **Redacted input.** It sends a digest of the session that has already been redacted, up to about 120,000 characters, along with the packaged prompt.
 - **Logged.** It records the cost in `health.json`.
 - **Kept out of the hooks.** Hooks never call a model; only the background tick and the commands you run do.
+
+**Companion planning calls** (Generate Plan, Improve Plan) are the same kind of isolated call, made only when you press
+the button and a spend ceiling is set. They send a bounded packet: the confirmed requirements, the plan being improved,
+your recorded decisions, repository-relative file names from the ticket's evidence and release guidance, marked as
+data. **Jev** (TypeSafe's hosted evaluator) is not contacted: the safety policy has no transport for it. If it is ever
+enabled, it would receive only redacted criterion wording and plan excerpts, after you acknowledge what is shared; a
+payload already sent can't be retracted by deleting local records.
 
 ## MCP jobs
 
@@ -139,6 +166,7 @@ The plugin's own MCP server (`chitragupta`, see [mcp.md](mcp.md)) runs inside yo
 | `git ls-remote --heads` | With each fetch, to notice branches deleted on the remote |
 | `gh` / `glab` / `az repos` | PR data for active tickets' branches (hourly for open PRs, and before 20:00), with the CLI's own sign-in; never a token stored |
 | `gh pr list --author`, `glab mr list --author`, `az repos pr list --creator` | Your own PRs in your profile's repositories, hourly, only for a host where your account is confirmed |
+| `gh api --method GET repos/<owner>/<repo>/commits/<head>/check-runs` | The CI check runs of an open GitHub PR you raised, only during that PR's refresh (at most 3 pages, 5 PRs and 60 s per repository); names, states, attempts and times are kept, never logs or output |
 | `gh api user`, `glab api user`, `az account show` | Only when you press Find my Git host accounts or run `profile discover --hosts`: which account each CLI is signed in as, as a suggestion |
 | Slack, Jira and database MCP servers | Only through the MCP jobs above, and only when you've connected them (the Jira account lookup for your profile runs only when you ask) |
 

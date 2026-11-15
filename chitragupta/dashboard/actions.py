@@ -276,3 +276,6 @@ def share_ticket(body):
     out = {k: res.get(k) for k in ("ok", "blocked", "hits", "problems", "path", "committed", "pushed", "push_error",
                                    "key", "level", "sections", "target")}
     return 200, out
+
+
+from . import dbactions  # noqa: E402,F401 — registers the database workspace's db-* actions

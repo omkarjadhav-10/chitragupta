@@ -200,8 +200,11 @@ class TestKnowledgeStatusSetup(V2Base):
         self.assertEqual(t["shop.orders"]["columns"], ["id", "customer_id", "status", "coupon_basis"])
         self.assertEqual(t["customers"]["columns"], [])
         rel = {(r["from"], r["to"]): r for r in k["relations"]}
-        self.assertTrue(rel[("order_items.order_id", "orders.id")]["verified"])  # 20/20 sampled on QA
-        self.assertFalse(rel[("shop.orders.customer_id", "customers.id")]["verified"])  # 2/20: not confirmed
+        # a sample is observed evidence, never "verified" (PRD DB-05)
+        self.assertTrue(rel[("order_items.order_id", "orders.id")]["sample_matched"])  # 20/20 sampled on QA
+        self.assertEqual(rel[("order_items.order_id", "orders.id")]["sample"]["basis"], "observed_sample")
+        self.assertTrue(rel[("order_items.order_id", "orders.id")]["sample"]["label"].startswith("Sample matched 100% (20 of 20, QA"))
+        self.assertFalse(rel[("shop.orders.customer_id", "customers.id")]["sample_matched"])  # 2/20: not matched
         self.assertLessEqual(len(rel[("order_items.order_id", "orders.id")]["evidence"]), api.EVIDENCE_MAX)
         self.assertEqual(k["writers"][0]["writes"][0], {"component": "OrderService.create", "column": "status",
                                                         "change": "NEW on insert", "tickets": [TICKET]})
@@ -211,11 +214,11 @@ class TestKnowledgeStatusSetup(V2Base):
                                   "response_fields", "tickets", "last_seen"})
         self.assertEqual(k["integrations"][0]["system"], "Payment gateway sandbox")
         self.assertEqual(k["linkmap"], {"env": "qa", "fetched_at": self.days["yday"] + "T08:00:00+00:00", "schemas": 1,
-                                        "tables": 3, "links": 2, "verified": 1})
+                                        "tables": 3, "links": 2, "sample_matched": 1})
         os.remove(os.path.join(self.home, "data", "db-schema", "_linkmap.json"))
         k = api.knowledge()
         self.assertIsNone(k["linkmap"])
-        self.assertFalse(any(r["verified"] for r in k["relations"]))
+        self.assertFalse(any(r["sample_matched"] for r in k["relations"]))
 
     def test_status_mcp_live_and_search_stats(self):
         from chitragupta.dashboard import api

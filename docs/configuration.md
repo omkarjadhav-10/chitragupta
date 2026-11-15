@@ -155,6 +155,20 @@ Every internal model call (extraction, day summary, curation, DB flow, worklog c
 
 A ticket brief (see "The ticket brief" in [architecture.md](architecture.md)) is one call with `models.brief` (unset: `models.consolidate`). Its tokens and cost are recorded on the brief itself (`brief.tokens`, `brief.cost_usd`) and in the ledger under `by_purpose.brief`. A brief skipped for the cap waits for the next day close, `/cg:ticket <KEY> --brief` or the dashboard's Refresh brief.
 
+## `companion` and `jev`
+
+The Companion's paid calls (see [companion.md](companion.md#budgets-and-paid-calls)) are off until a per-call ceiling is set. Each explicit call reserves its ceiling against `budget.model_daily_usd` first, in a ledger every session shares (`data/workflows/.budget.json`); spend already recorded in `health.json` for other purposes counts toward the same cap.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `budget.companion_call_usd` | number | `0` (off) | Spend ceiling reserved for each Generate Plan / Improve Plan call. `0` or unset keeps both off; above the daily cap also keeps them off. Editable in Settings → Models & budget. |
+| `companion.timeout_s` | int | `180` | Time limit of one Companion planning call; values above 180 are capped. |
+| `companion.max_paid_jobs` | int | `2` | Paid Companion jobs at once across all sessions (never more than 2); one per task. |
+| `companion.criteria_fields` | list of strings | `[]` | Jira fields that hold acceptance criteria (`customfield_10042` or a plain field name). They are added to the existing card read; anything else in the list is ignored. |
+| `jev.enabled` | bool | `false` | Jev evaluation. Live Jev stays unavailable whatever this says: the current safety policy has no transport for it. |
+| `jev.credential_env` | string | `TYPESAFE_API_KEY` | The *name* of the environment variable that would hold the key. A key itself in the config is refused. |
+| `jev.call_usd`, `jev.daily_usd`, `jev.task_daily_usd` | number | unset, `0.50`, `0.10` | Jev's per-call ceiling and its subcaps (never above the defaults, always below the remaining daily cap). |
+
 ## `rebuild`
 
 `agent rebuild <KEY…> | --all` (see "Rebuilding a ticket from raw" in [architecture.md](architecture.md)) prices itself before it starts and refuses when the estimate is over the cap.
@@ -293,6 +307,26 @@ The tool mapped to `query` is SQL-checked by the guard. The guard reads the stat
     "types": {"qa-main": "postgres"}, "tools": {"query": "execute_sql"}
   }
 }
+```
+
+### Database scope
+
+The database investigation workspace ([Database investigation](database.md)) reads only an approved scope. These keys
+are validated and changed only through `/cg:setup` or the config file (the dashboard shows them, never edits them).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `mcp.database.scope` | object | absent | `{"connections": {id: {env, engine, databases, schemas, case_sensitive?, aliases?}}, "repos": [path, …]}`. A connection is approved only with an explicit `env` that is in `qa_data.allowed_envs`, no `prod` in its name, and the guard's allowance; `engine` (`postgres` or `mssql`) decides the statement adapter. With a scope set, the guard also checks that every statement and every schema / table argument stays inside the connection's `databases` / `schemas`, and the DB map shows only approved connections. `repos` are the repositories whose code may be cited. Without a scope, connections are derived from `connections` / `allowed`, `types` and `schema_map`. |
+| `mcp.database.arguments` | object role → argument | `{"connection": "connectionId", "schema": "schema", "table": "table", "sql": "sql", "limit": "limit", "params": "", "timeout": ""}` | Your server's argument names. The connection key must be one the guard recognises and the SQL key one it reads; otherwise the capability is *unsupported* (nothing is guessed). `params` enables bound parameters; `timeout` lets a trace pass a statement timeout (needed, once observed honoured, for phases that use values observed earlier). |
+| `mcp.database.authorization_max_age_days` | int | `7` | After this many days without a successful read, evidence says *access last confirmed <date>*. |
+| `mcp.database.trace_limits` | object | absent | Lower a record trace's limits: `rows_per_step` (20), `queries` (10), `concurrent` (2), `statement_timeout_s` (30), `deadline_s` (120), `value_bytes` (262144). Only lower values take effect, as do `qa_data.max_rows_per_query` and the guard's `max_rows`. |
+| `mcp.database.lag_signals` | object | absent | `{"connection:schema.table": seconds}`: when a trace doesn't observe that object and more than this many seconds passed since the start record's own timestamp (a source time with a known zone), the investigation gets a signal. It compares a database timestamp with this machine's clock: a hint, never evidence of a failure. |
+
+```json
+"mcp": {"database": {"server": "shopdb", "scope": {
+  "connections": {"qa-main": {"env": "qa", "engine": "postgres", "databases": ["shop"], "schemas": ["shop"]},
+                  "qa-billing": {"env": "qa", "engine": "mssql", "databases": ["billing"], "schemas": ["billing"]}},
+  "repos": ["C:/src/acme-shop"]}}}
 ```
 
 ## `qa_data`

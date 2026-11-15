@@ -1,0 +1,57 @@
+/* Companion page: planner beside the selected task on wide screens, stacked below 1100px. Tokens from app.css only;
+   status is always text plus icon, never colour alone. Long values wrap; nothing scrolls the root sideways. */
+.companion-desk .pane { min-width: 0; }
+.cmp-status { min-height: 1.4em; margin: 0 0 var(--s3); color: var(--ink-2); }
+.cmp-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s5); min-width: 0; }
+@media (min-width: 1100px) { .cmp-layout { grid-template-columns: minmax(0, 22rem) minmax(0, 1fr); } }
+.cmp-side, .cmp-main { min-width: 0; }
+.cmp-layout section, .cmp-layout li, .cmp-layout p, .cmp-layout dd, .cmp-layout label { overflow-wrap: anywhere; }
+.cmp-next { margin: var(--s2) 0 var(--s3); }
+.cmp-next .btn, .cmp-choice .btn { white-space: normal; text-align: left; }
+.cmp-facts, .cmp-cands, .cmp-cards, .cmp-attempts, .cmp-versions, .cmp-ledger, .cmp-changes, .cmp-sources { list-style: none; padding: 0; margin: 0; }
+.cmp-facts li, .cmp-sources li, .cmp-changes li { padding: 3px 0; }
+.cmp-filters { display: flex; flex-wrap: wrap; gap: var(--s3); }
+.cmp-filters .cmp-fld { flex: 1 1 10rem; }
+.cmp-fld { margin: 0 0 var(--s3); min-width: 0; }
+.cmp-fld input, .cmp-fld select, .cmp-fld textarea { display: block; width: 100%; max-width: 48rem; box-sizing: border-box; font: inherit;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong); border-radius: var(--r-control); padding: 6px 8px; }
+.cmp-fld textarea { resize: vertical; min-height: 3.5rem; }
+.cmp-group h3 { font-size: var(--fs-s); text-transform: none; margin: var(--s4) 0 var(--s2); border-bottom: 1px solid var(--rule); padding-bottom: 4px; }
+.cmp-card { padding: var(--s2) 0 var(--s3); border-bottom: 1px solid var(--rule); }
+.cmp-card.on { border-left: 3px solid var(--accent); padding-left: var(--s2); }
+.cmp-card p { margin: 2px 0; }
+.cmp-pick { padding-left: 0; text-align: left; white-space: normal; min-height: 32px; }
+.cmp-title { color: var(--ink); }
+.cmp-attempts li { margin: 4px 0; }
+.cmp-attempts .btn { white-space: normal; text-align: left; }
+.cmp-task > .sec-head h2 { overflow-wrap: anywhere; }
+.cmp-task .tabs { flex-wrap: wrap; }
+.cmp-versions li, .cmp-ledger li { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.cmp-ledger li { display: block; }
+.cmp-ledger p { margin: 2px 0; }
+.cmp-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow: auto; padding: var(--s3); background: var(--sunk);
+  border: 1px solid var(--rule); border-radius: var(--r-card); font: var(--fs-s)/1.45 var(--mono); }
+.cmp-check { display: flex; gap: var(--s2); align-items: flex-start; margin: var(--s3) 0; }
+.cmp-check input { margin-top: 4px; flex: none; }
+.cmp-crit { border: 1px solid var(--rule); border-radius: var(--r-card); padding: var(--s3); margin: 0 0 var(--s3); min-width: 0; }
+.cmp-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--s3); }
+.cmp-choice { border: 1px solid var(--rule); border-radius: var(--r-card); padding: var(--s3); }
+.cmp-choice.rec { border-color: var(--accent); }
+.cmp-choice p { margin: var(--s2) 0 0; }
+.cmp-measures { margin: var(--s2) 0; }
+.cmp-task .kv { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
+@media (max-width: 520px) { .cmp-task .kv, .cmp-focus .kv { grid-template-columns: minmax(0, 1fr); } .cmp-task .kv dd { margin-bottom: 6px; } }
+/* Attention (presentation only), decisions, impact suggestions and audience drafts. */
+.cmp-att { margin: var(--s3) 0 0; }
+.cmp-att h3 { font-size: var(--fs-s); margin: 0 0 var(--s2); }
+.cmp-att-list, .cmp-impact, .cmp-plain { list-style: none; padding: 0; margin: 0; }
+.cmp-att-item, .cmp-impact > li { padding: var(--s2) 0; border-bottom: 1px solid var(--rule); }
+.cmp-att-item p, .cmp-impact p { margin: 2px 0; }
+.cmp-att-item.quiet { opacity: 1; border-left: 3px solid var(--rule-strong); padding-left: var(--s2); }
+.cmp-att-item .btnline, .cmp-drafts .btnline { flex-wrap: wrap; }
+.cmp-snooze { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: var(--r-control); padding: 4px 6px; max-width: 100%; }
+.cmp-plain li { padding: 2px 0; }
+.cmp-impact .mono { overflow-wrap: anywhere; }
+.cmp-drafts .cmp-pre { max-height: 22rem; }
+.cmp-drafts .cmp-versions li { align-items: center; }

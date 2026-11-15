@@ -664,6 +664,69 @@ class QueryAndMcpTests(SafetyCase):
         self.assertFalse(artifacts.tracked_before(self.cfg(), other, "a.txt", "2026-10-16T10:00:00+00:00"))
         self.assertEqual(self.log_count(), n)
 
+    def test_database_scope_targets(self):
+        """An approved scope (allow.json `scopes`, from mcp.database.scope): a statement may read only the permitted
+        databases / schemas of its connection. Each refusal is logged like any other."""
+        with open(os.path.join(self.home, ".worklog", "mcp", "allow.json")) as f:
+            allow = json.load(f)
+        allow["servers"][DB].update(connections=["qa-main", "qa-billing"], scopes={
+            "qa-main": {"engine": "postgres", "databases": ["shop"], "schemas": ["shop"], "case_sensitive": False},
+            "qa-billing": {"engine": "mssql", "databases": ["billing"], "schemas": ["billing"], "case_sensitive": False}})
+        with open(os.path.join(self.home, ".worklog", "mcp", "allow.json"), "w") as f:
+            json.dump(allow, f)
+        tool = "mcp__%s__run_query" % DB
+        for conn, sql in (("qa-main", "SELECT id FROM analytics.shop.orders LIMIT 5"),          # cross-database 3-part
+                          ("qa-billing", "SELECT TOP 5 id FROM linked.billing.billing.refunds"),  # 4-part linked server
+                          ("qa-billing", "SELECT TOP 5 * FROM OPENQUERY(other, 'SELECT 1')"),
+                          ("qa-main", "SELECT id FROM reporting.daily LIMIT 5"),                   # unapproved schema
+                          ("qa-main", "SELECT id FROM orders LIMIT 5"),                            # unqualified
+                          ("qa-billing", "SELECT TOP 5 id FROM refunds")):
+            with self.subTest(sql=sql):
+                self.assertHookDenies("internal", {"tool_name": tool, "tool_input": {"connection_id": conn, "sql": sql}},
+                                      "mcp")
+        self.assertHookAllows("internal", {"tool_name": tool, "tool_input": {
+            "connection_id": "qa-main", "sql": 'SELECT "id" FROM "shop"."orders" WHERE "id" = 1001 LIMIT 5'}}, "mcp")
+
+    def test_database_plan_pin(self):
+        """A row-trace job's pin: each pinned call passes once, before the deadline, until cancelled, while the access
+        policy is unchanged; nothing else passes. The ordinary guard still decides first."""
+        import hashlib
+        from chitragupta import common, dbaccess
+        jobs = common.wl("cache", "db-jobs")
+        os.makedirs(jobs, exist_ok=True)
+        tool = "mcp__%s__run_query" % DB
+        sql = "SELECT id, status FROM shop.orders WHERE id = 1001 LIMIT 5"
+        call = {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": sql}}
+        self.addCleanup(os.environ.pop, common.DB_PIN_ENV, None)
+
+        def pin(job, deadline=None, generation=None):
+            p = os.path.join(jobs, job + ".pin.json")
+            with open(p, "w") as f:
+                json.dump({"job": job, "server": DB, "deadline_epoch": time.time() + 60 if deadline is None else deadline,
+                           "policy_generation": generation or dbaccess.policy_generation(self.cfg()),
+                           "calls": [{"tool": "run_query", "connection": "qa-main",
+                                      "sha256": hashlib.sha256(sql.encode()).hexdigest()}]}, f)
+            os.environ[common.DB_PIN_ENV] = p
+        pin("j_00000000000000a1")
+        self.assertHookAllows("internal", call, "mcp")                    # pinned: passes once
+        self.assertIn("already used", self.assertHookDenies("internal", call, "mcp"))  # the identical second call
+        other = {"tool_name": tool, "tool_input": {"connection_id": "qa-main",
+                                                   "sql": "SELECT id FROM shop.orders WHERE id = 1002 LIMIT 5"}}
+        pin("j_00000000000000a2")
+        self.assertIn("not in job", self.assertHookDenies("internal", other, "mcp"))  # unpinned
+        pin("j_00000000000000a3", deadline=time.time() - 1)
+        self.assertIn("deadline", self.assertHookDenies("internal", call, "mcp"))
+        pin("j_00000000000000a4")
+        open(os.path.join(jobs, "j_00000000000000a4.cancel"), "w").close()
+        self.assertIn("cancelled", self.assertHookDenies("internal", call, "mcp"))
+        pin("j_00000000000000a5")
+        common.save_config(dict(self.cfg_dict, qa_data={"allowed_envs": ["qa", "dev"]}))
+        self.assertIn("policy changed", self.assertHookDenies("internal", call, "mcp"))
+        pin("j_00000000000000a6")
+        bad = {"tool_name": tool, "tool_input": {"connection_id": "qa-main", "sql": "DELETE FROM shop.orders"}}
+        self.assertIn("DELETE", self.assertHookDenies("internal", bad, "mcp"))  # the ordinary guard first
+        self.assertHookAllows("internal", call, "mcp")
+
     def test_hook_process_through_the_launcher(self):
         """As Claude Code runs it: exit 2 + deny JSON, and the block lands in security.log."""
         p = subprocess.run([PY, "-B", RUN_PY, "safety", "internal", "none"], capture_output=True, timeout=30,

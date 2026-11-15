@@ -236,8 +236,11 @@ def claude_exe(cfg):
 
 
 def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_turns=5, model="haiku", timeout=300,
-        stdin_text=None, servers_override=None):
-    """Run one read-only job. servers: {name: [tool names]} (reads per server). Returns parse_stream() result."""
+        stdin_text=None, servers_override=None, keep_stream=True, pin=None):
+    """Run one read-only job. servers: {name: [tool names]} (reads per server). Returns parse_stream() result.
+    keep_stream False (row-reading jobs): cache/mcp/<job>.last.jsonl gets one sanitized summary line (job, call
+    count, tool names, rc) instead of the stream, so no raw row is kept there. pin: a plan pin file
+    (<home>/.worklog/cache/db-jobs/<job>.pin.json) the call's guard then enforces (CHITRAGUPTA_DB_PIN)."""
     day = day or common.workday(common.now(), cfg)
     manual = common.env("MCP_MANUAL") == "1"  # CLI / asked-for runs: counted apart from the background budget
     if not manual and budget_left(health, cfg, day) <= 0:
@@ -255,6 +258,7 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     cfg_path = os.path.join(common.wl("cache", "mcp"), job + ".json")
     common.write_json(cfg_path, merged)
     env_extra = dict(common.INTERNAL_ENV, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
+    env_extra[common.DB_PIN_ENV] = os.path.abspath(pin) if pin else ""  # never inherited from this process
     for name in refs:
         v = _RUNTIME.get(name) or user_env(name)
         if v:
@@ -281,7 +285,13 @@ def run(job, servers, reads, writes, task, schema, cfg, health, day=None, max_tu
     ck = ("manual_calls" if manual else "calls") if res["calls"] else ("manual_empty" if manual else "empty")
     counts = m.setdefault(ck, {})
     counts[day] = int(counts.get(day) or 0) + 1
-    common.write_text(os.path.join(common.wl("cache", "mcp"), job + ".last.jsonl"), redact(so or "", mode="secrets"))
+    last = os.path.join(common.wl("cache", "mcp"), job + ".last.jsonl")
+    if keep_stream:
+        common.write_text(last, redact(so or "", mode="secrets"))
+    else:  # replaces any earlier stream of this job name too
+        common.write_text(last, json.dumps({"job": job, "at": common.now_iso(), "calls": len(res["calls"]),
+                                            "tools": sorted({str(c.get("name")) for c in res["calls"]}), "rc": rc,
+                                            "stream": "not kept"}) + "\n")
     res["seconds"] = round(time.time() - t0, 1)
     res["missing_env"] = missing
     srv_state = {s.get("name"): s.get("status") for s in res.get("mcp_servers") or []}
@@ -514,6 +524,28 @@ def jira_allow_entry(existing=None):
 _RETIRED_READS = ("get_write_request",)  # never a read (the name floor denies it); dropped from older files
 
 
+def db_guard_connections(cfg):
+    """The connections the guard allows for the database MCP (allow.json `connections`), the one derivation every
+    reader shares (dbaccess.approved_scope too): for each environment in qa_data.allowed_envs, its
+    mcp.database.connections default, its mcp.database.allowed list and the mcp.database.scope connections that
+    declare that environment. A name containing "prod" is always dropped; production is never allowed. A connection
+    you revoked (dbaccess.revoke) is dropped until you restore it."""
+    from . import dbaccess
+    db = (cfg.get("mcp") or {}).get("database") or {}
+    envs = (cfg.get("qa_data") or {}).get("allowed_envs") or ["qa"]
+    scope = (db.get("scope") or {}).get("connections") if isinstance(db.get("scope"), dict) else None
+    allowed = set()
+    for env in envs:  # only connections of the allowed environments; production never
+        allowed |= set(((db.get("allowed") or {}).get(env)) or [])
+        if (db.get("connections") or {}).get(env):
+            allowed.add(db["connections"][env])
+        for c, e in (scope or {}).items() if isinstance(scope, dict) else []:
+            if isinstance(e, dict) and isinstance(e.get("env"), str) and e["env"].strip().lower() == str(env).lower():
+                allowed.add(c)
+    gone = dbaccess.revoked()
+    return sorted(a for a in allowed if isinstance(a, str) and a and "prod" not in a.lower() and a not in gone)
+
+
 def mcp_tool(server, tool):
     return "mcp__%s__%s" % (server, tool)
 
@@ -527,20 +559,20 @@ def ensure_files(cfg):
     allow = common.read_json(ap, None)
     if not allow:
         allow = allow_default(cfg)
-    db = (cfg.get("mcp") or {}).get("database") or {}
     srv = server_name(cfg, "database")
     if srv:
-        envs = (cfg.get("qa_data") or {}).get("allowed_envs") or ["qa"]
-        allowed = set()
-        for env in envs:  # only connections of the allowed environments; production never
-            allowed |= set(((db.get("allowed") or {}).get(env)) or [])
-            if (db.get("connections") or {}).get(env):
-                allowed.add(db["connections"][env])
         entry = allow.setdefault("servers", {}).setdefault(srv, _database_allow_entry(cfg))
         entry.setdefault("connectionless", list(CONNECTIONLESS_DEFAULT))
         entry["read"] = [t for t in entry.get("read") or [] if t not in _RETIRED_READS]
         _apply_tool_names(entry, cfg)
-        entry["connections"] = sorted(a for a in allowed if a and "prod" not in a.lower())
+        entry["connections"] = db_guard_connections(cfg)
+        from . import dbaccess  # an explicit mcp.database.scope: per-connection statement scope for the guard
+        scopes, scope_args = dbaccess.guard_scopes(cfg)
+        if scopes is None:
+            entry.pop("scopes", None)
+            entry.pop("scope_args", None)
+        else:
+            entry["scopes"], entry["scope_args"] = scopes, scope_args
     jname = server_name(cfg, "jira")  # under the configured name, from the code: renames and new read tools apply
     allow.setdefault("servers", {})[jname] = jira_allow_entry(allow["servers"].get(jname))
     from . import hostmcp
@@ -614,12 +646,13 @@ CARD_FIELDS = "summary,issuetype,status,priority,parent,issuelinks,description,c
 
 def card_fields(cfg):
     """The fields the card job reads: the base set, plus the fix versions, assignee and configured release / UAT
-    fields when release tracking is on, and the assignee whenever your Jira account is confirmed (ticket ownership)
-    — all in the same single call."""
-    from . import profile, release
+    fields when release tracking is on, the assignee whenever your Jira account is confirmed (ticket ownership) and the
+    validated Companion acceptance-criteria fields (`companion.criteria_fields`) — all in the same single call."""
+    from . import companionplanning, profile, release
     extra = release.card_fields(cfg) if release.enabled(cfg) else []
     if profile.Policy(cfg).jira_account() and "assignee" not in extra:
         extra.append("assignee")
+    extra += [f for f in companionplanning.criteria_fields(cfg) if f not in extra]
     return ",".join([CARD_FIELDS] + [f for f in extra if f not in CARD_FIELDS.split(",")])
 
 
@@ -1092,57 +1125,84 @@ def schema_cards(tables, cfg, health, env="qa", focus_columns=None):
     for t in tables:
         parts = t.split(".")
         name, sch = parts[-1], (parts[-2] if len(parts) > 1 else "")
-        target = t if sch else "%s.%s" % (default_schema, name)
-        p = common.hp("data", "db-schema", _safe(conn), _safe(t) + ".json")
+        p = card_path(conn, t)
         old = common.read_json(p, {}) or {}
-        ocard = old.get("card") or {}
-        sources = {k: dict(v) for k, v in (old.get("sources") or {}).items() if isinstance(v, dict)}
-
-        def kept(source, why):
-            sources.setdefault(source, {"fetched_at": old.get("fetched_at") or ""})["error"] = why
-        rec = {"table": t, "connection": conn, "env": env, "type": ctype, "fetched_at": now}
-        if name.lower() in desc:
-            rec["describe"], found = desc[name.lower()], True
-            sources["describe"] = {"fetched_at": now, "error": ""}
-        else:
-            rec["describe"], found = old.get("describe"), bool(ocard.get("found"))
-            kept("describe", "no describe result")
-        trows = got.get(("triggers", sch))
-        if trows is not None:
-            tg = []
-            for r in trows:
-                if str(r.get("table_name") or "").lower() != name.lower():
-                    continue
-                m = re.search(r"(?i)\b(BEFORE|AFTER|INSTEAD OF)\s+(.+?)\s+ON\b", str(r.get("trigger_def") or ""))
-                tg.append({"name": r.get("trigger_name"), "event": (m.group(1) + " " + m.group(2)) if m else "",
-                           "sets_columns": _writes_of(r.get("function_src"), t) or
-                           sorted(set(re.findall(r"(?i)\bNEW\.(\w+)\s*:=", str(r.get("function_src") or ""))))})
-            sources["triggers"] = {"fetched_at": now, "rows": len(tg), "error": ""}
-        else:
-            tg = ocard.get("triggers") or []
-            kept("triggers", unsupported or "no triggers result")
-        wrows = got.get(("writers", t))
-        if wrows is not None:
-            wr, refs = [], []
-            for r in wrows:
-                src = str(r.get("src") or "")
-                e = {"name": "%s.%s" % (r.get("schema_name"), r.get("name")), "kind": str(r.get("kind") or "").lower()}
-                ops = _write_ops(src, target, r.get("schema_name"))
-                if ops:
-                    wr.append(dict(e, ops=ops, writes=_writes_of(src, target, r.get("schema_name")), reads=[]))
-                else:
-                    refs.append(e)  # names the table but doesn't write it
-            writers = _merge_named(ocard.get("writers"), wr, now)
-            references = _merge_named(ocard.get("references"), refs, now)
-            sources["writers"] = {"fetched_at": now, "rows": len(wrows), "truncated": len(wrows) >= 20, "error": ""}
-        else:
-            writers, references = ocard.get("writers") or [], ocard.get("references") or []
-            kept("writers", unsupported or "no writers result")
-        rec["sources"] = sources
-        rec["card"] = {"table": t, "found": found, "triggers": tg, "writers": writers, "references": references}
-        common.write_json(p, json.loads(redact(json.dumps(rec, ensure_ascii=False), mode="secrets")))
+        rec = card_record(t, conn, env, ctype, old, desc[name.lower()] if name.lower() in desc else NO_RESULT,
+                          got.get(("triggers", sch)), got.get(("writers", t)), now, unsupported, default_schema)
+        save_card(p, rec)
         saved.append(p)
     return saved, res
+
+
+NO_RESULT = object()  # card_record: the describe call gave no answer (distinct from an answer that is None)
+
+
+def card_path(conn, table):
+    return common.hp("data", "db-schema", _safe(conn), _safe(table) + ".json")
+
+
+def save_card(p, rec):
+    common.write_json(p, json.loads(redact(json.dumps(rec, ensure_ascii=False), mode="secrets")))
+
+
+def card_record(t, conn, env, ctype, old, describe, trows, wrows, now, unsupported="", default_schema=None,
+                mark_hidden=False):
+    """One table's schema card from this run's raw results merged into the card it had (`old`): `describe` is the
+    describe result or NO_RESULT, `trows` / `wrows` the triggers / writers rows or None when that call gave no
+    answer. A source without an answer keeps its old data and fetched_at with an error; a known writer missing from
+    a good run is kept with missing_since. `mark_hidden`: a routine row without source text is a reference with
+    definition "unavailable" (the account can't read its definition)."""
+    parts = t.split(".")
+    name, sch = parts[-1], (parts[-2] if len(parts) > 1 else "")
+    if default_schema is None:
+        default_schema = "dbo" if ctype == "mssql" else "public"
+    target = t if sch else "%s.%s" % (default_schema, name)
+    ocard = old.get("card") or {}
+    sources = {k: dict(v) for k, v in (old.get("sources") or {}).items() if isinstance(v, dict)}
+
+    def kept(source, why):
+        sources.setdefault(source, {"fetched_at": old.get("fetched_at") or ""})["error"] = why
+    rec = {"table": t, "connection": conn, "env": env, "type": ctype, "fetched_at": now}
+    if describe is not NO_RESULT:
+        rec["describe"], found = describe, True
+        sources["describe"] = {"fetched_at": now, "error": ""}
+    else:
+        rec["describe"], found = old.get("describe"), bool(ocard.get("found"))
+        kept("describe", "no describe result")
+    if trows is not None:
+        tg = []
+        for r in trows:
+            if str(r.get("table_name") or "").lower() != name.lower():
+                continue
+            m = re.search(r"(?i)\b(BEFORE|AFTER|INSTEAD OF)\s+(.+?)\s+ON\b", str(r.get("trigger_def") or ""))
+            tg.append({"name": r.get("trigger_name"), "event": (m.group(1) + " " + m.group(2)) if m else "",
+                       "sets_columns": _writes_of(r.get("function_src"), t) or
+                       sorted(set(re.findall(r"(?i)\bNEW\.(\w+)\s*:=", str(r.get("function_src") or ""))))})
+        sources["triggers"] = {"fetched_at": now, "rows": len(tg), "error": ""}
+    else:
+        tg = ocard.get("triggers") or []
+        kept("triggers", unsupported or "no triggers result")
+    if wrows is not None:
+        wr, refs = [], []
+        for r in wrows:
+            src = str(r.get("src") or "")
+            e = {"name": "%s.%s" % (r.get("schema_name"), r.get("name")), "kind": str(r.get("kind") or "").lower()}
+            ops = _write_ops(src, target, r.get("schema_name"))
+            if ops:
+                wr.append(dict(e, ops=ops, writes=_writes_of(src, target, r.get("schema_name")), reads=[]))
+            elif mark_hidden and not src:
+                refs.append(dict(e, definition="unavailable"))  # named, but its source can't be read
+            else:
+                refs.append(e)  # names the table but doesn't write it
+        writers = _merge_named(ocard.get("writers"), wr, now)
+        references = _merge_named(ocard.get("references"), refs, now)
+        sources["writers"] = {"fetched_at": now, "rows": len(wrows), "truncated": len(wrows) >= 20, "error": ""}
+    else:
+        writers, references = ocard.get("writers") or [], ocard.get("references") or []
+        kept("writers", unsupported or "no writers result")
+    rec["sources"] = sources
+    rec["card"] = {"table": t, "found": found, "triggers": tg, "writers": writers, "references": references}
+    return rec
 
 
 def migrate_schema_writers(dry_run, notes, backup):
@@ -1204,17 +1264,38 @@ def _cols(card):
     return [c for c in d if isinstance(c, dict) and c.get("name")] if isinstance(d, list) else []
 
 
-def trace_plan(start_ids, flow_tables, cfg, env="qa"):
+TRACE_GUESS = ("start table guessed from the key's name (a guess, never a mapping; basis inferred): check it before "
+               "relying on the example")
+_TRACE_BAD = re.compile(r"['\\\x00-\x1f\x7f]")
+
+
+def _trace_literal(value, column):
+    """The legacy example's literal: a number only when the card declares the column an integer type and the value
+    is written as a whole number; any other value is quoted as written. A value with a quote, a backslash or a control
+    character is declined by the caller (never stripped)."""
+    from . import dbconnector
+    kls, _ = dbconnector.column_class((column or {}).get("dataType") or (column or {}).get("data_type") or "")
+    return value if kls == "integer" and re.fullmatch(r"-?(?:0|[1-9]\d{0,17})", value) else "'%s'" % value
+
+
+def trace_plan(start_ids, flow_tables, cfg, env="qa", report=None):
     """-> (start_table, start_value, [(table, connectionId, sql)]). Keys come from the schema cards: the start table by
     its id, tables with a foreign key to it, and its audit table. Only needed columns, newest first, <= 20 rows.
     An id key names its entity (orderId -> orders); mcp.database.entity_prefixes lists system prefixes to strip
-    first (e.g. "legacy" for legacyOrderId)."""
+    first (e.g. "legacy" for legacyOrderId). That start table is a name-similarity guess (TRACE_GUESS), never a
+    mapping. A value containing a quote, backslash or control character is declined and reported in `report` (a
+    list), never stripped; a numeric-looking value is a number only for a column the card declares integer."""
     vals = [kv.split("=", 1) for kv in start_ids if "=" in kv]
     tables = sorted(flow_tables)
     start = None
     prefixes = [p for p in (((cfg.get("mcp") or {}).get("database") or {}).get("entity_prefixes") or []) if p]
     ent_rx = (r"(?i)^(%s)|id$" % "|".join(re.escape(p) for p in prefixes)) if prefixes else r"(?i)id$"
     for k, v in vals:
+        if _TRACE_BAD.search(v):
+            if report is not None:
+                report.append("the value of %s contains a quote, backslash or control character: declined (never "
+                              "stripped)" % k[:40])
+            continue
         ent = re.sub(ent_rx, "", k).lower()
         for t in tables:
             name = t.split(".")[-1].lower()
@@ -1227,7 +1308,6 @@ def trace_plan(start_ids, flow_tables, cfg, env="qa"):
         return None, None, []
     st, sv = start
     sname = st.split(".")[-1].lower()
-    lit = sv if re.fullmatch(r"\d+", sv) else "'%s'" % sv.replace("'", "")
     plan = []
     for t in tables:
         card = _card(cfg, t, env)
@@ -1258,6 +1338,7 @@ def trace_plan(start_ids, flow_tables, cfg, env="qa"):
                       and n in names), None)
         ctype = conn_type(cfg, card.get("connection") or database_conn(cfg, env, t))
         cl = ", ".join(pick)
+        lit = _trace_literal(sv, next((c for c in cols if c["name"] == key), None))
         if ctype == "mssql":
             sql = "SELECT TOP 20 %s FROM %s WHERE %s = %s%s" % (cl, t, key, lit, (" ORDER BY %s DESC" % order) if order else "")
         else:
@@ -1268,12 +1349,18 @@ def trace_plan(start_ids, flow_tables, cfg, env="qa"):
 
 def qa_trace(ticket, start_ids, flow_tables, cfg, health, before=None, env="qa"):
     """Follow a real QA record through the flow's tables in ONE model turn: the SELECTs are planned here from the
-    schema cards (trace_plan); the model runs them in parallel and summarises the journey with the actual values."""
+    schema cards (trace_plan); the model runs them in parallel and summarises the journey with the actual values.
+    The legacy example keeps its sampled rows in data/qa-trace/<KEY>.json (secrets masked). Its start table is a
+    name-similarity guess (labelled, basis inferred); a declined start value is reported, never stripped; a model
+    `change` is kept as observed only when its before value is in the recorded snapshot and its after value in the
+    newest row read now, otherwise it is labelled "model summary, unvalidated"."""
     srv = _db_server(cfg)
     q_tool = db_tool(cfg, "query")
-    st, sv, plan = trace_plan(start_ids, flow_tables, cfg, env)
+    declined = []
+    st, sv, plan = trace_plan(start_ids, flow_tables, cfg, env, report=declined)
     if not plan:
-        raise JobError("no trace plan for %s (schema cards missing or no start id)" % ticket, skip=True)
+        raise JobError("no trace plan for %s (%s)" % (ticket, "; ".join(declined) or
+                                                       "schema cards missing or no start id"), skip=True)
     task = (
         "Ticket %s, QA. Make ALL of these %s calls in a single turn (parallel), with exactly these arguments; no "
         "other calls, no retries:\n%s\nThen return the journey table by table with the actual values (key = the WHERE "
@@ -1287,11 +1374,38 @@ def qa_trace(ticket, start_ids, flow_tables, cfg, health, before=None, env="qa")
               cfg, health, max_turns=3, timeout=600)
     got = [{"sql": c["input"], "rows": rows(c["result"])[:20]} for c in res["calls"]
            if c["name"].endswith("__" + q_tool) and not c.get("is_error")]
+    out = dict(res.get("out") or {})
+    out["changes"] = [_trace_change(c, before, got) for c in out.get("changes") or [] if isinstance(c, dict)]
     rec = {"ticket": ticket, "env": env, "connection": plan[0][1], "fetched_at": common.now_iso(), "start_ids": start_ids,
-           "start": {"table": st, "value": sv}, "trace": res.get("out") or {}, "queries": got}
+           "start": {"table": st, "value": sv, "basis": "inferred", "how": TRACE_GUESS}, "declined": declined,
+           "trace": out, "queries": got}
     common.write_json(common.hp("data", "qa-trace", ticket + ".json"),
                       json.loads(redact(json.dumps(rec, ensure_ascii=False, default=str), mode="secrets")))
     return rec
+
+
+def _snapshot_value(before, table, column):
+    """The value of table.column in the recorded before-snapshot ({table: {column: value}} or [{table, column,
+    value}]), or a sentinel when it isn't there."""
+    if isinstance(before, dict):
+        row = before.get(table)
+        if isinstance(row, dict) and column in row:
+            return row[column]
+    if isinstance(before, list):
+        for b in before:
+            if isinstance(b, dict) and b.get("table") == table and b.get("column") == column and "value" in b:
+                return b["value"]
+    return NO_RESULT
+
+
+def _trace_change(c, before, got):
+    """A model-written before/after kept as observed only when both values come from real observations."""
+    t, col = str(c.get("table") or ""), str(c.get("column") or "")
+    was = _snapshot_value(before, t, col)
+    now = [q["rows"][0].get(col) for q in got if t and t in json.dumps(q.get("sql"))
+           and q.get("rows") and isinstance(q["rows"][0], dict) and col in q["rows"][0]]
+    ok = was is not NO_RESULT and str(was) == str(c.get("before")) and bool(now) and str(now[0]) == str(c.get("after"))
+    return dict(c, validated=ok, basis="observed before and after" if ok else "model summary, unvalidated")
 
 
 def _split(col):

@@ -6,8 +6,13 @@ Read-only, built from what the knowledge base already holds:
   data/catalog.json                tables, relations, writers (read from code and sessions)
   data/tickets/<KEY>.json          saved queries and the tables they use
 
-A link's status: verified (matched/sampled ≥ 0.8 in QA), likely (≥ 0.3), unverified (seen in code or a session, or
-under 0.3). The same thresholds as knowledge/db-map.md.
+A link's status says what was observed, never "verified": sample_matched (the QA link map's sample matched 80 % or
+more), sample_partial (30 % or more), sample_weak (under 30 %) or not_sampled (seen in code or a session only). Each
+link carries its label ("Sample matched 95% (19 of 20, QA, 2026-11-05)") and basis (observed_sample: Observed in a
+sample; inferred otherwise). A sample supports only the sampled relationship, not a declared constraint.
+With an explicit mcp.database.scope the map shows only the cards, link-map hierarchy and sampled links of connections
+approved now: a connection removed from the scope, revoked or in a blocked environment disappears here as it does from
+every database view (DB-02 / DB-03).
 """
 import collections
 import os
@@ -15,7 +20,6 @@ import os
 from .. import common
 from .api import read_json_cached, _listdir, TICKET_RE
 
-VERIFIED, LIKELY = 0.8, 0.3
 NO_SCHEMA = "(no schema)"
 UNPLACED = "Seen in code or sessions"
 
@@ -42,19 +46,37 @@ def _same(a, b):
 
 
 def _status(sampled, matched):
+    from .. import dbmodel
+    return dbmodel.sample_status(sampled, matched)
+
+
+def _sample(sampled, matched, lm):
+    from .. import dbmodel
     if not sampled:
-        return "unverified", None
-    r = matched / float(sampled)
-    return ("verified" if r >= VERIFIED else "likely" if r >= LIKELY else "unverified"), round(r, 2)
+        return {"label": "Not sampled: seen in code or a session", "basis": "inferred",
+                "basis_label": dbmodel.BASIS_LABEL["inferred"]}
+    return {"label": dbmodel.sample_label(sampled, matched, (lm or {}).get("env") or "qa", (lm or {}).get("fetched_at")),
+            "basis": "observed_sample", "basis_label": dbmodel.BASIS_LABEL["observed_sample"]}
 
 
-def _cards():
-    """{table key: (connection, card)} from the schema cards."""
+def _approved():
+    """The connections the map may show: with an explicit mcp.database.scope, only those approved now (a connection
+    removed from the scope, revoked or in a blocked environment shows nothing, like every database view). None without
+    an explicit scope: the legacy map keeps showing every card it has (it has nothing to decide with)."""
+    cfg = common.load_config()
+    if not ((cfg.get("mcp") or {}).get("database") or {}).get("scope"):
+        return None
+    from .. import dbaccess
+    return set(dbaccess.approved_scope(cfg)["connections"])
+
+
+def _cards(ok=None):
+    """{table key: (connection, card)} from the schema cards (of approved connections when `ok` is a set)."""
     out = {}
     root = common.hp("data", "db-schema")
     for conn in _listdir(root):
         d = os.path.join(root, conn)
-        if conn.startswith("_") or not os.path.isdir(d):
+        if conn.startswith("_") or not os.path.isdir(d) or (ok is not None and conn not in ok):
             continue
         for fn in _listdir(d):
             if fn.endswith(".json"):
@@ -80,7 +102,11 @@ def _load():
     cat = relevance.catalog_view(read_json_cached(common.hp("data", "catalog.json")) or {},
         lambda t: read_json_cached(common.hp("data", "tickets", t + ".json")))
     lm, res = _linkmap()
-    cards = _cards()
+    ok = _approved()
+    cards = _cards(ok)
+    if ok is not None:  # the link map's sampled links and hierarchy of a connection not approved now are hidden too
+        res = dict(res, hierarchy=[h for h in res.get("hierarchy") or [] if str(h.get("database") or "") in ok],
+                   links=[l for l in res.get("links") or [] if not l.get("connection") or l.get("connection") in ok])
     if cat.get("relevance_filtered"):
         good = {_key(k) for k in cat.get("tables") or {}}
         def allowed(k):
@@ -89,18 +115,21 @@ def _load():
         res = dict(res, hierarchy=[dict(h, tables=[t for t in h.get("tables") or [] if allowed(str(h.get("schema")) + "." + t)])
                                   for h in res.get("hierarchy") or []],
                    links=[r for r in res.get("links") or [] if allowed(_table_of(r.get("from"), good)) and allowed(_table_of(r.get("to"), good))])
-    return cat, lm, res, cards, _links(cat, res, _known(cat, res, cards))
+    return cat, lm, res, cards, _links(cat, res, _known(cat, res, cards), lm)
 
 
-def _links(cat, res, known=()):
-    """Every known link as {from, to, from_col, to_col, kind, status, ratio, sampled, matched, evidence, tickets}."""
+def _links(cat, res, known=(), lm=None):
+    """Every known link as {from, to, from_col, to_col, kind, status, ratio, sampled, matched, label, basis,
+    basis_label, evidence, tickets}."""
     out = {}
     for l in res.get("links") or []:
         a, b = _table_of(l.get("from"), known), _table_of(l.get("to"), known)
-        st, ratio = _status(int(l.get("sampled") or 0), int(l.get("matched") or 0))
-        out[(a, b)] = {"from": a, "to": b, "from_col": str(l.get("from") or ""), "to_col": str(l.get("to") or ""),
-                       "kind": "QA link", "status": st, "ratio": ratio, "sampled": l.get("sampled"),
-                       "matched": l.get("matched"), "evidence": str(l.get("evidence") or "")[:300], "tickets": []}
+        s, m = int(l.get("sampled") or 0), int(l.get("matched") or 0)
+        st, ratio = _status(s, m)
+        out[(a, b)] = dict({"from": a, "to": b, "from_col": str(l.get("from") or ""), "to_col": str(l.get("to") or ""),
+                            "kind": "QA link", "status": st, "ratio": ratio, "sampled": l.get("sampled"),
+                            "matched": l.get("matched"), "evidence": str(l.get("evidence") or "")[:300], "tickets": []},
+                           **_sample(s, m, lm))
     for r in (cat.get("db_relations") or {}).values():
         a, b = _table_of(r.get("from"), known), _table_of(r.get("to"), known)
         hit = next((v for (x, y), v in out.items() if _same(x, a) and _same(y, b) or _same(x, b) and _same(y, a)), None)
@@ -108,15 +137,16 @@ def _links(cat, res, known=()):
             hit["tickets"] = sorted(set(hit["tickets"]) | set(r.get("tickets") or []))
             hit["kind"] = r.get("kind") or hit["kind"]
             continue
-        out[(a, b)] = {"from": a, "to": b, "from_col": str(r.get("from") or ""), "to_col": str(r.get("to") or ""),
-                       "kind": r.get("kind") or "link", "status": "unverified", "ratio": None, "sampled": None,
-                       "matched": None, "evidence": str(r.get("evidence") or "")[:300], "tickets": list(r.get("tickets") or [])}
+        out[(a, b)] = dict({"from": a, "to": b, "from_col": str(r.get("from") or ""), "to_col": str(r.get("to") or ""),
+                            "kind": r.get("kind") or "link", "status": "not_sampled", "ratio": None, "sampled": None,
+                            "matched": None, "evidence": str(r.get("evidence") or "")[:300],
+                            "tickets": list(r.get("tickets") or [])}, **_sample(0, 0, None))
     return list(out.values())
 
 
 def tree():
-    """{"databases": [{"name", "schemas": [{"name", "tables": [{"key","name","links","verified","columns"}]}]}],
-    "linkmap": {...} | None, "counts": {...}}"""
+    """{"databases": [{"name", "schemas": [{"name", "tables": [{"key","name","links","sample_matched","columns"}]}]}],
+    "linkmap": {...} | None, "counts": {tables, links, sample_matched}}"""
     cat, lm, res, cards, links = _load()
     place = collections.OrderedDict()  # table key -> (database, schema, display name)
     for h in res.get("hierarchy") or []:
@@ -142,12 +172,12 @@ def tree():
     for k, (db, sc, tn) in place.items():
         mine = [l for l in links if _same(l["from"], k) or _same(l["to"], k)]
         dbs.setdefault(db, collections.OrderedDict()).setdefault(sc, []).append({
-            "key": k, "name": tn, "links": len(mine), "verified": sum(1 for l in mine if l["status"] == "verified"),
+            "key": k, "name": tn, "links": len(mine), "sample_matched": sum(1 for l in mine if l["status"] == "sample_matched"),
             "columns": any(_same(k, c) for c in cards)})
     out = [{"name": db, "schemas": [{"name": sc, "tables": sorted(ts, key=lambda t: t["name"].lower())}
                                     for sc, ts in sorted(scs.items())]} for db, scs in sorted(dbs.items(), key=lambda x: (x[0] == UNPLACED, x[0].lower()))]
     return {"databases": out, "counts": {"tables": len(place), "links": len(links),
-                                         "verified": sum(1 for l in links if l["status"] == "verified")},
+                                         "sample_matched": sum(1 for l in links if l["status"] == "sample_matched")},
             "linkmap": {"env": lm.get("env"), "fetched_at": lm.get("fetched_at")} if res else None}
 
 
@@ -213,3 +243,102 @@ def table(key, hops=1):
             "connection": card[0] if card else None, "fetched_at": card[1].get("fetched_at") if card else None,
             "columns": columns, "key_columns": ct.get("key_columns") or [], "links": mine, "writers": writers,
             "tickets": tickets, "queries": _queries(k), "graph": {"nodes": sorted(nodes), "edges": edges, "hops": hops}}
+
+
+# --------------------------------------------------------------------------- database investigation (database flow D1)
+
+VIEW_ROUTES = ("/api/db/workspace", "/api/db/passport", "/api/db/flows", "/api/db/flow", "/api/db/resolve",
+               "/api/db/investigations", "/api/db/investigation", "/api/db/plan", "/api/db/job", "/api/db/handoff",
+               "/api/db/context", "/api/db/impact", "/api/db/impacts", "/api/db/compare", "/api/db/comparisons",
+               "/api/db/snapshots")
+
+
+def _start_arg(start):
+    kind, _, ref = str(start or "").partition(":")
+    if kind == "ticket":
+        return {"kind": "ticket", "key": ref.upper()}
+    if kind == "node":
+        return {"kind": "node", "id": ref}
+    return None
+
+
+def _d3_errors():
+    from .. import dbimpact
+    return dbimpact.ImpactError, dbimpact.CompareError
+
+
+def view(path, q, cfg=None):
+    """(status, body) of one database-investigation GET route, from dbviews (cached records only: no query, no
+    ingestion, nothing written). `q(name)` reads a query parameter. Bad arguments and cursors answer 400, an unknown
+    or hidden record 404 (the same answer: a record you may not see is not confirmed to exist)."""
+    from .. import dbaccess, dbflows, dbtrace, dbviews
+    try:
+        ctx = dbaccess.AccessContext(cfg)
+        cur = q("cursor")[:4096] or None
+        if path == "/api/db/workspace":
+            return 200, dbviews.workspace_summary(ctx, cfg)
+        if path == "/api/db/passport":
+            return 200, dbviews.table_view(ctx, q("id")[:200], env=q("env")[:20] or None, cursor=cur, cfg=cfg)
+        if path == "/api/db/flows":
+            return 200, dbviews.flows_list(ctx, cursor=cur, cfg=cfg)
+        if path == "/api/db/flow":
+            if q("id"):
+                return 200, dbviews.flow_view(ctx, fid=q("id")[:64], cursor=cur, cfg=cfg)
+            start = q("start")[:240]
+            kind, _, ref = start.partition(":")
+            if kind == "ticket":
+                return 200, dbviews.flow_view(ctx, start={"kind": "ticket", "key": ref.upper()},
+                                              env=q("env")[:20] or None, cursor=cur, cfg=cfg)
+            if kind == "node":
+                return 200, dbviews.flow_view(ctx, start={"kind": "node", "id": ref}, env=q("env")[:20] or None,
+                                              cursor=cur, cfg=cfg)
+            return 400, {"error": "give id=<f_…> or start=ticket:<KEY> | node:<ID>"}
+        if path == "/api/db/resolve":
+            return 200, dbviews.resolve(ctx, q("q")[:200], q("kind")[:10] or None, cursor=cur, cfg=cfg)
+        # record investigations: personal, re-checked on every request; nothing here plans, runs or polls a provider
+        if path == "/api/db/investigations":
+            return 200, dbviews.investigations_list(ctx, q("q")[:200] or None, cursor=cur)
+        if path == "/api/db/investigation":
+            return 200, dbviews.investigation_view(ctx, q("id")[:64], cursor=cur)
+        if path == "/api/db/plan":
+            if q("id"):
+                return 200, dbviews.plan_view(ctx, q("id")[:64], cursor=cur)
+            if q("flow"):
+                return 200, dbviews.key_spec_view(ctx, flow_id=q("flow")[:64], cfg=cfg)
+            start = _start_arg(q("start")[:240])
+            if start:
+                return 200, dbviews.key_spec_view(ctx, start=start, env=q("env")[:20] or None, cfg=cfg)
+            return 400, {"error": "give id=<p_…>, flow=<f_…> or start=ticket:<KEY> | node:<ID>"}
+        if path == "/api/db/job":
+            return 200, dbviews.job_view(ctx, q("id")[:64])
+        if path == "/api/db/handoff":
+            return 200, dbviews.handoff_view(ctx, q("id")[:64])
+        if path == "/api/db/context":
+            return 200, dbviews.context_view(ctx, q("flow")[:64] or None, q("investigation")[:64] or None, cfg=cfg)
+        # D3: cached impact / comparison results (computed only by cli db impact|compare; never on a read)
+        if path == "/api/db/impacts":
+            return 200, dbviews.impacts_list(ctx, cursor=cur, cfg=cfg)
+        if path == "/api/db/impact":
+            if q("id"):
+                return 200, dbviews.impact_view(ctx, rid=q("id")[:64], cursor=cur, cfg=cfg)
+            if not q("target"):
+                return 400, {"error": "give id=<x_…> or target=<o_…|c_…|schema.table[.column]> [&change=kind]"}
+            return 200, dbviews.impact_view(ctx, target=q("target")[:200], change=q("change")[:20] or None,
+                                            cursor=cur, cfg=cfg, env=q("env")[:20] or None,
+                                            connection=q("connection")[:80] or None)
+        if path == "/api/db/comparisons":
+            return 200, dbviews.comparisons_list(ctx, cursor=cur, cfg=cfg)
+        if path == "/api/db/compare":
+            if q("id"):
+                return 200, dbviews.compare_view(ctx, rid=q("id")[:64], cursor=cur, cfg=cfg)
+            if not q("left") or not q("right"):
+                return 400, {"error": "give id=<x_…> or left=<connection[@snapshot]>&right=<…>"}
+            objs = [o for o in q("objects")[:2000].split(",") if o.strip()] or None
+            return 200, dbviews.compare_view(ctx, q("left")[:100], q("right")[:100], objects=objs, cursor=cur, cfg=cfg)
+        if path == "/api/db/snapshots":
+            return 200, dbviews.snapshots_view(ctx, q("connection")[:80], cursor=cur)
+    except (dbviews.ViewError, dbviews.CursorError, dbflows.FlowError, dbtrace.PlanError) + _d3_errors() as e:
+        return 400, {"error": str(e)[:300]}
+    except dbflows.NotFound as e:
+        return 404, {"error": str(e)[:300]}
+    return 404, {"error": "not found"}

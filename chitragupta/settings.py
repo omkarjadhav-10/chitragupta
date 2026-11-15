@@ -187,6 +187,9 @@ STATIC = [
        min=0, max=100, default_value=3.0),
     _i("brief.daily_cap", "Ticket briefs per day", "At most this many brief rebuilds a day.", "int", "models",
        min=0, max=50, default_value=8),
+    _i("budget.companion_call_usd", "Companion planning: spend ceiling per call (USD)", "0 keeps Generate Plan and "
+       "Improve Plan off. Each explicit call first reserves this much of the daily model spend cap; nothing runs when "
+       "the reservation doesn't fit.", "number", "models", min=0, max=5, default_value=0),
     _i("brief.verified_statuses", "Jira statuses that mean QA verified", "A brief shows \"Verified by QA\" for a "
        "ticket in one of these Jira statuses (one per line, any case) when no passing test or replay proves it.",
        "names", "models", default_value=["QA COMPLETED", "QA PASSED", "READY FOR RELEASE", "DONE", "CLOSED",
@@ -219,6 +222,15 @@ STATIC = [
     _i("mcp.database.server", "Database MCP server", "Chosen by /cg:setup, which classifies its tools as read or write.",
        "text", "database", editable=False),
     _i("mcp.jira.server", "Jira MCP server", "Chosen by /cg:setup.", "text", "jira", editable=False),
+    # the database flow's approved scope and connector mapping: validated (check / check_locked), never edited here
+    _i("mcp.database.scope", "Approved database scope", "Environments, connections, databases, schemas and "
+       "repositories the database flow may read. Set with /cg:setup; production is never in scope.", "db_scope",
+       "database", editable=False),
+    _i("mcp.database.arguments", "Database MCP argument names", "How the server names its connection, schema, table, "
+       "statement and limit arguments. Set with /cg:setup.", "db_arguments", "database", editable=False),
+    _i("mcp.database.authorization_max_age_days", "Access confirmation goes stale after (days)", "Cached database "
+       "context older than this is labelled with the date its access was last confirmed.", "int", "database",
+       editable=False, min=1, max=90, default_value=7),
     _i("safety.rules", "Safety rules", "What Chitragupta may run, write and reach. They have no off switch and can't be "
        "changed from here.", "text", "safety", editable=False, fixed="Always on"),
     _i("safety.mcp_tools", "MCP tools and their read/write class", "Only /cg:setup adds MCP tools.", "text", "safety",
@@ -568,7 +580,37 @@ def check(it, value, current):
             return "Keep at least one environment."
         extra = [e for e in value if e not in cur]
         return None if not extra else "Adding %s takes /cg:setup." % ", ".join(extra)
+    if t == "db_scope":
+        from . import dbaccess
+        errs = dbaccess.scope_errors(value)
+        return (errs[0][0].upper() + errs[0][1:] + ".") if errs else None
+    if t == "db_arguments":
+        from . import dbconnector
+        errs = dbconnector.mapping_errors(value)
+        return (errs[0][0].upper() + errs[0][1:] + ".") if errs else None
     return "This setting can't be changed here."
+
+
+def check_locked(key, value, cfg=None):
+    """Validate a value for a setting the dashboard only shows (editable False), for /cg:setup and config checks:
+    None or the problem. validate() still refuses every such key from the dashboard."""
+    it = _by_key(cfg if cfg is not None else common.load_config()).get(key)
+    if not it:
+        return "This setting doesn't exist."
+    return check(it, value, configstore.get(cfg or {}, key))
+
+
+def _locked_summary(type_, value):
+    """One line for a structured setting the page only shows (the scope, the argument mapping)."""
+    if not isinstance(value, dict) or not value:
+        return ""
+    if type_ == "db_scope":
+        conns = value.get("connections") if isinstance(value.get("connections"), dict) else {}
+        parts = ["%s (%s)" % (c, (e or {}).get("env") or "env unknown") for c, e in sorted(conns.items())
+                 if isinstance(e, dict) or e is None]
+        repos = value.get("repos") if isinstance(value.get("repos"), list) else []
+        return "%s · %d repositor%s" % (", ".join(parts) or "no connections", len(repos), "y" if len(repos) == 1 else "ies")
+    return ", ".join("%s → %s" % (k, v or "(none)") for k, v in sorted(value.items()))
 
 
 def describe(cfg=None):
@@ -586,6 +628,8 @@ def describe(cfg=None):
         else:
             row["value"] = configstore.get(eff, it["key"], it.get("default_value"))
             row["set"] = configstore.get(raw or {}, it["key"]) is not None  # changed from the default
+            if it["type"] in ("db_scope", "db_arguments"):
+                row["value"] = _locked_summary(it["type"], row["value"])
         if it.get("needs") == "slack":
             row["available"] = bool(configstore.get(eff, "jira_worklog.slack.self_user_id"))
         elif it.get("needs") == "database":

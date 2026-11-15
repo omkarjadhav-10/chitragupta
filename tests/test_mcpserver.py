@@ -1,4 +1,4 @@
-"""The read-only MCP server (chitragupta/mcpserver.py): protocol, the 9 tools on a synthetic home, size caps and
+"""The read-only MCP server (chitragupta/mcpserver.py): protocol, the 11 tools on a synthetic home, size caps and
 pages, errors, a clean stdout, nothing written, and its isolation from Chitragupta's own background calls."""
 import io
 import json
@@ -6,12 +6,13 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from tests import support
 from tests.test_dashboard import TICKET, Base, _w, snapshot
 
-TOOLS = ["search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table", "list_tickets",
-         "get_alerts", "get_progress"]
+TOOLS = ["search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table", "get_db_flow",
+         "get_db_investigation", "get_db_impact", "get_db_comparison", "list_tickets", "get_alerts", "get_progress"]
 
 
 def srv():
@@ -20,7 +21,7 @@ def srv():
 
 
 def add_knowledge(home):
-    """A catalog table with a schema card, a verified link, a writer, and branch tracking on ABC-1001."""
+    """A catalog table with a schema card, a link a QA sample matched, a writer, and branch tracking on ABC-1001."""
     _w(os.path.join(home, "data", "catalog.json"), {
         "tables": {"shop.orders": {"name": "shop.orders", "db": "shopdb", "purpose": "One row per order",
                                    "key_columns": ["id"], "tickets": [TICKET], "last_seen": "2026-10-15"}},
@@ -238,11 +239,35 @@ class TestTools(McpBase):
             t = self.text("get_db_table", name=name)
             self.assertIn("# shop.orders (shopdb)", t)
         self.assertIn("Columns (3): id, total, status", t)
-        self.assertIn("shop.order_items.order_id → shop.orders.id · fk · verified", t)
-        self.assertIn("9/10 verified", t)
+        # a sampled link says what was observed (PRD DB-05): never "verified"
+        self.assertIn("shop.order_items.order_id → shop.orders.id · fk · Sample matched 90% (9 of 10, QA, 2026-10-15)", t)
+        self.assertIn("shop.order_items.order_id → shop.orders.id · Sample matched 90% (9 of 10, QA, 2026-10-15)", t)
+        self.assertNotIn("verified", t.replace("never a declared", ""))
         self.assertIn("writes: OrderService .total", t)
         self.assertIn("SELECT * FROM shop.orders WHERE id = 42", t)
         self.assertIn("No table", self.error_text("get_db_table", name="shop.nothing"))
+
+    def test_get_db_flow(self):
+        self.assertIn("No saved flows yet", self.text("get_db_flow"))
+        t = self.text("get_db_flow", start=TICKET)  # nothing recorded on the graph yet: an honest, empty flow
+        self.assertIn("Code model; deployed revision unknown", t)
+        self.assertIn("0 connections", t)
+        self.assertIn("not a record ID", self.error_text("get_db_flow", id="../../x"))
+        self.assertIn("no such flow", self.error_text("get_db_flow", id="f_" + "0" * 24))
+        self.assertIn("Candidates for", self.text("get_db_flow", start="orders"))
+
+    def test_get_db_impact_and_comparison_read_cached_results_only(self):
+        from chitragupta import dbimpact
+        self.assertIn("Cached impact results (0)", self.text("get_db_impact"))
+        self.assertIn("Cached comparisons (0)", self.text("get_db_comparison"))
+        self.assertIn("not a record ID", self.error_text("get_db_impact", id="x_../x"))
+        self.assertIn("no such impact result", self.error_text("get_db_impact", id="x_" + "0" * 24))
+        self.assertIn("no such comparison", self.error_text("get_db_comparison", id="x_" + "0" * 24))
+        t = self.text("get_db_comparison", left="qa-main", right="uat-main")  # nothing approved here: blocked
+        self.assertIn("Comparison blocked: the left side (qa-main) is not permitted", t)
+        with mock.patch.object(dbimpact, "impact", side_effect=AssertionError("a read computed")),                 mock.patch.object(dbimpact, "compare", side_effect=AssertionError("a read computed")):
+            self.text("get_db_impact")
+            self.text("get_db_comparison", left="qa-main", right="uat-main")
 
     def test_list_tickets(self):
         t = self.text("list_tickets")
@@ -336,7 +361,8 @@ ALL_CALLS = [("search", {"q": "order"}), ("search", {"q": "discount", "ticket": 
                                                   "timeline", "notes")] + [
     ("get_day", {"date": "today"}), ("get_day", {"date": "yesterday"}), ("get_timesheet", {"period": "week"}),
     ("get_timesheet", {"period": "month", "from": "-60"}), ("get_branch_status", {"key": TICKET}),
-    ("get_db_table", {"name": "orders"}), ("list_tickets", {}), ("get_alerts", {}), ("get_ticket", {"key": "ABC-9999"})]
+    ("get_db_table", {"name": "orders"}), ("get_db_flow", {}), ("get_db_flow", {"start": TICKET}),
+    ("get_db_flow", {"start": "orders"}), ("list_tickets", {}), ("get_alerts", {}), ("get_ticket", {"key": "ABC-9999"})]
 
 
 class TestReadOnly(McpBase):

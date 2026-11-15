@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": {"type": "string"},
+          "text": {"type": "string"},
+          "evidence": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["step", "text", "evidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "steps"],
+  "additionalProperties": false
+}

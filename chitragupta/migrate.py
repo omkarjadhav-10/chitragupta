@@ -312,6 +312,7 @@ KB_STEPS = [
     ("kb51-record-review", "kb51:record_review"),
     ("kb51-relevance", "kb51:record_relevance"),
     ("kb51-summary", "kb51:ticket_summary"),
+    ("db1-canonical-graph", "dbingest:migrate_legacy"),  # legacy DB flows -> the canonical graph (data/db/ only)
 ]
 
 

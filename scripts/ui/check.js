@@ -2,6 +2,7 @@
 // node check.js <base url> <today YYYY-MM-DD> [screenshot dir]
 // Fails (exit 1) on: a serious or critical axe violation, a console or page error, any request that leaves
 // 127.0.0.1, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check that doesn't hold.
+// With CG_UI_DB (set by run.py) dbcheck.js first runs the database walkthroughs; CG_UI_DB_ONLY stops after them.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
@@ -29,6 +30,11 @@ async function launch() {
 
 (async () => {
   const browser = await launch();
+  // the database workspace walkthroughs (dbcheck.js) when run.py merged the database scenario into the home
+  if (process.env.CG_UI_DB && !process.env.CG_UI_FOCUS) {
+    await require('./dbcheck.js').run(browser, base, check, shots, process.env.CG_UI_DB);
+    if (process.env.CG_UI_DB_ONLY) { await browser.close(); console.log(failed ? failed + ' check(s) failed' : 'all checks passed'); process.exit(failed ? 1 : 0); }
+  }
   await require('./regressions.js').run(browser, base, check, process.env.CG_UI_FOCUS);
   if (process.env.CG_UI_FOCUS) { await browser.close(); process.exit(failed ? 1 : 0); }
   for (const theme of ['light', 'dark']) {
@@ -150,7 +156,10 @@ async function launch() {
   await page.setViewportSize({ width: 900, height: 900 });
   await page.goto(base + '#/today');
   await page.getByRole('button', { name: 'Pages', exact: true }).click();
-  check(await page.locator('#more-pages a').count() === 14, 'compact navigation exposes every page');
+  // every page in shell.js's NAV and NAV_END lists (read from the source, so the page itself is left untouched)
+  const shellSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'chitragupta', 'dashboard', 'app', 'lib', 'shell.js'), 'utf8');
+  const navPages = (shellSrc.match(/^\s*\{ id: '[a-z]+', label: /gm) || []).length;
+  check(await page.locator('#more-pages a').count() === navPages, 'compact navigation exposes every page');
   await page.keyboard.press('Escape');
   check(await page.locator('#more-pages').count() === 0, 'Escape closes navigation from its trigger');
   await page.locator('.dayline-span').first().click();

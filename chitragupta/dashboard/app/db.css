@@ -1,0 +1,15 @@
+/* Database workspace: focus header, contextual actions, impact / comparison panels (pages/db.js, lib/dbx.js).
+   A separate stylesheet so standalone ticket exports, which stub the database page, don't carry it. */
+.dbx-cov { overflow-wrap: anywhere; min-width: 0; }
+.dbx-focus { border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: var(--r-card); padding: var(--s3) var(--s4); display: grid; gap: var(--s1); min-width: 0; }
+.dbx-focus p { margin: 0; overflow-wrap: anywhere; }
+.dbx-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; min-width: 0; }
+.dbx-ctx { display: inline-flex; flex-wrap: wrap; gap: var(--s1); max-width: 100%; }
+.dbx-panel { display: grid; gap: var(--s2); min-width: 0; }
+.dbx-panel select { max-width: 100%; }
+.dbx-imps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.dbx-imp { border-bottom: 1px solid var(--rule); padding-bottom: var(--s2); display: grid; gap: 2px; min-width: 0; }
+.dbx-imp-h { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: baseline; min-width: 0; }
+.dbx-cats { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1); }
+.dbx-headline { margin: 0; overflow-wrap: anywhere; }
+dialog.dlg .dlg-head h2 { overflow-wrap: anywhere; min-width: 0; }

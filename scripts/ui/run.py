@@ -1,12 +1,16 @@
 """Dashboard UI checks in a real browser, on a synthetic data home (never a real one).
 
-    python scripts/ui/run.py [--shots DIR]
+    python scripts/ui/run.py [--shots DIR] [--db-only | --no-db]
 
 Builds the synthetic home the unit tests use (tests/test_dashboard.py + tests/test_dashboard_v2.py fixtures, plus the
 release records of tests/test_dashboard_releases.py and the profile and progress records of
 tests/test_dashboard_progress.py) in a temp folder, serves the dashboard from this checkout on a
 free port, and runs scripts/ui/check.js: every page in light and dark (axe, console errors, requests leaving
 127.0.0.1, first-view time), 1440/1280/900 px layouts, the command palette, shortcuts, tabs and a keyboard-only walk.
+The database scenario (scripts/ui/dbhome.py, from tests/dbfixture.py) is merged into the same home and
+scripts/ui/dbcheck.js runs the seven database walkthroughs at 390/768/900/1280/1440 px in light and dark plus a
+keyboard pass; its trace runs through the fake database MCP in this process (mcpjobs.run is a tripwire). --db-only
+runs only those; --no-db leaves the scenario out.
 Needs Node and, once, `npm ci` in scripts/ui (playwright-core, which drives the installed Chrome or Edge; nothing is
 downloaded at run time). axe-core is vendored in vendor/.
 Dev only: nothing here ships in the runtime.
@@ -44,13 +48,27 @@ def main(argv):
     add_v2_fixtures(home, days)
     add_release_fixtures(home, days)
     add_progress_fixtures(home, days)
+    # the database scenario (scripts/ui/dbhome.py): the fake database MCP replaces mcpjobs.run in this process
+    db = None
+    env = dict(os.environ)
+    if "--no-db" not in argv:
+        sys.path.insert(0, HERE)
+        import dbhome
+        db = dbhome.patch(dbhome.add(home))
+        info = os.path.join(home, "ui-db-info.json")
+        common.write_json(info, db["info"])
+        env["CG_UI_DB"] = info
+        if "--db-only" in argv:
+            env["CG_UI_DB_ONLY"] = "1"
     srv, _t = server.start_in_thread(0)
     try:
         base = "http://127.0.0.1:%d/" % srv.port
         print("serving the synthetic home at %s" % base)
         cmd = ["node", os.path.join(HERE, "check.js"), base, days["day"]] + ([shots] if shots else [])
-        return subprocess.call(cmd, cwd=HERE)
+        return subprocess.call(cmd, cwd=HERE, env=env)
     finally:
+        if db:
+            dbhome.unpatch(db)
         srv.shutdown()
         srv.server_close()
         shutil.rmtree(home, ignore_errors=True)

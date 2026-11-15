@@ -342,7 +342,9 @@ function renderSvg(code, dark) {
   // one render at a time: Mermaid keeps global state
   const job = mmdQueue.then(() => loadMermaid()).then((mermaid) => {
     if (mmdTheme !== theme) {
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme, fontFamily: 'inherit', flowchart: { htmlLabels: false },
+      // useMaxWidth false: the SVG gets its natural width (a "100%" width inside the max-content canvas fell back to
+      // the 300 px default, so every flowchart drew tiny until zoomed)
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme, fontFamily: 'inherit', flowchart: { htmlLabels: false, useMaxWidth: false },
         themeVariables: dark ? { edgeLabelBackground: '#2D323B', tertiaryTextColor: '#E8EAED' } : { edgeLabelBackground: '#F3F5F7' } });
       mmdTheme = theme;
     }

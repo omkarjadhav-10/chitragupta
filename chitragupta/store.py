@@ -111,9 +111,28 @@ class Store:
         self.delta[key][what] += n
 
     def save(self):
+        def merge_write(t):
+            latest = common.read_json(ticket_path(t), {}) or {}
+            if "workflows" in latest:
+                self.tickets[t]["workflows"] = latest["workflows"]
+            common.write_json(ticket_path(t), redact_obj(self.tickets[t]))
         for t in self.dirty_tickets:
             self.tickets[t]["status"] = status_of(self.tickets[t])  # computed, for readers of the old single field
-            common.write_json(ticket_path(t), redact_obj(self.tickets[t]))
+            # Companion saves short, versioned references independently of extraction.
+            # Preserve those from the current disk record when this Store was loaded earlier.
+            # No workflow storage: no lock (and no folder created). A busy lock never fails the tick:
+            # the unlocked read-merge runs instead and workflow recovery re-attaches references.
+            if not os.path.isdir(common.hp("data", "workflows")):
+                common.write_json(ticket_path(t), redact_obj(self.tickets[t]))
+                continue
+            from .safety import workflowio
+            try:
+                with workflowio.lock(timeout=0.5):
+                    merge_write(t)
+                continue
+            except TimeoutError:
+                common.log("store", "workflow lock busy; merged %s workflow references without it" % t)
+            merge_write(t)
         for d in self.dirty_days:
             common.write_json(day_path(d), redact_obj(self.days[d]))
         if self.catalog_dirty and self._catalog is not None:
