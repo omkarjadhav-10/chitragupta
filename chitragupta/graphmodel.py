@@ -122,3 +122,155 @@ def _rows(rows):
 def content(nodes, edges, statuses):
     """One digest naming what the graph is, whatever order the rows arrive in and whichever generation wrote them."""
     return digest({"nodes": _rows(nodes), "edges": _rows(edges), "statuses": _rows(statuses)})
+
+
+# --- status rules (design section 11). Builders and readers call these; nothing else decides a state. ---
+
+ORDER = {   # least favourable first: the first one present wins when scopes are combined
+    "plan_coverage": ("Missing", "Unverified", "Partial", "Covered"),
+    "implementation": ("None", "Unverified association", "Partial", "Linked"),
+    "verification": ("Failed", "Historical only", "Unverified", "Partial", "Verified within recorded scope"),
+}
+DEVELOPER_ORIGIN = "developer assessment"
+JEV_ORIGIN = "Jev classification"
+PLAN_CHANGED = "requirement changed after this plan; re-evaluate"
+VERIFY_CHANGED = ("verified for the earlier wording confirmed in this task's baseline; "
+                  "the requirement has changed since")
+_LEDGER = {"Verified": "Verified within recorded scope", "Partial": "Partial", "Missing": "Failed"}
+_VERIFY_REASON = {"Verified within recorded scope": "applicable passing evidence with complete coverage",
+                  "Partial": "applicable passing evidence with partial coverage",
+                  "Failed": "an applicable mapped check failed",
+                  "Historical only": "passing evidence exists only for an earlier revision or context",
+                  "Unverified": "no applicable passing evidence"}
+_PR_DONE = ("merged", "closed", "abandoned", "completed", "declined")
+_PROPOSAL = {"schema", "origin", "type", "src", "dst", "confidence", "rationale"}
+
+
+def _status(state, basis, reason, **extra):
+    return dict({"state": state, "basis": basis, "reason": reason}, **extra)
+
+
+def plan_coverage(has_plan, plan_revision_current, evaluation, mapped):
+    """`evaluation` is None or {state, origin, confidence?} for this criterion on the plan in question."""
+    if not has_plan:
+        return _status("Unverified", "unknown", "no plan")
+    if not plan_revision_current:
+        return _status("Unverified", "observed", PLAN_CHANGED)
+    if evaluation:
+        state = evaluation.get("state")
+        if state not in ORDER["plan_coverage"]:
+            raise ValueError("unknown plan coverage state: %r" % (state,))
+        if evaluation.get("origin") == DEVELOPER_ORIGIN:
+            return _status(state, "declared", DEVELOPER_ORIGIN)
+        confidence = evaluation.get("confidence")   # shown, never used
+        shown = isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+        return _status(state, "inferred", JEV_ORIGIN + (" (confidence %g)" % confidence if shown else ""))
+    if mapped:
+        return _status("Covered", "declared", "plan mapping; not evaluated")
+    return _status("Missing", "declared", "no plan step addresses this requirement")
+
+
+def _counts(row):
+    return (row.get("type") == "IMPLEMENTED_BY" and row.get("basis") == "declared"
+            and not (row.get("attrs") or {}).get("ambiguous"))
+
+
+def implementation(declared_edges, steps, ticket_has_changes):
+    """`steps`: ids of the implementation steps addressing the requirement. Inferred or ambiguous edges never count."""
+    counted = sorted((row for row in declared_edges if _counts(row)), key=lambda row: row["id"])
+    ids = [row["id"] for row in counted]
+    wanted = set(steps)
+    if counted:
+        have = wanted & {row["src"] for row in counted}
+        if have == wanted:
+            return _status("Linked", "declared", "every implementation step has a declared link" if wanted
+                           else "the requirement has a declared link", edges=ids)
+        return _status("Partial", "declared", "%d of %d implementation steps have a declared link"
+                       % (len(have), len(wanted)), edges=ids)
+    if ticket_has_changes:
+        return _status("Unverified association", "observed",
+                       "changes exist for the ticket; none is linked to this requirement", edges=[])
+    return _status("None", "unknown", "nothing recorded", edges=[])
+
+
+def verification(ledger_row, confirmed_revision, current_revision):
+    """Map one `workflowmodel.verification` row. It speaks for the revision its baseline confirmed, never a newer one."""
+    if not ledger_row or not confirmed_revision:
+        return _status("Unverified", "unknown", "no confirmed baseline covers this requirement")
+    if confirmed_revision != current_revision:
+        return _status("Unverified", "unknown", VERIFY_CHANGED)
+    cited = ledger_row.get("evidence") or []
+    if ledger_row.get("status") in _LEDGER:
+        state = _LEDGER[ledger_row["status"]]
+        used = [c for c in cited if c.get("applicability") == "current"]
+    else:
+        used = [c for c in cited if c.get("applicability") == "historical" and c.get("outcome") == "passed"]
+        state = "Historical only" if used else "Unverified"
+    kinds = {c.get("basis") for c in used}
+    basis = "observed" if "captured" in kinds else "declared" if "self-reported" in kinds else "unknown"
+    return _status(state, basis, _VERIFY_REASON[state])
+
+
+def combine(dimension, states):
+    """The least favourable state among scopes; None when there is none. Callers leave excluded rows out."""
+    if dimension not in ORDER:
+        raise ValueError("unknown dimension: %r" % (dimension,))
+    states = list(states)
+    for state in states:
+        if state not in ORDER[dimension]:
+            raise ValueError("unknown %s state: %r" % (dimension, state))
+    return min(states, key=ORDER[dimension].index) if states else None
+
+
+def _state(row, dimension):
+    return ((row.get("statuses") or {}).get(dimension) or {}).get("state")
+
+
+def _reason(row, dimension):
+    return ((row.get("statuses") or {}).get(dimension) or {}).get("reason")
+
+
+_ACTIONS = (
+    ("failed verification: %s", lambda r: _state(r, "verification") == "Failed"),
+    ("requirement changed after plan or baseline: %s",
+     lambda r: _reason(r, "plan_coverage") == PLAN_CHANGED or _reason(r, "verification") == VERIFY_CHANGED),
+    ("requirement missing from the plan: %s", lambda r: _state(r, "plan_coverage") == "Missing"),
+    ("review or rerun the applicable validation: %s", lambda r: _state(r, "verification") == "Historical only"),
+    ("no linked implementation: %s", lambda r: _state(r, "implementation") in ("None", "Unverified association")),
+    ("unverified: %s", lambda r: _state(r, "verification") == "Unverified"),
+    ("partially verified: %s", lambda r: _state(r, "verification") == "Partial"),
+)
+
+
+def next_action(rows, prs, source=""):
+    """One line, first match wins. Reads `row["statuses"][dimension]` = the combined {state, reason}."""
+    if not rows:
+        return "no requirements read from Jira yet" + (" (source: %s)" % source if source else "")
+    rows = [row for row in rows if not row.get("excluded")]
+    for wording, test in _ACTIONS:
+        for row in rows:
+            if test(row):
+                return wording % str((row.get("aliases") or [row.get("id")])[0])
+    numbers = sorted(pr["number"] for pr in prs or []
+                     if isinstance(pr.get("number"), int) and str(pr.get("state") or "").lower() not in _PR_DONE)
+    if numbers:
+        return "review the recorded pull request #%d" % numbers[0]
+    return "nothing outstanding in recorded evidence"
+
+
+def proposal(obj, ticket="", scope=""):
+    """The versioned contract for a proposed relationship. Whatever is offered, the result is an inferred edge."""
+    if not isinstance(obj, dict) or set(obj) != _PROPOSAL:
+        raise ValueError("a proposal has exactly: %s" % ", ".join(sorted(_PROPOSAL)))
+    if obj["schema"] != 1 or isinstance(obj["schema"], bool):
+        raise ValueError("unsupported proposal schema: %r" % (obj["schema"],))
+    for name in ("origin", "rationale"):
+        if not isinstance(obj[name], str) or not obj[name].strip():
+            raise ValueError("proposal %s is missing" % name)
+    for name in ("src", "dst"):
+        if not isinstance(obj[name], str) or not ID.match(obj[name]) or obj[name][:3] not in NODE_TYPES.values():
+            raise ValueError("proposal %s is not a node id" % name)
+    if obj["src"] == obj["dst"]:
+        raise ValueError("a proposal links two different nodes")
+    return edge(obj["type"], obj["src"], obj["dst"], ticket, "inferred", scope=scope, confidence=obj["confidence"],
+                attrs={"origin": obj["origin"], "rationale": obj["rationale"]})
