@@ -12,9 +12,18 @@ rest of that line holds a quote, bracket, ';' or comment start (a comment in one
 space is a comment up to the next CR or LF; `#` is otherwise an ordinary character (T-SQL temp tables).
 The catalog exemption from the row cap holds only when every FROM / JOIN / APPLY source is a catalog object.
 MongoDB: find, aggregate without $out / $merge, count, distinct and list operations; no write operator or option.
+
+statement_scope_reason(sql, engine, permitted): a second, separate check for connections with an approved scope
+(mcp.database.scope). Every FROM / JOIN / APPLY source and every 3-part name anywhere must resolve to a permitted
+database / schema of that connection: linked-server 4-part names, OPENQUERY / OPENROWSET / OPENDATASOURCE / dblink,
+unqualified data objects (the server's default schema is not ours to assume), unknown objects when the caller lists
+the known ones (a synonym could point anywhere) and engines without rules are refused. Identifier case follows the
+engine: PostgreSQL folds unquoted names to lower case and keeps quoted ones; SQL Server compares case-insensitively
+unless the connection is marked case-sensitive.
 """
 import json
 import re
+import secrets
 import unicodedata
 
 READ_START = {"select", "with", "explain", "show", "describe", "desc"}
@@ -41,7 +50,8 @@ AGG_ONLY = re.compile(r"^\s*select\s+(?:count|sum|min|max|avg|count_big)\s*\(")
 CATALOG_SOURCE = re.compile(r"(?:[\w$#@]+\.)?(?:information_schema|pg_catalog|sys)\.[\w$#@]+|(?:pg_catalog\.)?(?:pg_(?:"
                             r"class|attribute|index|constraint|proc|trigger|namespace|views|tables|indexes|description|"
                             r"get_\w+)|sqlite_master)")
-_SOURCE_TOKEN = re.compile(r"\(|\)|,|[a-z_#@][a-z0-9_$#@]*(?:\s*\.\s*[a-z_#@][a-z0-9_$#@]*)*|\S")
+# Case-insensitive so statement_scope_reason can read a case-kept statement; sql_reason's input is already lower case.
+_SOURCE_TOKEN = re.compile(r"\(|\)|,|[a-z_#@][a-z0-9_$#@]*(?:\s*\.\s*[a-z_#@][a-z0-9_$#@]*)*|\S", re.I)
 # A table-free SELECT (SELECT 1, SELECT now()) needs no row limit, unless it calls a set-returning function.
 _SET_RETURNING = re.compile(r"\b(?:generate_\w+|unnest|\w+_to_table|regexp_matches|json\w*_(?:elements|each|keys|recordset)"
                             r"\w*|\w+_series|openjson|string_split)\s*\(")
@@ -88,9 +98,21 @@ def _odd_backslashes_before(text, j):
     return (j - k) % 2 == 1
 
 
-def _lex(sql):
+_UNDOUBLE = {'"': ('""', '"'), "`": ("``", "`"), "[": ("]]", "]")}
+
+
+def _quoted_name(names, tag, opener, body):
+    """Placeholder for a quoted identifier in names mode: ` <tag><n> `, its unescaped text kept in names[n]."""
+    dbl, one = _UNDOUBLE[opener]
+    names.append(body.replace(dbl, one))
+    return " %s%d " % (tag, len(names) - 1)
+
+
+def _lex(sql, names=None, tag="ident"):
     """-> (scrubbed, None) or (None, reason). One left-to-right pass: comments dropped, literals -> 's', quoted
-    identifiers -> ident, case folded. Syntax the dialects read differently is refused (see the module doc)."""
+    identifiers -> ident, case folded. Syntax the dialects read differently is refused (see the module doc).
+    Names mode (`names` a list, used only by statement_scope_reason): each quoted identifier becomes `<tag><n>` with
+    its unescaped text appended to `names`, and the case is kept."""
     out, i, n = [], 0, len(sql)
     while i < n:
         c, nxt = sql[i], sql[i + 1:i + 2]
@@ -137,8 +159,10 @@ def _lex(sql):
                 if out and out[-1] in tuple("NnEeBbXx") and (len(out) < 2 or not _IDENT_CHAR.match(out[-2][-1:])):
                     out.pop()  # the N'..' / E'..' / B'..' / X'..' prefix
                 out.append(" 's' ")
-            else:
+            elif names is None:
                 out.append(" ident ")
+            else:
+                out.append(_quoted_name(names, tag, c, sql[i + 1:j]))
             i = j + 1
             continue
         if c == "[":
@@ -149,14 +173,14 @@ def _lex(sql):
                 return None, "unbalanced brackets"
             if re.search(r"['\"`;]|--|/\*", sql[i + 1:j]):
                 return None, "quote or comment inside [brackets] (dialects disagree)"
-            out.append(" ident ")
+            out.append(" ident " if names is None else _quoted_name(names, tag, "[", sql[i + 1:j]))
             i = j + 1
             continue
         if c == "$" and not (out and _IDENT_CHAR.match(out[-1][-1:])) and _DOLLAR_TAG.match(sql, i):
             return None, "dollar-quoted string (dialects disagree)"
         out.append(c)
         i += 1
-    return "".join(out).lower(), None
+    return ("".join(out).lower() if names is None else "".join(out)), None
 
 
 def _scrub(sql):
@@ -170,6 +194,7 @@ def _sources(s):
     toks = [re.sub(r"\s+", "", t) for t in _SOURCE_TOKEN.findall(s)]
     out, listing, expect = [], [False], False
     for k, t in enumerate(toks):
+        w = t.lower()  # keywords in any case; names are returned as written
         if t == "(":
             listing.append(False)
             expect = False
@@ -180,17 +205,17 @@ def _sources(s):
             expect = False
             continue
         if expect:
-            if t in ("only", "lateral"):
+            if w in ("only", "lateral"):
                 continue
             expect = False
             if t != "(" and t != ",":
                 out.append((t, toks[k + 1:k + 2] == ["("]))
             continue
-        if t in ("from", "join", "apply"):
+        if w in ("from", "join", "apply"):
             listing[-1], expect = True, True
         elif t == "," and listing[-1]:
             expect = True
-        elif t in _FROM_END:
+        elif w in _FROM_END:
             listing[-1] = False
     return out
 
@@ -273,6 +298,160 @@ def sql_reason(sql, max_rows=20, require_limit=True):
         if nums and max(nums) > max_rows:  # even when the tool's own limit caps the rows
             return "row limit %d is over %d" % (max(nums), max_rows)
     return None
+
+
+# --------------------------------------------------------------------------- statement scope (approved connections)
+
+SCOPE_ENGINES = ("postgres", "mssql")
+_FEDERATION = re.compile(r"\b(?:openquery|openrowset|opendatasource|openxml|dblink\w*)\b", re.I)
+_NAME = re.compile(r"[A-Za-z_#@][A-Za-z0-9_$#@]*(?:\s*\.\s*[A-Za-z_#@][A-Za-z0-9_$#@]*)*")
+_CTE = re.compile(r"([a-z_][a-z0-9_$#@]*)\s*(?:\([^()]*\))?\s+as\s*(?:not\s+)?(?:materialized\s*)?\(")
+_CATALOG_SCHEMAS = frozenset({"pg_catalog", "information_schema", "sys"})
+
+
+def _listed(permitted, key):
+    v = (permitted or {}).get(key) if isinstance(permitted, dict) else None
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, (list, tuple, set, frozenset)) else []
+
+
+def scope_norm(engine, name, quoted, case_sensitive=False):
+    """How `engine` compares an identifier: PostgreSQL folds an unquoted name to lower case and keeps a quoted one;
+    SQL Server compares case-insensitively unless the connection is case-sensitive. Scope lists hold catalog names
+    as stored, so they count as quoted."""
+    if engine == "postgres":
+        return name if quoted else name.lower()
+    return name if case_sensitive else name.casefold()
+
+
+class _Scope:
+    def __init__(self, engine, permitted):
+        self.eng = engine
+        self.cs = bool((permitted or {}).get("case_sensitive"))
+        self.dbs = {self.n(d, True) for d in _listed(permitted, "databases")}
+        self.schemas = {self.n(s, True) for s in _listed(permitted, "schemas")}
+        objs = (permitted or {}).get("objects")
+        self.objects = None
+        if isinstance(objs, (list, tuple, set, frozenset)):  # known objects: anything else could be a synonym
+            self.objects = {".".join(self.n(p, True) for p in o.split(".", 1)) for o in objs if isinstance(o, str) and "." in o}
+
+    def n(self, name, quoted):
+        return scope_norm(self.eng, name, quoted, self.cs)
+
+    def object(self, parts, label):
+        """None when [(name, quoted)] (schema.object or db.schema.object) is inside the scope, else the reason."""
+        joined = ".".join(p for p, _ in parts)
+        if len(parts) >= 4:
+            return "four-part (linked server) name %s" % joined
+        if len(parts) == 1:
+            return "unqualified %s %s: the server's default schema is not assumed" % (label, joined)
+        if len(parts) == 3:
+            if self.n(*parts[0]) not in self.dbs:
+                return "database %s is outside the approved scope" % parts[0][0]
+            parts = parts[1:]
+        if not self.schemas:
+            return "the approved scope lists no schemas for this connection"
+        if self.n(*parts[0]) not in self.schemas:
+            return "schema %s is outside the approved scope" % parts[0][0]
+        if self.objects is not None and "%s.%s" % (self.n(*parts[0]), self.n(*parts[1])) not in self.objects:
+            return "%s %s is not a known object of the approved scope (it could be a synonym)" % (label, joined)
+        return None
+
+
+def statement_scope_reason(sql, engine, permitted):
+    """None when every object `sql` reads lies inside `permitted` ({databases, schemas, case_sensitive, objects?}) of
+    one connection of engine `engine`, else the reason. Run after sql_reason (the read-only check); it does not
+    replace it."""
+    eng = str(engine or "").strip().lower()
+    if eng not in SCOPE_ENGINES:
+        return "no statement scope rules for engine %s (refused, not guessed)" % (eng or "unknown")
+    if not isinstance(sql, str) or not sql.strip():
+        return "empty statement"
+    sql = normalise(sql)
+    tag = "q%sz" % secrets.token_hex(6)  # unguessable placeholder for quoted identifiers
+    names = []
+    scrubbed, why = _lex(sql, names=names, tag=tag)
+    if why:
+        return why
+    parts = [p for p in scrubbed.split(";") if p.strip()]
+    if len(parts) != 1:
+        return "more than one statement"
+    s = parts[0]
+    m = _FEDERATION.search(s)
+    if m:
+        return "federated or linked-server access (%s)" % m.group(0).upper()
+    sc = _Scope(eng, permitted)
+    ph = re.compile(r"^%s(\d+)$" % tag)
+
+    def resolve(name):
+        out = []
+        for p in re.sub(r"\s+", "", name).split("."):
+            hit = ph.match(p)
+            if not hit:
+                out.append((p, False))
+                continue
+            q = names[int(hit.group(1))]
+            if not q.strip() or "." in q:
+                return None
+            out.append((q, True))
+        return out
+    ctes = set(_CTE.findall(s.lower()))
+    for name, fn in _sources(s):
+        ps = resolve(name)
+        if ps is None:
+            return "quoted identifier that is empty or contains a dot"
+        joined = ".".join(p for p, _ in ps)
+        if not any(q for _, q in ps) and CATALOG_SOURCE.fullmatch(joined.lower()):
+            if len(ps) == 3 and sc.n(*ps[0]) not in sc.dbs:
+                return "catalog of database %s, outside the approved scope" % ps[0][0]
+            continue
+        if len(ps) == 1 and not ps[0][1] and not fn and ps[0][0].lower() in ctes:
+            continue
+        why = sc.object(ps, "function" if fn else "object")
+        if why:
+            return why
+    for m in _NAME.finditer(s):  # 3-part names and schema-qualified function calls anywhere (select list, WHERE …)
+        raw = re.sub(r"\s+", "", m.group(0))
+        if "." not in raw:
+            continue
+        ps = resolve(raw)
+        if ps is None:
+            return "quoted identifier that is empty or contains a dot"
+        call = s[m.end():].lstrip()[:1] == "("
+        catalog = (not ps[0][1]) and ps[0][0].lower() in _CATALOG_SCHEMAS
+        if len(ps) >= 4:
+            return "four-part (linked server) name %s" % ".".join(p for p, _ in ps)
+        if len(ps) == 3:
+            if sc.n(*ps[0]) in sc.dbs:
+                if sc.n(*ps[1]) not in sc.schemas and not ((not ps[1][1]) and ps[1][0].lower() in _CATALOG_SCHEMAS):
+                    return "schema %s is outside the approved scope" % ps[1][0]
+            elif sc.n(*ps[0]) not in sc.schemas:
+                return "cross-database reference %s" % ".".join(p for p, _ in ps)
+        elif call and not catalog and sc.n(*ps[0]) not in sc.schemas:
+            return "function in schema %s, outside the approved scope" % ps[0][0]
+    return None
+
+
+def name_scope_reason(value, engine, permitted, schema=None):
+    """A tool's object argument (describe_table table=…, list_tables schema=…), not SQL: "object", "schema.object" or
+    "db.schema.object", plus the separate schema argument when there is one. Exact names (no quoting syntax: a
+    quote or bracket in the value is refused)."""
+    eng = str(engine or "").strip().lower()
+    if eng not in SCOPE_ENGINES:
+        return "no scope rules for engine %s" % (eng or "unknown")
+    sc = _Scope(eng, permitted)
+    vals = [v for v in (schema, value) if v is not None]
+    if any(not isinstance(v, str) or not v.strip() or re.search(r"[\"'`\[\];\x00-\x1f]", v) for v in vals):
+        return "object argument with quoting or control characters"
+    if value is None:
+        return None if sc.n(schema, True) in sc.schemas else "schema %s is outside the approved scope" % schema
+    ps = [(p, True) for p in value.split(".")]
+    if schema is not None:
+        if len(ps) > 1:
+            return "object argument qualified twice"
+        ps = [(schema, True)] + ps
+    if len(ps) == 1:
+        return "unqualified object argument %s: the server's default schema is not assumed" % value
+    return sc.object(ps, "object")
 
 
 # --------------------------------------------------------------------------- MongoDB

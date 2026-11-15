@@ -89,6 +89,40 @@ The `Chitragupta` scheduled task runs `agent tick --from-task` through the stabl
 
 `chitragupta/dashboard/` is a threaded `http.server` on `127.0.0.1`. It reads `data/`, the rendered files and `health.json`. Its only writes are the allowlisted routes in `dashboard/writes.py` (Origin and a per-start token checked, JSON only, size and rate limits): settings through `configstore`, and the actions in `dashboard/actions.py`. `dashboard/dbmap.py` builds the DB map. See [dashboard.md](dashboard.md).
 
+### 5. Database investigation
+
+One backend under `data/db/` serves the dashboard, the CLI, the MCP tools, search and recall
+([database.md](database.md)): `dbmodel` (opaque identities, evidence and claims, basis rules), `dbaccess` (approved
+scope, principal, generations, `decide()` on every record, revocation, quarantine), `dbconnector` (capabilities,
+argument mapping, `postgres` / `mssql` adapters, typed literals, constrained statement builders), `dbstore` (atomic
+JSON records under a lock), `dbingest` (schema cards, tickets' DB flows, the link map and your mappings into the
+graph), `dbflows` (passports, bounded discovery, flows and their stages), `dbtrace` (plans, jobs in phases, sanitized
+observations, investigations, handoff drafts, `database_context`), `dbimpact` (impact, comparison, snapshots, drift and
+reconciliation), `dbviews` (bounded projections: one envelope, HMAC-bound cursors, at most 64 KiB) and `dbunits`
+(search units). Reads only project cached records; the tick ingests and reconciles; record traces run as
+`agent db-trace <job>` through the read-only MCP job with a plan pin the guard enforces. The dashboard's workspace is
+`app/pages/db.js` with `app/lib/dbx.js`, its routes `dashboard/dbmap.py` and its protected actions
+`dashboard/dbactions.py`.
+
+### 6. Companion
+
+The Companion ([companion.md](companion.md)) keeps one durable record per task attempt in `data/workflows/<w_…>/`,
+keyed by profile, Jira binding, canonical repository and clone location; it indexes evidence and decisions and never
+copies transcripts, repository files or credentials. `workflowmodel` is pure (requirement baselines, immutable plan
+versions, the STATE-01 transition table with separate overlays, the approval dispatch states, coverage scoring,
+evidence applicability, reconciliation and the verification ledger); `workflowstore` publishes content-addressed
+checkpoints and then an atomic head under `safety/workflowio.py`'s OS lock with an expected revision, and recovers by
+quarantining incomplete files. `companion` and `companionexecution` hold the explicit actions (save, select, review,
+approve, pause, verify, complete, associate a captured session, record a dispatch outcome); `companionevidence` builds
+evidence from canonical ticket records with stable IDs, keeps the ingest watermark apart from the acknowledged
+cursor, pins cited evidence and runs the tick step `companion` (bounded, after `save`; no model, Git or provider
+call). `companionplanning` proposes requirement baselines from cached Jira cards, orders the Daily Planner and
+validates plans; `companionjobs` queues the explicit paid jobs (reservation in `modelbudget`, one per task, runner
+`agent companion-job <job>`); `jev` is the evaluation adapter whose production transport is blocked. `companiondrafts` (deterministic audience drafts and the decision view), `companionimpact` (impact from recorded links and cached database impact) and `companionattention` (per-profile acknowledge / snooze, presentation only) feed the same projections. CI check runs of your open GitHub PRs are read by `hosts.ci_refresh` inside `gittrack`'s PR refresh and kept per head in the ticket's `git.repos.<repo>.ci`. `companionviews`
+is the one bounded projection service for the dashboard (`/api/companion`, `app/pages/companion.js`,
+`dashboard/companion_api.py`), the CLI (`cli companion`, `/cg:plan`, `/cg:resume`) and the optional native mod's
+read-only MCP bridge (`companion_mcp`, packaged in `companion/`).
+
 ## Runtime layout
 
 The plugin folder moves on every plugin update. Anything that must keep working between sessions therefore calls a **stable runtime** instead. That covers the scheduled task, the data home's git pre-commit hook, the MCP guard and the generated `replay.sh`.
@@ -140,6 +174,11 @@ The default data home is `%USERPROFILE%\Chitragupta`. The file formats are stabl
   data\tickets\<KEY>.json                    per-ticket structured record
   data\timesheets\YYYY-MM-DD.json            the evening worklog as composed / sent
   data\jira\  data\db-schema\  data\qa-trace\   MCP job caches (local only)
+  data\db\                                   database investigation: graph, flows, plans, jobs, your investigations,
+                                             impact / comparison results, snapshots (local only; see database.md)
+  data\workflows\<w_…>\                     Companion tasks: checkpoints\<sha256>.json, head.json, jobs\, quarantine\
+                                             (local only; see companion.md); .budget.json the paid-call ledger,
+                                             .attention.json acknowledged / snoozed attention items
   .worklog\
     config.json  state.json  health.json  README.md
     raw\<day>\<session>.jsonl  raw\<day>\time\<session>.jsonl

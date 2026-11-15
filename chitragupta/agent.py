@@ -6,6 +6,9 @@
     agent rebuild <KEY>... | --all [--dry-run] [--cap-usd N] [--no-brief]
                            rebuild tickets' knowledge from the raw events on disk (chitragupta/rebuild.py)
     agent status           print health.json
+    agent db-trace <JOB>   run one queued record-trace job (dbtrace; started by the dashboard or `cli db run`)
+    agent db-discover      run the queued metadata discovery requests (dbflows.queue_refresh; describe reads only)
+    agent companion-job <JOB>  run one queued Companion plan job (companionjobs; started by Generate/Improve Plan)
 """
 import copy
 import datetime as _dt
@@ -1302,6 +1305,17 @@ class Agent:
             common.save_config(self.cfg, base=self.cfg_base)
             self.cfg_base = copy.deepcopy(self.cfg)
         self._timed("save",self.store.save)
+        if not paused:
+            try:
+                from . import dbingest  # the canonical database-flow records from saved files: no query, no model
+                self._timed("dbingest",dbingest.tick,self.cfg,self.state)
+            except Exception:
+                common.log("agent", "db ingest failed: " + traceback.format_exc())
+            try:
+                from . import companionevidence  # workflow evidence checkpoints from saved tickets: no model, no git
+                self._timed("companion",companionevidence.tick,self.cfg,set(self.store.dirty_tickets))
+            except Exception:
+                common.log("agent", "companion checkpoint failed: " + traceback.format_exc())
         self._timed("health",self.update_health)
         from . import kb5
         changed = self._timed("render",render.render_all,self.store,self.cfg,h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,
@@ -1572,6 +1586,12 @@ def main(argv):
     if cmd in ("worklog-show", "worklog-send", "slack-discover", "jira-card", "schema-card", "qa-trace", "link-map",
                "mcp-ensure"):
         return cmd_worklog(cmd, argv[1:])
+    if cmd in ("db-trace", "db-discover"):  # explicit database jobs: the record trace runner, queued metadata reads
+        from . import dbtrace
+        return dbtrace.agent_main(cmd, argv[1:])
+    if cmd == "companion-job":  # one explicit Companion plan job; never holds the agent lock across the model call
+        from . import companionjobs
+        return companionjobs.agent_main(argv[1:])
     if cmd == "tick":
         rc = cmd_tick(force="--force" in argv)
         if "--from-task" in argv:  # the scheduled task (logon + every 5 min) also keeps the dashboard up

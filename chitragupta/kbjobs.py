@@ -409,7 +409,9 @@ class KBJobs:
             with paths.zip_writer(path + ".tmp") as z:
                 for dp, dns, fns in os.walk(h):
                     rel = os.path.relpath(dp, h).replace("\\", "/")
-                    dns[:] = [d for d in dns if d not in (".git", "raw", "sandbox", "logs", "__pycache__", "locks")]
+                    # db-jobs: a database job's pin, call ledger and transient raw buffer (.worklog/cache/db-jobs)
+                    dns[:] = [d for d in dns if d not in (".git", "raw", "sandbox", "logs", "__pycache__", "locks",
+                                                          "db-jobs")]
                     for fn in fns:
                         if fn == ".env":
                             continue  # credentials never leave their file
@@ -469,6 +471,10 @@ def dbflow_qa_section(t, cfg=None):
               "_Traced on %s (%s, connection `%s`) from the ids used in this ticket's requests: %s._" % (
                   rec.get("fetched_at", "")[:10], rec.get("env", "qa").upper(), rec.get("connection"),
                   ", ".join("`%s`" % x for x in rec.get("start_ids") or [])), ""]
+        if (rec.get("start") or {}).get("how"):
+            L += ["_Start: `%s`, %s._" % ((rec.get("start") or {}).get("table"), rec["start"]["how"]), ""]
+        if rec.get("declined"):
+            L += ["_Declined: %s._" % "; ".join(str(x) for x in rec["declined"]), ""]
         if tr.get("summary"):
             L += [tr["summary"], ""]
         L += ["| Step | Table | Found by | Values | Note |", "|---|---|---|---|---|"]
@@ -477,7 +483,9 @@ def dbflow_qa_section(t, cfg=None):
         L.append("")
         if tr.get("changes"):
             L += ["**What changed** (before → after the replay)", ""]
-            L += ["- `%s.%s`: %s → %s" % (c.get("table"), c.get("column"), c.get("before"), c.get("after")) for c in tr["changes"]]
+            L += ["- `%s.%s`: %s → %s%s" % (c.get("table"), c.get("column"), c.get("before"), c.get("after"),
+                                             "" if c.get("validated") else " (model summary, unvalidated)")
+                  for c in tr["changes"]]
             L.append("")
         L += ["```mermaid", "flowchart LR"]
         prev = None
@@ -539,11 +547,14 @@ def dbmap_section():
     L += ["", "```mermaid", "flowchart TB"]
     for i, hrow in enumerate(hier):
         L.append('  db%d["%s"] --> sc%d["%s"]' % (i, _m(hrow.get("database")), i, _m(hrow.get("schema"))))
-    L += ["```", "", "## Verified links", "", "| From | To | Match | Status | Evidence |", "|---|---|---|---|---|"]
+    L += ["```", "", "## Sampled links", "", "Observed in a QA sample: a sample supports only the sampled "
+          "relationship, never a declared constraint.", "",
+          "| From | To | Match | Sample | Evidence |", "|---|---|---|---|---|"]
+    from . import dbmodel
     for ln in res.get("links") or []:
         s, m = int(ln.get("sampled") or 0), int(ln.get("matched") or 0)
-        status = "verified" if s and m / s >= 0.8 else ("likely" if s and m / s >= 0.3 else "unverified")
-        ln["status"] = status
+        status = dbmodel.sample_label(s, m, rec.get("env") or "qa", rec.get("fetched_at"))
+        ln["status"] = dbmodel.sample_status(s, m)[0].replace("_", " ")
         L.append("| `%s` | `%s` | %d/%d | %s | %s |" % (ln.get("from"), ln.get("to"), m, s, status, _c(ln.get("evidence"))))
     L.append("")
     by = {}

@@ -17,7 +17,7 @@ from chitragupta import cli, common
 from chitragupta import timesheet as T
 
 SKILLS = ["today", "ticket", "timesheet", "trace", "log", "pause", "dashboard", "setup", "doctor", "branches", "check", "branch", "search", "share",
-          "progress"]
+          "progress", "db", "plan", "resume"]
 LAUNCH = 'py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py"'
 
 

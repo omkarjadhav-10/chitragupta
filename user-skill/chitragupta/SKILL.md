@@ -52,7 +52,8 @@ When the Chitragupta plugin is loaded, its read-only MCP server (`mcp__plugin_cg
 questions in one call, in compact Markdown with the file paths to open for detail:
 `search(q, type?, ticket?, repo?, from?, to?)` · `get_ticket(key, section?)` (sections: brief, findings, requests,
 queries, dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-MM-DD, today, yesterday, -N) ·
-`get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name)` ·
+`get_timesheet(period, from?, to?)` · `get_branch_status(key, repo?)` · `get_db_table(name, env?)` · `get_db_flow(id? | start?, kind?, env?)` · `get_db_investigation(id?, q?)` (my saved record traces: sanitized observations, gaps, next check; never runs one) ·
+`get_db_impact(id?, change?)` · `get_db_comparison(id? | left, right)` (cached results only) ·
 `list_tickets(q?, status?, repo?, since?, release?, mine?)` (`release=YYYY-MM`: my tickets scheduled that month;
 `mine=true`: only tickets that are mine now, each with why) · `get_alerts()` (scoped to my tickets) ·
 `get_progress(period?, date?, include_ids?)` (today / week / month / records / wins: my authored commits, committed
@@ -115,6 +116,11 @@ Strict JSON. Credentials, tokens, API keys and person values (names, dates of bi
 customer / account IDs) are always `{{process.env.NAME}}` (ticket-scoped names like ABC1234_FIRST_NAME); everything
 else literal — keep JSON null as null. Use the real captured URL and body; never invent fields.
 
+## Database questions (tables, flows, impact, environment differences, past investigations)
+- A table or column: `get_db_table`; a business flow: `get_db_flow`; "what breaks if I change X": `get_db_impact` (cached; if none, `cli db impact <schema.table[.column]> [--change kind]` computes one from cached metadata); "how does QA differ from dev": `get_db_comparison` (else `cli db compare <left> <right>`); a past record investigation: `get_db_investigation`. `/cg:db` is the explicit command for the same reads.
+- Always say the environment, how fresh the evidence is and its limits; keep direct evidence apart from inferred association; "No recorded impact links" is not "no impact"; a same-named object on two connections is a candidate until confirmed; matching schema says nothing about data or deployed code; a blocked environment stays blocked.
+- Recall never runs anything: a live record trace is an explicit plan the user reviews (`cli db plan`) and runs only when they ask (`cli db run`). Never reuse a key value from an earlier investigation: ask for it again.
+
 ## Mapping a DB flow (only when the user asks, e.g. "map the DB flow for ABC-1234")
 Trace the code path: entry point (controller / listener / integration channel / job) → services → repositories / SQL /
 procs → tables and columns. Answer in prose, then end the final reply with one fenced block:
@@ -131,8 +137,11 @@ procs → tables and columns. Answer in prose, then end the final reply with one
  "table_relations": [{"from": "shop.login_history.customer_id", "to": "shop.customers.id", "kind": "fk",
    "evidence": "LoginHistory.java:22"}]}
 ```
-operation: select | insert | update | delete | upsert | merge | proc. confidence: confirmed (read in code / seen in
-data) | likely | hypothesis. Every entry carries evidence (file:line, query, log line). Emit these blocks only when
+operation: select | insert | update | delete | upsert | merge | proc | publish | consume. confidence: confirmed (read in
+code / seen in data) | likely | hypothesis. Optional, only when known: "event" (topic or event name; with operation
+publish / consume, no table needed), "mapping": [{"from": "shop.orders.id", "to": "OrderCancelled.orderRef",
+"transform": "str(id)"}] (a list for composite or tenant keys), "repo", "revision", "path" (success | cancel | retry |
+error), "path_conditions", "async". Every entry carries evidence (file:line, query, log line). Emit these blocks only when
 asked to save or map something, and only in the final reply.
 
 ## Jira worklog (Slack DM at 20:00) — time, leave, holidays

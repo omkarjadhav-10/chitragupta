@@ -68,7 +68,8 @@ class TestUnitsAndRanking(IdxBase):
             calls = con.execute("SELECT COUNT(*) FROM units WHERE type = 'request' AND ref LIKE '%/call-%'").fetchone()[0]
         finally:
             con.close()
-        self.assertEqual(types, set(self.ix.TYPE_ORDER))
+        # this home holds no database-flow records: their three types are indexed in test_db_drift.Search
+        self.assertEqual(types, set(self.ix.TYPE_ORDER) - set(self.ix.DB_TYPES))
         self.assertEqual(row, ("ABC-1005", "shop-web", "#/tickets/ABC-1005?tab=branches", "data/tickets/ABC-1005.json"))
         self.assertEqual(calls, 1)  # the captured API call, next to the two saved steps
 

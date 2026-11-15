@@ -37,7 +37,9 @@
               "delete",
               "upsert",
               "merge",
-              "proc"
+              "proc",
+              "publish",
+              "consume"
             ]
           },
           "table": {
@@ -85,12 +87,79 @@
               "likely",
               "hypothesis"
             ]
+          },
+          "event": {
+            "type": "string"
+          },
+          "mapping": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "transform": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "repo": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "enum": [
+              "success",
+              "cancel",
+              "retry",
+              "error"
+            ]
+          },
+          "path_conditions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "async": {
+            "type": "boolean"
           }
         },
         "required": [
           "component",
           "operation",
-          "table",
           "evidence"
         ]
       }

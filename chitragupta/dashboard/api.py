@@ -887,16 +887,21 @@ def _schema_columns():
     return full, {k: v[0] for k, v in bare.items() if len(v) == 1}  # a bare name only when it is unambiguous
 
 
-def _verified_links(lm):
-    """Link-map links that QA sampling confirmed (>= 80 % of sampled values found), as lowercase part lists."""
+def _sampled_links(lm):
+    """Link-map links whose QA sample matched (>= 80 % of sampled values found), as (from parts, to parts, sample).
+    A sample supports only the sampled relationship: observed, never verified."""
+    from .. import dbmodel
     out = []
     for ln in ((lm or {}).get("result") or {}).get("links") or []:
         try:
             s, m = int(ln.get("sampled") or 0), int(ln.get("matched") or 0)
         except (TypeError, ValueError, AttributeError):
             continue
-        if ln.get("checked", True) and s and m / s >= 0.8:
-            out.append((str(ln.get("from") or "").lower().split("."), str(ln.get("to") or "").lower().split(".")))
+        if ln.get("checked", True) and s and m / s >= dbmodel.SAMPLE_STRONG:
+            sample = {"sampled": s, "matched": m, "ratio": round(m / s, 2), "basis": "observed_sample",
+                      "basis_label": dbmodel.BASIS_LABEL["observed_sample"],
+                      "label": dbmodel.sample_label(s, m, (lm or {}).get("env") or "qa", (lm or {}).get("fetched_at"))}
+            out.append((str(ln.get("from") or "").lower().split("."), str(ln.get("to") or "").lower().split("."), sample))
     return out
 
 
@@ -905,19 +910,20 @@ def _ends_with(parts, ref):
 
 
 def _link_matches(a, b, links):
-    """A catalog relation a -> b ("table.column", "schema.table.column" or plain tables) matches a verified link
-    when each side is a suffix of the link's side (with or without the column), in either direction."""
+    """The sample of the link a catalog relation a -> b ("table.column", "schema.table.column" or plain tables) names
+    when each side is a suffix of the link's side (with or without the column), in either direction; else None."""
     a, b = a.lower().split("."), b.lower().split(".")
-    for lf, lt in links:
+    for lf, lt, sample in links:
         for x, y in ((lf, lt), (lt, lf)):
             if (_ends_with(x, a) or _ends_with(x[:-1], a)) and (_ends_with(y, b) or _ends_with(y[:-1], b)):
-                return True
-    return False
+                return sample
+    return None
 
 
 def knowledge():
     """The knowledge base the tick builds from sessions: tables (with columns from the QA schema cards), relations
-    (verified = confirmed by the QA link map), the code that writes each table, APIs and integrations."""
+    (sample_matched: the QA link map's sample matched; observed in a sample, not a verified constraint), the code that
+    writes each table, APIs and integrations."""
     from .. import relevance
     cat = relevance.catalog_view(read_json_cached(common.hp("data", "catalog.json")) or {},
         lambda t: read_json_cached(common.hp("data", "tickets", t + ".json")))
@@ -933,14 +939,15 @@ def knowledge():
                        "key_columns": _strs(t.get("key_columns")), "columns": _strs(cols, 400),
                        "relations": _strs(t.get("relations"), 60), "tickets": _strs(t.get("tickets")),
                        "last_seen": t.get("last_seen") or ""})
-    links = _verified_links(lm)
+    links = _sampled_links(lm)
     relations = []
     for r in (cat.get("db_relations") or {}).values():
         if not isinstance(r, dict):
             continue
         a, b = str(r.get("from") or ""), str(r.get("to") or "")
+        sample = _link_matches(a, b, links) if a and b else None
         relations.append({"from": a, "to": b, "kind": r.get("kind") or "", "evidence": _cut(r.get("evidence"), EVIDENCE_MAX),
-                          "tickets": _strs(r.get("tickets")), "verified": bool(a and b and _link_matches(a, b, links))})
+                          "tickets": _strs(r.get("tickets")), "sample_matched": bool(sample), "sample": sample})
     relations.sort(key=lambda r: (r["from"], r["to"]))
     writers = []
     for w in (cat.get("db_writers") or {}).values():
@@ -976,7 +983,7 @@ def knowledge():
         linkmap = {"env": lm.get("env") or "", "fetched_at": lm.get("fetched_at") or "",
                    "schemas": len({(h.get("database"), h.get("schema")) for h in hier}),
                    "tables": sum(len(h.get("tables") or []) for h in hier),
-                   "links": len(res.get("links") or []), "verified": len(links)}
+                   "links": len(res.get("links") or []), "sample_matched": len(links)}
     return {"tables": tables, "relations": relations, "writers": writers, "apis": apis, "integrations": integrations,
             "linkmap": linkmap}
 

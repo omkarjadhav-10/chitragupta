@@ -55,6 +55,7 @@ from ..safety import paths
 from . import api
 from . import writes
 from . import actions  # noqa: F401 — registers the allowlisted actions
+from . import companion_api  # noqa: F401 — protected local workflow editor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -519,8 +520,20 @@ class Handler(BaseHTTPRequestHandler):
             from . import dbmap
             data = dbmap.table(q("key")[:200], 2 if q("hops") == "2" else 1)
             return self.send_json(data) if data else self.send_json({"error": "unknown table"}, 404)
+        if path.startswith("/api/db/"):
+            from . import dbmap
+            if path in dbmap.VIEW_ROUTES:  # read-only projections: no query, no ingestion, nothing written
+                code, data = dbmap.view(path, q, cfg)
+                return self.send_json(data, code)
         if path == "/api/setup":
             return self.send_json(api.setup())
+        if path == "/api/companion":
+            try:
+                return self.send_json(companion_api.read(q("operation") or "snapshot", q("workflow"), q("ticket"), q("cursor")))
+            except PermissionError as e:
+                return self.send_json({"error": str(e), "revoke": True}, 403)
+            except (ValueError, TypeError) as e:
+                return self.send_json({"error": str(e)}, 400)
         if path == "/api/tickets":
             return self.send_json(api.tickets(q("q")[:200]))
         if path == "/api/releases":

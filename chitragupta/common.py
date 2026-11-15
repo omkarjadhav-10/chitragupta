@@ -52,6 +52,16 @@ def internal():
     return os.environ.get("CHITRAGUPTA_INTERNAL") == "1" or os.environ.get("WORKLOG_INTERNAL") == "1"
 
 
+DB_PIN_ENV = "CHITRAGUPTA_DB_PIN"
+
+
+def db_pin_path():
+    """The plan pin a database row-trace job gave its own `claude -p` call ("" when none). It only adds a restriction
+    to the guard (safety.mcp.pin_reason: every call must be one of the job's pinned calls); without it the ordinary
+    guard decides alone, as for every other job."""
+    return os.environ.get(DB_PIN_ENV) or ""
+
+
 # Set on every child process. Both names until the old worklog hooks are retired.
 INTERNAL_ENV = {"CHITRAGUPTA_INTERNAL": "1", "WORKLOG_INTERNAL": "1"}
 

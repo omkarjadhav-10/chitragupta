@@ -18,11 +18,25 @@ only with the read tools `/cg:setup` classified as read, through the same read-o
 MCP jobs." A second floor holds here: the tool must also be one of the provider's classified PR / branch reads below
 (GIT_HOST_READ), and a tool that takes an action / method argument only with a read action. An unknown provider has
 no read tools at all.
+
+Approved scope (a database server entry with `scopes`, written from mcp.database.scope): after the connection check,
+a call to a connection without a scope entry is refused, schema / object arguments must name a permitted schema, and
+a query tool's statement must pass query.statement_scope_reason for that connection's engine and permitted
+databases / schemas. Without `scopes` (no explicit scope configured) nothing here changes.
+
+Plan pin (profile mcp, a row-trace job's own `claude -p` call, CHITRAGUPTA_DB_PIN = <home>/.worklog/cache/db-jobs/
+<job>.pin.json): after the ordinary guard allows a call, it is allowed only when (tool, connection, sha256 of the
+statement) is one of the pin's calls not yet used (each use is claimed once with an exclusive marker file and appended
+to <job>.calls.jsonl), before the pin's deadline_epoch, without a <job>.cancel flag, and while the access policy
+generation (dbaccess.policy_generation) still equals the pin's. The pin can only refuse more; it never allows a call
+the ordinary guard refused.
 """
+import hashlib
 import json
 import os
 import re
 import shlex
+import time
 
 from .. import common
 from . import query
@@ -73,6 +87,7 @@ ACTION_KEYS = ("action", "method")
 # mcpserver.TOOL_NAMES) so the guard never imports the server. Session profile only: internal calls never see it.
 OWN_MCP_SERVER = "plugin_cg_chitragupta"
 OWN_MCP_TOOLS = frozenset({"search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table",
+                           "get_db_flow", "get_db_investigation", "get_db_impact", "get_db_comparison",
                            "list_tickets", "get_alerts", "get_progress"})
 # Policy A for another plugin's MCP tools during a /cg: command: denied (a /cg: command only uses Chitragupta's tools),
 # but they're the other plugin's own background calls, not an attempt to write: logged with this category and left
@@ -117,7 +132,7 @@ def mcp_reason(tool_name, tool_input, allow=None):
         return git_host_reason(srv.get("provider"), tool, inp)
     max_rows = int(allow.get("max_rows") or 20)
     if srv.get("connections") is not None:
-        why = connection_reason(srv, tool, inp)
+        why = connection_reason(srv, tool, inp) or scope_reason(srv, tool, inp)
         if why:
             return why
     if tool in (srv.get("query_tools") or []):
@@ -140,8 +155,128 @@ def mcp_reason(tool_name, tool_input, allow=None):
         m = query.MONGO_WRITE_KEYS.search(json.dumps(rest, ensure_ascii=False))
         if m:
             return "write operator or option %s next to the statement" % m.group(0).strip('":')
-        return query.sql_reason(sql, max_rows, require_limit=not capped)
+        return query.sql_reason(sql, max_rows, require_limit=not capped) or _statement_scope(srv, inp, sql)
     return None
+
+
+# --------------------------------------------------------------------------- approved scope (allow.json `scopes`)
+
+SCHEMA_ARGS = ("schema", "schema_name", "schemaname", "owner")
+OBJECT_ARGS = ("table", "table_name", "tablename", "object", "object_name", "view", "view_name")
+
+
+def _scope_of(srv, inp):
+    """(None, None) without `scopes`; else (connection, its scope dict or None)."""
+    scopes = srv.get("scopes")
+    if not isinstance(scopes, dict):
+        return None, None
+    conns = [str(v) for k, v in inp.items() if _conn_key(k) and isinstance(v, (str, int)) and not isinstance(v, bool)]
+    if not conns:
+        return "", None
+    sc = scopes.get(conns[0])
+    return conns[0], sc if isinstance(sc, dict) else None
+
+
+def scope_reason(srv, tool, inp):
+    """A database server with `scopes`: the call's connection has an approved scope, and its schema / object arguments
+    name only permitted schemas. Connectionless calls (connection_reason already allowed them) pass."""
+    conn, sc = _scope_of(srv, inp)
+    if conn is None or conn == "":
+        return None
+    if sc is None:
+        return "connection %s has no approved scope" % conn[:80]
+    names = srv.get("scope_args") if isinstance(srv.get("scope_args"), dict) else {}
+    s_keys = set(SCHEMA_ARGS) | {str(k).lower() for k in names.get("schema") or []}
+    o_keys = set(OBJECT_ARGS) | {str(k).lower() for k in names.get("table") or []}
+    schema = [v for k, v in inp.items() if str(k).lower() in s_keys]
+    objs = [v for k, v in inp.items() if str(k).lower() in o_keys]
+    if len(schema) > 1 or len(objs) > 1:
+        return "more than one schema or object argument"
+    if not schema and not objs:
+        return None
+    return query.name_scope_reason(objs[0] if objs else None, sc.get("engine"), sc, schema[0] if schema else None)
+
+
+def _statement_scope(srv, inp, sql):
+    conn, sc = _scope_of(srv, inp)
+    if conn is None:
+        return None
+    if sc is None:
+        return "connection %s has no approved scope" % (conn or "?")[:80]
+    return query.statement_scope_reason(sql, sc.get("engine"), sc)
+
+
+# --------------------------------------------------------------------------- plan pin (CHITRAGUPTA_DB_PIN)
+
+PIN_DIR = ("cache", "db-jobs")
+PIN_NAME = re.compile(r"^(j_[0-9a-f]{8,40})\.pin\.json$")
+
+
+def call_statement(inp):
+    """What a pin hashes for a call: the statement of a SQL call (stripped), else the call's other arguments as
+    canonical JSON (the connection argument is pinned separately)."""
+    inp = inp if isinstance(inp, dict) else {}
+    sql = next((inp[k] for k in SQL_KEYS if isinstance(inp.get(k), str)), None)
+    if sql is not None:
+        return sql.strip()
+    return json.dumps({k: v for k, v in inp.items() if not _conn_key(k)}, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, default=str)
+
+
+def call_digest(inp):
+    return hashlib.sha256(call_statement(inp).encode("utf-8")).hexdigest()
+
+
+def _call_connection(inp):
+    conns = [str(v) for k, v in (inp or {}).items() if _conn_key(k) and isinstance(v, (str, int)) and not isinstance(v, bool)]
+    return conns[0] if len(conns) == 1 else ""
+
+
+def pin_reason(pin_path, tool_name, tool_input, generation=None, now=None):
+    """None when the call is an unused call of the job's pin (and claims it), else the reason. `generation`: the
+    current policy generation (computed from the config when None)."""
+    from . import paths
+    d = os.path.abspath(common.wl(*PIN_DIR))
+    p = os.path.abspath(str(pin_path or ""))
+    m = PIN_NAME.match(os.path.basename(p))
+    if not m or os.path.normcase(os.path.dirname(p)) != os.path.normcase(d):
+        return "plan pin outside Chitragupta's job folder"
+    job = m.group(1)
+    pin = common.read_json(p, None)
+    if not isinstance(pin, dict) or pin.get("job") != job or not isinstance(pin.get("calls"), list):
+        return "plan pin unreadable or not for job %s" % job
+    if os.path.exists(os.path.join(d, job + ".cancel")):
+        return "job %s was cancelled" % job
+    deadline = pin.get("deadline_epoch")
+    if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+        return "plan pin without a deadline"
+    if (time.time() if now is None else now) > deadline:
+        return "job %s is past its deadline" % job
+    if generation is None:
+        from .. import dbaccess
+        generation = dbaccess.policy_generation(common.load_config())
+    if not pin.get("policy_generation") or pin.get("policy_generation") != generation:
+        return "the access policy changed since job %s was planned" % job
+    server, tool = split_tool(str(tool_name or ""))
+    if not server or server != pin.get("server"):
+        return "server %s is not in job %s's plan" % (server or tool_name, job)
+    inp = tool_input if isinstance(tool_input, dict) else {}
+    conn, digest = _call_connection(inp), call_digest(inp)
+    matched = False
+    for i, c in enumerate(pin["calls"]):
+        if not isinstance(c, dict) or c.get("tool") != tool or str(c.get("connection") or "") != conn or \
+                c.get("sha256") != digest:
+            continue
+        matched = True
+        try:
+            os.close(paths.create_exclusive(os.path.join(d, "%s.used.%d" % (job, i)), caller="safety.pin"))
+        except FileExistsError:
+            continue  # this copy was used; an identical later entry may still be free
+        paths.append_text(os.path.join(d, job + ".calls.jsonl"), json.dumps(
+            {"at": common.now_iso(), "call": i, "tool": tool, "connection": conn, "sha256": digest}) + "\n",
+            caller="safety.pin")
+        return None
+    return ("pinned call already used (job %s)" % job) if matched else ("call is not in job %s's plan" % job)
 
 
 def _is_mongo(srv, inp):
@@ -331,7 +466,11 @@ def reason(profile, tool_name, tool_input, cfg=None, server_info=None):
     if profile == "none":
         return None if tool_name == "StructuredOutput" else "no tools in this job (%s)" % tool_name
     if profile == "mcp":
-        return None if tool_name == "StructuredOutput" else mcp_reason(tool_name, tool_input)
+        if tool_name == "StructuredOutput":
+            return None
+        why = mcp_reason(tool_name, tool_input)  # the ordinary guard first, always
+        pin = common.db_pin_path()
+        return why or (pin_reason(pin, tool_name, tool_input) if pin else None)
     cfg = common.load_config() if cfg is None else cfg
     if profile == "slack-send":
         return slack_send_reason(tool_name, tool_input, cfg)

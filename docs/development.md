@@ -81,6 +81,26 @@ python scripts/ui/run.py [--shots <folder>]      # every page, explicit light/da
 
 It fails on a serious or critical axe violation (WCAG 2.2 AA; axe-core is vendored in `scripts/ui/vendor/`, dev only), a console error, any request leaving `127.0.0.1`, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check: skip link first, focus visible and targets of at least 24 px on every stop, the palette, tabs, `?` and `g` shortcuts, and the live event stream. `--shots` saves a screenshot of every page.
 
+The same run merges the database scenario of `tests/dbfixture.py` into that home (`scripts/ui/dbhome.py`: two qa
+connections, a second permitted environment, a blocked one, a denied one, a delayed refund, a saved flow and
+investigation) and `scripts/ui/dbcheck.js` first runs the seven database walkthroughs (discover one table, explain one
+operation, trace a record across two databases, inspect a missing downstream observation, analyze a column change,
+compare two permitted environments, revoke a connection and a profile) at 390, 768, 900, 1280 and 1440 px in light and
+dark, then a keyboard-only pass of Explain flow and Record journey. The trace runs in the server process through the
+fake database MCP: `mcpjobs.run` is a tripwire, so no model, provider or real database is ever reached. Besides the
+checks above it fails on any transport, model or process call while rendering (counted in `<home>/ui-db-calls.json`),
+a request URL carrying the record key, a lost input after an error or a refresh, and revoked data that is still
+reachable (views, search, detail by ID, the DB map rail).
+
+```
+python scripts/ui/run.py --db-only --shots notes/local-tests/db-review-assets/dashboard   # only the database walkthroughs
+python scripts/ui/run.py --no-db                                                         # the rest, without the scenario
+```
+
+`--shots` also copies one screenshot per walkthrough at 1440 px light and 390 px dark into the folder's parent. For
+iterating, `CG_UI_DB_QUICK=light:1440` runs one theme and width, `CG_UI_DB_WALKS=discover,trace` some walkthroughs and
+`CG_UI_DB_VERBOSE=1` adds page text to failures.
+
 The page is plain ES modules with no build step: `chitragupta/dashboard/app/` (`main.js`, `lib/`, `pages/`, `app.css`) and the vendored Preact in `third_party/preact/`. Components use a small tagged-template helper (`lib/html.js`) instead of JSX.
 
 ### End-to-end (opt-in, real model calls)
@@ -107,6 +127,15 @@ python scripts/parity.py --old-engine <legacy .worklog/engine> --source <data ho
 ```
 
 It writes `<work>/parity-report.md` and nothing outside `<work>`. Use it whenever you touch rendering, merging or the Jira-worklog layout.
+
+### Companion
+
+`tests/test_companion*.py` and `tests/test_jev.py` cover the workflow core, planning, jobs, the Jev adapter (stub
+transports only) and the projections, including a two-process save race and a 1,000-task scale test that prints p50 /
+p95 timings. `python scripts/ui/companion.py notes/local-tests/companion-review-assets` walks the Companion page at
+390–1440 px in both themes against a synthetic home, with the plan job driven by a stub caller. The optional native
+mod has its own offline tests: `claude plugin test companion` and `claude plugin validate companion`. They run the
+mod's handlers in Claude Code's test kit; they are not a walkthrough of a painted pane.
 
 ## Scans
 

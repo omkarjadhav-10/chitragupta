@@ -3,6 +3,18 @@ which condition. Built from extraction `data_flow[]` / `table_relations[]` and `
 
 data/tickets/<T>.json:  data_flow{key: entry}, table_relations{key: rel}, dbflow_conflicts[], dbflow_overview
 Rendered: tickets/<T>/db-flow.md and knowledge/db-map.md.
+
+Flow-fact format (additive): besides scenario/step/trigger/component/operation/table/columns/via/transaction/
+evidence/confidence an entry may carry, only when given (old records never have them, nothing requires them):
+  event            the event or topic name; operation `publish` / `consume` says which side the component is on
+  mapping          [{"from": "shop.orders.id" | [..], "to": "OrderCancelled.orderRef" | [..], "transform": "..."}]
+                   (composite and tenant keys are lists)
+  repo, revision   the repository (folder name or canonical id) and revision the evidence was read at
+  path             success | cancel | retry | error;  path_conditions: ["..."]
+  async            true / false
+An entry with an event and no table is kept (one with neither is dropped, as before). The table-based views
+(entries(), db-flow.md, the catalog) skip table-less entries, so old inputs render byte-identically; the canonical
+graph (dbingest) reads every entry.
 """
 import json
 import re
@@ -11,10 +23,15 @@ from . import common
 
 RANK = {"confirmed": 3, "likely": 2, "hypothesis": 1}
 OPS = ("select", "insert", "update", "delete", "upsert", "merge", "proc")
+EVENT_OPS = ("publish", "consume")
+PATHS = ("success", "cancel", "retry", "error")
+OPTIONAL = ("event", "mapping", "repo", "revision", "path", "path_conditions", "async")
 
 
 def flow_key(t, e):
-    return common.stable_id(t, e.get("scenario") or "", e.get("component") or "", (e.get("table") or "").lower(), e.get("operation") or "")
+    # an event-only entry is keyed by its event where a table entry has its table (old keys unchanged)
+    target = (e.get("table") or "").lower() or ("event:" + str(e.get("event")) if e.get("event") else "")
+    return common.stable_id(t, e.get("scenario") or "", e.get("component") or "", target, e.get("operation") or "")
 
 
 def rel_key(r):
@@ -34,7 +51,42 @@ def _norm_entry(e, day, source):
             "table": e.get("table") or "", "columns_read": [c for c in e.get("columns_read") or [] if c],
             "columns_written": cw, "via": e.get("via") or "", "transaction": e.get("transaction") or "",
             "evidence": [x for x in e.get("evidence") or [] if x][:8], "confidence": e.get("confidence") if e.get("confidence") in RANK else "likely",
-            "date": day, "source": source}
+            "date": day, "source": source, **_optional(e)}
+
+
+def _refs(v):
+    """A mapping side: one name or a list of names (a composite / tenant key) -> list of names, or None."""
+    vals = [v] if isinstance(v, str) else v if isinstance(v, list) else None
+    if not vals:
+        return None
+    vals = [str(x).strip()[:200] for x in vals if isinstance(x, str) and x.strip()]
+    return vals[:8] or None
+
+
+def _optional(e):
+    """The optional flow facts of an entry, only those it carries (module doc)."""
+    out = {}
+    if isinstance(e.get("event"), str) and e["event"].strip():
+        out["event"] = e["event"].strip()[:200]
+    maps = []
+    for m in e.get("mapping") or [] if isinstance(e.get("mapping"), list) else []:
+        if isinstance(m, dict) and _refs(m.get("from")) and _refs(m.get("to")):
+            maps.append({"from": _refs(m.get("from")), "to": _refs(m.get("to")),
+                         "transform": str(m.get("transform") or "")[:300]})
+    if maps:
+        out["mapping"] = maps[:20]
+    for k in ("repo", "revision"):
+        if isinstance(e.get(k), str) and e[k].strip():
+            out[k] = e[k].strip()[:300]
+    path = str(e.get("path") or "").lower()
+    if path in PATHS:
+        out["path"] = path
+    conds = [str(c)[:200] for c in e.get("path_conditions") or [] if isinstance(c, str) and c.strip()]         if isinstance(e.get("path_conditions"), list) else []
+    if conds:
+        out["path_conditions"] = conds[:8]
+    if isinstance(e.get("async"), bool):
+        out["async"] = e["async"]
+    return out
 
 
 def merge(store, t, flows, relations, day, source="extraction", overview=None):
@@ -45,7 +97,7 @@ def merge(store, t, flows, relations, day, source="extraction", overview=None):
     conflicts = tk.setdefault("dbflow_conflicts", [])
     n_new = n_upd = 0
     for e in flows or []:
-        if not e.get("table") or not e.get("component"):
+        if not (e.get("table") or (isinstance(e.get("event"), str) and e["event"].strip())) or not e.get("component"):
             continue
         rec = _norm_entry(e, day, source)
         k = flow_key(t, rec)
@@ -69,6 +121,9 @@ def merge(store, t, flows, relations, day, source="extraction", overview=None):
         keep_cols = {c["column"] for c in rec["columns_written"]}
         merged["columns_written"] = rec["columns_written"] + [c for c in old.get("columns_written") or [] if c["column"] not in keep_cols]
         merged["first_date"] = old.get("first_date") or old.get("date")
+        for k2 in OPTIONAL:  # an optional fact recorded earlier stays until an update names it again
+            if k2 not in merged and k2 in old:
+                merged[k2] = old[k2]
         if {k2: v for k2, v in merged.items() if k2 != "date"} != {k2: v for k2, v in old.items() if k2 != "date"}:
             df[k] = merged
             n_upd += 1
@@ -104,7 +159,8 @@ def entries(tk, levels=("core",)):
     """What the views show: the consolidated map when there is one, else the raw entries."""
     v = tk.get("dbflow_view") or {}
     rows = v["data_flow"] if v.get("data_flow") else list(tk.get("data_flow", {}).values())
-    return [e for e in rows if not e.get("archived") and not e.get("review") and e.get("relevance", "core") in levels]
+    return [e for e in rows if not e.get("archived") and not e.get("review") and e.get("relevance", "core") in levels
+            and e.get("table")]  # event-only facts live in the canonical graph (dbingest), not the table views
 
 
 def relations(tk, levels=("core",)):
@@ -127,8 +183,9 @@ def consolidation_input(t, tk):
                          key=lambda i: (i.get("date", ""), i.get("time", "")), reverse=True)
                          if i.get("kind") in ("root_cause", "finding", "how_it_works", "fix")][:25],
             "queries": [{"purpose": q.get("purpose"), "tables": q.get("tables")} for q in list(tk.get("queries", {}).values())[-25:]],
-            "data_flow": [{k: e.get(k) for k in ("scenario", "step", "trigger", "component", "operation", "table", "columns_read",
-                                                 "columns_written", "via", "evidence", "confidence", "source")}
+            "data_flow": [dict({k: e.get(k) for k in ("scenario", "step", "trigger", "component", "operation", "table", "columns_read",
+                                                      "columns_written", "via", "evidence", "confidence", "source")},
+                               **{k: e[k] for k in OPTIONAL if k in e})
                           for e in tk.get("data_flow", {}).values()],
             "table_relations": list(tk.get("table_relations", {}).values()),
             "recorded_conflicts": tk.get("dbflow_conflicts") or []}
@@ -152,7 +209,7 @@ def consolidate(store, t, cfg, caller=None):
         store.touch_ticket(t)
         return 0.0
     flows = [_norm_entry(e, tk.get("dbflow_updated") or "", "consolidated") for e in res.get("data_flow") or []
-             if e.get("table") and e.get("component")]
+             if (e.get("table") or e.get("event")) and e.get("component")]
     if flows:
         tk["dbflow_view"] = {"overview": res.get("overview") or "", "scenarios": res.get("scenarios") or [],
                              "data_flow": flows,

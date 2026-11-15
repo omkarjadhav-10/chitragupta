@@ -207,7 +207,8 @@ class SchemaVersionTests(Isolated, unittest.TestCase):
         v5 = [step for step in migrate.KB_STEPS if step[0].startswith("kb5-")]
         self.assertEqual(v5[-1], ("kb5-schema-version", "kb5:schema_v5"))
         position = migrate.KB_STEPS.index(v5[-1])
-        self.assertTrue(all(step[0].startswith("kb51-") for step in migrate.KB_STEPS[position + 1:]))
+        # after the v5 family: the 0.5.1 steps, then the database-flow step (DB-24, db1-canonical-graph)
+        self.assertTrue(all(step[0].startswith(("kb51-", "db1-")) for step in migrate.KB_STEPS[position + 1:]))
 
 
 if __name__ == "__main__":

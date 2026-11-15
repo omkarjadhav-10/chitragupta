@@ -866,3 +866,34 @@ dialog.palette { width: min(680px, calc(100vw - 32px)); margin-top: 10vh; }
 .pfgroup .pfacct label.field { min-width: 0; }
 .pfgroup .pfacct input, .pfgroup .pfacct select, .pfadd input { max-width: 100%; }
 .history-desk .pcal a.dcell { text-decoration: none; color: inherit; }
+/* Database investigation workspace (pages/db.js): long names wrap, the full value stays in the title */
+.wrapname { overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.dbx { display: grid; gap: var(--s4); min-width: 0; }
+.dbx-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.dbx-states { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.dbx-states li { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; font-size: var(--fs-s); color: var(--ink-2); }
+.dbx-start { display: grid; gap: var(--s1); }
+.dbx-start label { font-size: var(--fs-s); color: var(--ink-2); }
+.dbx-row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.dbx-row input { flex: 1 1 220px; min-width: 0; }
+.dbx-cands .rlist button, .dbx-saved .rlist button { text-align: left; max-width: 100%; }
+.dbx-scope { margin: 0; font-size: var(--fs-s); }
+.dbx-steps { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.dbx-step { border-bottom: 1px solid var(--rule); }
+.dbx-step.on { background: var(--accent-soft); }
+.dbx-step.k-unknown_boundary .dbx-what { font-style: italic; }
+.dbx-stepbtn { display: grid; grid-template-columns: 2.2em minmax(0, 1fr) auto; gap: var(--s2); width: 100%; text-align: left; background: none;
+  border: 0; padding: var(--s2) var(--s1); font: inherit; color: inherit; cursor: pointer; align-items: baseline; }
+.dbx-stepbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.dbx-n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.dbx-what { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: baseline; min-width: 0; }
+.dbx-kind { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
+.basis .status { white-space: normal; }
+.basis.b-inferred .status { font-style: italic; }
+.dbx-detail { border: 1px solid var(--rule); border-left: 3px solid var(--accent); padding: var(--s3); border-radius: var(--r-card); min-width: 0; }
+.dbx-ev, .dbx-gaps { margin: 0; padding-left: 1.2em; display: grid; gap: var(--s1); font-size: var(--fs-s); }
+.dbx-passport { min-width: 0; }
+@media (max-width: 600px) { .dbx-stepbtn { grid-template-columns: 2em minmax(0, 1fr); } .dbx-stepbtn .basis { grid-column: 2; } }
+.dbx > *, .dbx .tabpanel, .dbx .tabpanel > div { min-width: 0; }
+.dbx-passport h3 { flex-wrap: wrap; justify-content: flex-start; }
+.dbx-passport h3 > *, .dbx-passport .tablewrap { min-width: 0; max-width: 100%; }

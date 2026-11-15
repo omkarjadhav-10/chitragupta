@@ -18,8 +18,14 @@ One full-text index over your data home answers the dashboard's Search page and 
 | `dblink` | DB link: a catalog relation, or a link in the QA link map | Knowledge → DB map | `knowledge/db-map.md` |
 | `integration` | integration: system, artifact, notes | Knowledge → Integrations | `knowledge/integrations.md` |
 | `day` | daily file | `#/day/<date>` | `daily/<yyyy>/<mm>/<date>.md` |
+| `dbobject` | database object you may see: qualified name, kind, connection, environment, column names and types | Database (a flow from it) | `data/db/graph/nodes.json` |
+| `dbflow` | saved database flow: title, environment, step labels | Database → the flow | `data/db/flows/<id>.json` |
+| `dbinvestigation` | one of **your** record investigations: its flow, environment, step objects and statuses | Database → Record journey | `data/db/investigations/<id>.json` |
 
-Headers, request bodies and tokens of captured calls are not indexed.
+Headers, request bodies and tokens of captured calls are not indexed. Database units never hold a row value, a start
+key, SQL text, an objective or a note; they are built from what you may see, and every database result is checked
+against your access again when you search, so a revoked connection, a quarantined object or another person's
+investigation yields nothing (no title, count or snippet) on the very next search.
 
 ## Searching
 

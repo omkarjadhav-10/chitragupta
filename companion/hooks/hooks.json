@@ -1,0 +1,4 @@
+{
+  "description": "Optional native companion; core capture hooks remain in cg.",
+  "modules": ["./register.js"]
+}

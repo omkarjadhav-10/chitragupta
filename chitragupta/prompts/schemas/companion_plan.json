@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string"},
+    "approach": {"type": "string"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "kind": {"type": "string", "enum": ["implementation", "verification"]},
+          "depends_on": {"type": "array", "items": {"type": "string"}},
+          "criteria": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["id", "text", "kind", "depends_on", "criteria"],
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "component": {"type": "string"},
+          "basis": {"type": "string", "enum": ["evidence", "proposed new file"]}
+        },
+        "required": ["path", "component", "basis"],
+        "additionalProperties": false
+      }
+    },
+    "database": {"type": "string"},
+    "criteria_mapping": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": {"type": "string"},
+          "steps": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["criterion", "steps"],
+        "additionalProperties": false
+      }
+    },
+    "edge_cases": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {"type": "string"},
+          "expected": {"type": "string"}
+        },
+        "required": ["scenario", "expected"],
+        "additionalProperties": false
+      }
+    },
+    "verification": {"type": "array", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "missing": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["summary", "approach", "steps", "files", "database", "criteria_mapping", "edge_cases", "risks",
+               "tests", "verification", "assumptions", "missing"],
+  "additionalProperties": false
+}

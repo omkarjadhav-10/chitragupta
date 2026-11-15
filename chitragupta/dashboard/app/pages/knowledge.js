@@ -1,4 +1,4 @@
-// Knowledge: the DB map explorer (search a table, see its links and which the QA link map verified, zoom and pan),
+// Knowledge: the DB map explorer (search a table, see its links and which a QA link-map sample matched, zoom and pan),
 // the API catalog with filters, and integrations.
 import { useEffect, useMemo, useState } from '/vendor/hooks.module.js';
 import { html } from '../lib/html.js';
@@ -18,7 +18,7 @@ function mapSource(tables, rels, focus) {
   const use = focus ? rels.filter((r) => sameTable(r.from, focus) || sameTable(r.to, focus)) : rels;
   if (focus) id(focus);
   else tables.forEach((t) => id(t.name));
-  use.forEach((r) => { lines.push('  ' + id(r.from) + (r.verified ? ' -->|' : ' -.->|') + lbl(r.kind || 'link') + '| ' + id(r.to)); });
+  use.forEach((r) => { lines.push('  ' + id(r.from) + (r.sample_matched ? ' -->|' : ' -.->|') + lbl(r.kind || 'link') + '| ' + id(r.to)); });
   names.forEach((n, i) => lines.splice(1 + i, 0, '  n' + i + '[' + lbl(focus ? n : short(n)) + ']'));
   if (focus) lines.push('  style n0 stroke-width:3px');
   return lines.join('\n');
@@ -29,16 +29,16 @@ function RelTable({ rels, focus }) {
   return html`<${Scroll} label="Links"><table><caption class="sr">Links of ${focus || 'all tables'}</caption>
     <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Kind</th><th scope="col">Checked</th><th scope="col" class="hide-sm">Evidence</th><th scope="col">Tickets</th></tr></thead>
     <tbody>${rels.map((r, i) => html`<tr key=${i}><td class="mono small">${r.from}</td><td class="mono small">${r.to}</td><td>${r.kind || '—'}</td>
-      <td>${r.verified ? html`<${Status} kind="ok">Verified in QA</${Status}>` : html`<${Status} kind="off">Not verified</${Status}>`}</td>
+      <td>${r.sample_matched ? html`<${Status} kind="ok">${r.sample.label}</${Status}><div class="muted small">${r.sample.basis_label}</div>` : html`<${Status} kind="off">Not sampled</${Status}>`}</td>
       <td class="hide-sm small">${r.evidence || ''}</td><td>${(r.tickets || []).map((k) => html`<${TicketLink} key=${k} k=${k} /> `)}</td></tr>`)}</tbody></table></${Scroll}>`;
 }
 
 function DbTab({ k, table }) {
   const t = table ? k.tables.find((x) => x.name === table) : null;
   if (!k.tables.length) return html`<${Empty} title="No tables recorded yet" icon="db">Tables, columns and links appear as you investigate with the database MCP or read schema code.</${Empty}>`;
-  const verified = k.relations.filter((r) => r.verified).length;
+  const matched = k.relations.filter((r) => r.sample_matched).length;
   if (!t) {
-    return html`<p class="lede">${plural(k.tables.length, 'table')} and ${plural(k.relations.length, 'link')} from your investigations; ${verified} verified against QA${k.linkmap ? ' (link map from ' + (k.linkmap.env || 'QA') + (k.linkmap.fetched_at ? ', ' + fmtDay(String(k.linkmap.fetched_at).slice(0, 10), true) : '') + ')' : ''}. Pick a table in the side list to see its neighbourhood, or open the <a href="#/db">DB map</a> for databases, schemas, columns and saved queries.</p>
+    return html`<p class="lede">${plural(k.tables.length, 'table')} and ${plural(k.relations.length, 'link')} from your investigations; ${matched} matched in a QA sample${k.linkmap ? ' (link map from ' + (k.linkmap.env || 'QA') + (k.linkmap.fetched_at ? ', ' + fmtDay(String(k.linkmap.fetched_at).slice(0, 10), true) : '') + ')' : ''}. Pick a table in the side list to see its neighbourhood, or open the <a href="#/db">DB map</a> for databases, schemas, columns and saved queries.</p>
       <${Diagram} code=${mapSource(k.tables, k.relations, null)} label="Map of all tables" alt=${html`<${RelTable} rels=${k.relations} />`} />`;
   }
   const rels = k.relations.filter((r) => sameTable(r.from, t.name) || sameTable(r.to, t.name));
@@ -99,10 +99,10 @@ export function KnowledgePage({ route }) {
       <input id="kn-q" type="search" placeholder="Find a table" value=${tq} onInput=${(e) => setTq(e.currentTarget.value)} autocomplete="off" /></div>
     <ul class="rlist">${tables.filter((t) => !tq || (t.name + ' ' + (t.db || '') + ' ' + (t.purpose || '')).toLowerCase().indexOf(tq.toLowerCase()) >= 0).map((t) => {
       const n = k.relations.filter((r) => sameTable(r.from, t.name) || sameTable(r.to, t.name));
-      const v = n.filter((r) => r.verified).length;
+      const v = n.filter((r) => r.sample_matched).length;
       return html`<li key=${t.name}><a href=${'#/knowledge?tab=db&table=' + encodeURIComponent(t.name)} aria-current=${p.table === t.name ? 'page' : null}
         onClick=${(e) => { e.preventDefault(); setParams({ table: t.name }); }}><span class="sw" style=${{ background: v ? 'var(--ok)' : 'var(--rule)' }}></span>
-        <span><span class="k" style="font-weight:500">${t.name}</span><span class="t">${t.db || ''}</span></span><span class="m" title=${v + ' of ' + n.length + ' links verified'}>${n.length ? v + '/' + n.length : ''}</span></a></li>`;
+        <span><span class="k" style="font-weight:500">${t.name}</span><span class="t">${t.db || ''}</span></span><span class="m" title=${v + ' of ' + n.length + ' links matched in a QA sample'}>${n.length ? v + '/' + n.length : ''}</span></a></li>`;
     })}</ul>` : null;
   return html`<${Desk} rail=${rail} railLabel="Tables">
     <${PageHead} title="Knowledge" sub=${k ? plural(k.tables.length, 'table') + ' · ' + plural(k.apis.length, 'API') + ' · ' + plural(k.integrations.length, 'integration') : ''} />

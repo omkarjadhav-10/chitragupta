@@ -835,6 +835,10 @@ class Tracker:
         for p in got:
             if p.get("source") in due:
                 self._merge_pr(r, prs, p)
+        try:  # FLOW-03: CI checks of your own open GitHub PRs, only when their PR read just ran (same interval)
+            hosts.ci_refresh(self.cfg, info, src, [p for p in prs.values() if p.get("source") in due], run=self.pr_run)
+        except Exception as e:  # noqa: BLE001 - CI checks never fail the PR refresh
+            common.log("agent", "CI checks for %s: %s" % (getattr(r, "name", "?"), e))
         for b in due:
             checked[b] = {"at": common.now_iso(), "tip": data.branches[b].get("remote_tip")}
         meta["pr_refreshed_at"] = common.now_iso()

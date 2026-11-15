@@ -13,6 +13,12 @@ What is indexed (one row per "unit"):
   api, table, integration, dblink   the knowledge catalogs: APIs, tables (with columns from the QA schema cards),
                integrations, DB links (catalog db_relations and the QA link map)
   day          each daily file
+  dbobject, dbflow, dbinvestigation   the database-flow records (dbunits): object passports (name, kind,
+               environment, column names and types), saved flows (title, step labels) and YOUR record
+               investigations (flow, environment, step objects and statuses). Never a value, a key, SQL text, an
+               objective or a note. Built only from what you may see when indexed, and decided again on every
+               result at query time (dbaccess.decide): a unit you may not see now yields nothing (no title,
+               count or snippet), so a revocation takes effect on the next search.
 Every unit carries type, ref, title, body, ticket, repo, date, href (the dashboard deep link) and path (the
 data-home-relative file to read for detail).
 
@@ -48,11 +54,13 @@ import urllib.parse
 from . import common
 from .safety import paths
 
-SCHEMA = 1  # bump when units or tables change: every index is rebuilt on its next open
+SCHEMA = 2  # bump when units or tables change: every index is rebuilt on its next open (2: database units)
 DB_NAME = "search.sqlite"
 TYPES = [("ticket", "Tickets"), ("finding", "Findings"), ("query", "Queries"), ("request", "Requests"),
          ("artifact", "Artifacts"), ("branch", "Branches"), ("pr", "Pull requests"), ("api", "APIs"),
-         ("table", "Tables"), ("dblink", "DB links"), ("integration", "Integrations"), ("day", "Days")]
+         ("table", "Tables"), ("dblink", "DB links"), ("integration", "Integrations"), ("day", "Days"),
+         ("dbobject", "Database objects"), ("dbflow", "DB flows"), ("dbinvestigation", "Investigations")]
+DB_TYPES = ("dbobject", "dbflow", "dbinvestigation")  # access decided again on every result (dbunits.allowed)
 TYPE_ORDER = [t for t, _ in TYPES]
 LABELS = dict(TYPES)
 MAX_TERMS = 8
@@ -363,6 +371,10 @@ def sources():
     cards = [os.path.join(sroot, c, fn) for c in _listdir(sroot) if not c.startswith("_")
              for fn in _listdir(os.path.join(sroot, c)) if fn.endswith(".json") and not fn.startswith("_")]
     out["data/catalog.json"] = [os.path.join(h, "data", "catalog.json"), os.path.join(sroot, "_linkmap.json")] + cards
+    from . import dbunits
+    files = dbunits.source_files()
+    if files:
+        out[dbunits.SOURCE] = files
     droot = os.path.join(h, "daily")
     for y in _listdir(droot):
         for m in _listdir(os.path.join(droot, y)):
@@ -420,6 +432,9 @@ def _units(src, files, blobs):
         return ticket_units(src[len("data/tickets/"):-5], tk, md)
     if src == "data/catalog.json":
         return catalog_units(_json(blobs[0]) or {}, _json(blobs[1]) or {}, [_json(b) for b in blobs[2:]])
+    if src == "data/db":
+        from . import dbunits
+        return dbunits.units(_unit)
     if src.startswith("daily/"):
         d = src.rsplit("/", 1)[-1][:-3]
         text = blobs[0].decode("utf-8", "replace") if blobs[0] else ""
@@ -795,6 +810,14 @@ def _search(out, v, q, terms, wanted, ticket, repo, frm, to, limit, engine, t0):
         out["engine"] = engine = "scan"
     where, args = _where(wanted, ticket, repo, frm, to, _outside())
     matched = _match(v, engine, terms, where, args)
+    if any(t in DB_TYPES for _, t in matched):  # the access decision on every database result, now
+        from . import dbunits
+        with v.lock:
+            refs = dict(v.con.execute("SELECT id, ref FROM units WHERE type IN (%s) AND id IN (%s)" % (
+                ", ".join("?" * len(DB_TYPES)), ", ".join(str(int(i)) for i, t in matched if t in DB_TYPES)),
+                list(DB_TYPES)).fetchall())
+        ok = dbunits.allowed({i: (t, refs.get(i)) for i, t in matched if t in DB_TYPES})
+        matched = [(i, t) for i, t in matched if t not in DB_TYPES or i in ok]
     info = dict(matched)
     ranked = [i for i, _ in matched]
     m = _KEY.match(q)

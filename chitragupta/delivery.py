@@ -376,7 +376,10 @@ def compute(r, key, tk, cfg, now=None):
             "commits": [{"sha": c["sha"][:9], "subject": c["subject"], "date": c["date"]} for c in (b.get("own") or [])[:40]]})
     for p in prs:
         out["prs"].append({k: p.get(k) for k in ("number", "title", "source", "target", "state", "review", "created_at",
-                                                 "merged_at", "merge_commit", "head_at_merge", "url", "src")})
+                                                 "merged_at", "merge_commit", "head_at_merge", "url", "src", "head")})
+    ci = {str(p["number"]): p["ci"] for p in prs if isinstance(p.get("ci"), dict)}
+    if ci:  # FLOW-03 check runs by PR number (hosts.ci_record), beside the PRs so their copies stay small
+        out["ci"] = ci
     if not strat:
         out["note"] = "no branching strategy set for this repo"
         return out
@@ -516,7 +519,9 @@ def sig_of(r, key, tk, cfg):
     branches = sorted((b["branch"], b.get("tip"), b.get("remote_tip"), b.get("parent"), b.get("abandoned"), b.get("unpushed"),
                        b.get("deleted_at"), b.get("remote_gone")) for b in r.data.branches.values() if b.get("ticket") == key)
     names = {b[0] for b in branches}
+    # a PR's CI checks (hosts.ci_record) count by their signature only, and only when present: unchanged otherwise
     prs = sorted((p["number"], p.get("state"), p.get("review"), p.get("head"), p.get("merge_commit"))
+                 + ((p["ci"]["sig"],) if isinstance(p.get("ci"), dict) and p["ci"].get("sig") else ())
                  for p in r.data.prs.values() if p.get("source") in names)
     bases = sorted((ref, r.sha(ref)) for ref in r.all_base_refs())
     blob = json.dumps([branches, prs, bases, tk.get("git_override"), (tk.get("jira") or {}).get("parent"),

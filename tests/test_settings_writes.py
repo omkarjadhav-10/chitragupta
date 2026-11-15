@@ -273,7 +273,7 @@ class ActionsDocumented(unittest.TestCase):
         with open(os.path.join(root, "docs", "safety.md"), encoding="utf-8") as f:
             doc = f.read()
         table = doc[doc.index("## The dashboard's writes"):]
-        listed = set(re.findall(r"`([a-z]+(?:-[a-z]+)+)`", table))
+        listed = set(re.findall(r"`([a-z]+(?:-[a-z]+)*)`", table))  # `companion` has no hyphen
         self.assertEqual(set(writes.ACTIONS) - listed, set())
 
 

@@ -1,0 +1,36 @@
+{
+  "name": "cg-companion",
+  "version": "0.2.0",
+  "description": "Optional Chitragupta native companion: read-only panes over cached projections; requires the adjacent Chitragupta checkout.",
+  "author": { "name": "Chitragupta contributors" },
+  "userConfig": {
+    "auto_open": {
+      "type": "boolean", "title": "Open the companion at start",
+      "description": "Open the Chitragupta pane when a session starts (wide terminals only; never other panes). Off by default.",
+      "default": false
+    },
+    "prompt_band": {
+      "type": "boolean", "title": "Prompt band",
+      "description": "Show one Chitragupta summary line above the prompt, from the last cached read. Off by default.",
+      "default": false
+    },
+    "privacy": {
+      "type": "boolean", "title": "Privacy mode",
+      "description": "Mask ticket and pull request titles in the companion and the band. Does not redact your transcript.",
+      "default": false
+    },
+    "density": {
+      "type": "string", "title": "Density", "description": "Spacing between companion rows.",
+      "options": ["compact", "comfortable"], "default": "compact"
+    },
+    "accent": {
+      "type": "string", "title": "Accent", "description": "Heading accent, from your Claude Code theme.",
+      "options": ["suggestion", "claude", "remember", "merged", "none"], "default": "suggestion"
+    },
+    "mark": {
+      "type": "string", "title": "Header mark",
+      "description": "Text mark in the companion header only (at most 12 plain characters). It never replaces Claude Code's own logo.",
+      "default": "CG"
+    }
+  }
+}

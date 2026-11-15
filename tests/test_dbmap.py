@@ -1,4 +1,4 @@
-"""DB map: the databases → schemas → tables tree, one table's panel (columns, links with their QA status, readers and
+"""DB map: the databases → schemas → tables tree, one table's panel (columns, links with their QA sample, readers and
 writers, tickets, saved queries, 1–2 hop neighbourhood) and the routes that serve them."""
 import json
 import unittest
@@ -58,7 +58,7 @@ class DbMapData(td.Base):
         # the catalog's free-text db label doesn't create a database; an unplaced table goes last
         self.assertEqual(shape[dbmap.UNPLACED], {dbmap.NO_SCHEMA: ["coupons"]})
         self.assertEqual(t["databases"][-1]["name"], dbmap.UNPLACED)
-        self.assertEqual(t["counts"], {"tables": 5, "links": 4, "verified": 1})
+        self.assertEqual(t["counts"], {"tables": 5, "links": 4, "sample_matched": 1})
         self.assertEqual(t["linkmap"]["env"], "qa")
 
     def test_table_panel(self):
@@ -68,9 +68,15 @@ class DbMapData(td.Base):
         self.assertEqual([(c["name"], c["pk"], c["fk"], c["phi"]) for c in d["columns"]],
                          [("id", True, False, False), ("customer_id", False, True, False), ("email", False, False, True)])
         st = {(l["from"], l["to"]): (l["status"], l["ratio"]) for l in d["links"]}
-        self.assertEqual(st[("shop.orders", "shop.customers")], ("verified", 1.0))
-        self.assertEqual(st[("shop.order_lines", "shop.orders")], ("likely", 0.4))
-        self.assertEqual(st[("shop.orders", "coupons")], ("unverified", None))
+        # a sampled link is observed in a sample, never "verified" (PRD DB-05)
+        self.assertEqual(st[("shop.orders", "shop.customers")], ("sample_matched", 1.0))
+        self.assertEqual(st[("shop.order_lines", "shop.orders")], ("sample_partial", 0.4))
+        self.assertEqual(st[("shop.orders", "coupons")], ("not_sampled", None))
+        lab = {(l["from"], l["to"]): (l["label"], l["basis"]) for l in d["links"]}
+        self.assertEqual(lab[("shop.orders", "shop.customers")],
+                         ("Sample matched 100% (20 of 20, QA, 2026-10-10)", "observed_sample"))
+        self.assertEqual(lab[("shop.orders", "coupons")], ("Not sampled: seen in code or a session", "inferred"))
+        self.assertNotIn("verified", json.dumps(d["links"]))
         # a catalog relation that names a QA link without schemas joins it instead of adding a second link
         self.assertEqual(len(st), 3)
         self.assertIn("ABC-1002", d["tickets"])
@@ -88,7 +94,7 @@ class DbMapData(td.Base):
         self.assertEqual(dbmap.table("INVOICES")["key"], "billing.invoices")  # a bare, any-case name resolves
         self.assertIsNone(dbmap.table("nope"))
         weak = {(l["from"], l["status"], l["ratio"]) for l in dbmap.table("billing.invoices")["links"]}
-        self.assertEqual(weak, {("billing.invoices", "unverified", 0.1)})
+        self.assertEqual(weak, {("billing.invoices", "sample_weak", 0.1)})
 
     def test_search_opens_the_db_map(self):
         from chitragupta import searchidx
@@ -106,7 +112,7 @@ class DbMapData(td.Base):
             paths.delete(p, caller="test")
         from chitragupta.dashboard import api
         api._cache.clear()
-        self.assertEqual(dbmap.tree()["counts"], {"tables": 0, "links": 0, "verified": 0})
+        self.assertEqual(dbmap.tree()["counts"], {"tables": 0, "links": 0, "sample_matched": 0})
         self.assertEqual(dbmap.graph()["graph"]["edges"], [])
 
 
