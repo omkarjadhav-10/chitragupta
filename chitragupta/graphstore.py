@@ -511,20 +511,46 @@ def recover(con, key, rebuild):
     return out
 
 
-def stats():
-    """What the index holds, from the read connection. Never builds and never writes."""
+def _behind(cfg, stored, profile_ok):
+    """Visible tickets whose rows are missing or older than their inputs (reads only, as the sync's own check)."""
+    from . import graphbuild
+    from .dashboard import api
+    scope = api.scope_index(cfg)
+    count = 0
+    for key in _ticket_keys():
+        if not (scope.get(key) or {}).get("visible"):
+            continue
+        if not profile_ok or key not in stored or stored[key] != graphbuild.input_signature(key, cfg):
+            count += 1
+    return count
+
+
+def stats(cfg=None):
+    """What the index holds, from the read connection. Never builds and never writes. With `cfg`, also how many
+    visible tickets the index is behind on (`behind`; it stats every input, so only on request)."""
     con = open_read()
     if con is None:
-        return {"state": "not_built", "schema": SCHEMA, "builder": BUILDER}
+        out = {"state": "not_built", "schema": SCHEMA, "builder": BUILDER}
+        if cfg is not None:
+            from .dashboard import api
+            out["behind"] = sum(1 for key in _ticket_keys() if (api.scope_index(cfg).get(key) or {}).get("visible"))
+        return out
     try:
         m = meta(con)
         count = {table: con.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
                  for table in ("sources", "nodes", "edges", "requirements")}
+        stored = dict(con.execute("SELECT ticket, sig FROM sources").fetchall()) if cfg is not None else {}
     except sqlite3.Error as exc:
         return {"state": "unavailable", "reason": type(exc).__name__, "schema": SCHEMA, "builder": BUILDER}
-    return {"state": "ok", "schema": SCHEMA, "builder": BUILDER, "generation": int(m.get("generation") or 0),
-            "built_at": m.get("built_at") or "", "tickets": count["sources"], "nodes": count["nodes"],
-            "edges": count["edges"], "requirements": count["requirements"], "bytes": os.path.getsize(db_path())}
+    out = {"state": "ok", "schema": SCHEMA, "builder": BUILDER, "generation": int(m.get("generation") or 0),
+           "built_at": m.get("built_at") or "", "full_at": m.get("full_at") or "",
+           "last_error": m.get("last_error") or "", "tickets": count["sources"], "nodes": count["nodes"],
+           "edges": count["edges"], "requirements": count["requirements"],
+           "rows": count["nodes"] + count["edges"] + count["requirements"], "bytes": os.path.getsize(db_path())}
+    if cfg is not None:
+        from . import profile
+        out["behind"] = _behind(cfg, stored, m.get("profile_generation") == profile.signature(cfg))
+    return out
 
 
 # --- incremental sync and the tick step (design section 12) ---
@@ -533,6 +559,8 @@ def stats():
 
 LIMIT = 25        # tickets rebuilt per run
 BUDGET_S = 2.0    # checked between tickets, so one ticket can overrun it
+GRAPH_LOCK = "evidence-graph.lock"   # one writer of the history files and the index at a time
+SKIPPED = "a background run is in progress"
 _TABLES_DATA = ("sources", "nodes", "edges", "requirements")
 
 
@@ -624,15 +652,27 @@ def sync(cfg, keys=None, limit=LIMIT, budget_s=BUDGET_S):
     """Bring the index up to date, a bounded amount per call. `keys` are this run's dirty tickets: they come first
     and are always checked by `recover`; the others only when their input signature changed. A busy index (another
     writer) skips the run. → a report of what happened to which ticket."""
-    from . import profile
+    from .agent import Lock
     began = time.monotonic()
     report = {"busy": False, "purged": False, "built": [], "recovered": [], "unchanged": [], "deleted": [],
               "errors": [], "more": False}
-    try:
-        con = open_write(timeout=2.0)
-    except sqlite3.OperationalError:
+    lock = Lock(GRAPH_LOCK)
+    if not lock.acquire():   # another sync or a rebuild is writing: skip this run, the next one catches up
         report["busy"] = True
         return report
+    try:
+        try:
+            con = open_write(timeout=2.0)
+        except sqlite3.OperationalError:
+            report["busy"] = True
+            return report
+        return _sync_run(con, cfg, keys, limit, budget_s, began, report)
+    finally:
+        lock.release()
+
+
+def _sync_run(con, cfg, keys, limit, budget_s, began, report):
+    from . import profile
     try:
         generation = profile.signature(cfg)
         if meta(con).get("profile_generation") != generation:
@@ -665,6 +705,58 @@ def sync(cfg, keys=None, limit=LIMIT, budget_s=BUDGET_S):
         return report
     finally:
         con.close()
+
+
+def rebuild(cfg, wait_s=None):
+    """The explicit full rebuild: replace the tables, then rebuild every visible ticket in its own transaction,
+    `recover` first. Journals are never rewritten (a history file that is ahead re-indexes at its own sequence).
+    Takes the agent lock like every CLI command that changes state; not obtained → skipped, nothing written.
+    → {skipped, built, recovered, unchanged, deleted, errors}"""
+    from . import profile
+    from .agent import Lock
+    report = {"skipped": None, "built": [], "recovered": [], "unchanged": [], "deleted": [], "errors": []}
+    lock = Lock()
+    if not lock.acquire_wait(wait_s):
+        report["skipped"] = SKIPPED
+        return report
+    try:
+        graph_lock = Lock(GRAPH_LOCK)
+        if not graph_lock.acquire():
+            report["skipped"] = SKIPPED
+            return report
+        try:
+            reset()   # this process's cached reader goes before the tables are replaced
+            try:
+                con = open_write(timeout=10.0)
+            except sqlite3.OperationalError:
+                report["skipped"] = "the index is in use; try again in a moment"
+                return report
+            try:
+                generation = profile.signature(cfg)
+                with con:
+                    before = _generation(con)
+                    _create(con)
+                    set_meta(con, generation=before + 1, profile_generation=generation)
+                for key in _ticket_keys():
+                    lock.refresh()
+                    graph_lock.refresh()
+                    try:
+                        outcome = _one(con, cfg, key, generation, True, None)
+                    except Exception:
+                        common.log(CALLER, "evidence graph rebuild of %s failed: %s" % (key, traceback.format_exc()))
+                        report["errors"].append(key)
+                        continue
+                    if outcome:
+                        report[outcome].append(key)
+                with con:
+                    set_meta(con, full_at=common.now_iso())
+                return report
+            finally:
+                con.close()
+        finally:
+            graph_lock.release()
+    finally:
+        lock.release()
 
 
 def tick(cfg, touched=()):

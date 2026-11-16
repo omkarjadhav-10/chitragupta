@@ -1,5 +1,8 @@
 import copy
+import json
 import os
+import subprocess
+import time
 import unittest
 from unittest import mock
 
@@ -8,7 +11,7 @@ from chitragupta import graphbuild as gb
 from chitragupta import graphmodel as gm
 from chitragupta import graphstore as gs
 from tests import graphfixture as fx
-from tests.support import Isolated
+from tests.support import PY, ROOT, Isolated
 
 GB_PLAN = gb.plan_nodes
 
@@ -589,7 +592,7 @@ def everything(home):
     return out
 
 
-class Sync(fx.Workflows):
+class SyncBase(fx.Workflows):
     """A synthetic home: a card, a ticket record with a commit and test runs, one approved workflow with a pin."""
 
     def setUp(self):
@@ -624,6 +627,8 @@ class Sync(fx.Workflows):
                 return row
         raise AssertionError("no ticket-level row for %r" % text)
 
+
+class Sync(SyncBase):
     def test_the_graph_holds_every_part(self):
         report = self.sync()
         self.assertEqual((sorted(report["built"]), report["errors"], report["purged"]), ([A, B], [], True))
@@ -767,6 +772,230 @@ class Sync(fx.Workflows):
             report = self.sync()
         self.assertEqual((report["errors"], report["built"]), ([A], [B]))
         self.assertEqual(self.sync()["built"], [A])
+
+
+SYNC_CHILD = r"""
+import json, os, sys, time
+from chitragupta import common, graphstore
+folder, tag = sys.argv[1], sys.argv[2]
+open(os.path.join(folder, "ready-" + tag), "w").close()
+deadline = time.monotonic() + 60  # never outlive a failed parent
+while not os.path.exists(os.path.join(folder, "go")):
+    if time.monotonic() > deadline:
+        sys.exit(3)
+    time.sleep(0.005)
+reports = []
+for _ in range(200):   # a busy run is skipped; try again until this process has done one real run
+    out = graphstore.sync(common.load_config())
+    reports.append(out)
+    if not out["busy"]:
+        break
+    time.sleep(0.01)
+print(json.dumps(reports))
+"""
+
+LOCK_CHILD = r"""
+import os, sys, time
+from chitragupta.agent import Lock
+folder = sys.argv[1]
+lock = Lock()
+if not lock.acquire():
+    sys.exit(4)
+open(os.path.join(folder, "held"), "w").close()
+deadline = time.monotonic() + 60
+while not os.path.exists(os.path.join(folder, "done")) and time.monotonic() < deadline:
+    time.sleep(0.01)
+lock.release()
+"""
+LEDGER = {"Verified": "Verified within recorded scope", "Partial": "Partial", "Missing": "Failed",
+          "Unverified": "Unverified"}
+
+
+class Boomed(Exception):
+    pass
+
+
+class Rebuild(SyncBase):
+    def seqs(self, key=A):
+        return [(e["seq"], e.get("baseline")) for e in gs.load_history(key)[1]["journal"]]
+
+    def consistent(self, key=A):
+        head, source = gs.load_history(key)[1]["head"], self.rows(key)[3]
+        self.assertEqual((source["snapshot"], source["content"]), (str(head["seq"]), head["content"]))
+
+    def signals(self):
+        folder = os.path.join(self.user_dir, "signals-%d" % len(os.listdir(self.user_dir)))
+        os.makedirs(folder)
+        return folder
+
+    def child(self, script, *args):
+        from tests.test_companion_state import kill
+        proc = subprocess.Popen([PY, "-c", script] + list(args), cwd=ROOT, env=self.child_env(),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(kill, proc)   # hard deadline: no child outlives the test
+        return proc
+
+    def wait_for(self, path, procs):
+        deadline = time.monotonic() + 60
+        while not os.path.exists(path):
+            self.assertLess(time.monotonic(), deadline, "child did not start")
+            self.assertTrue(all(p.poll() is None for p in procs), "a child exited early")
+            time.sleep(0.02)
+
+    def test_rebuild_replaces_the_tables_and_keeps_every_journal(self):
+        self.sync()
+        rows, journals = self.rows(), {k: self.seqs(k) for k in (A, B)}
+        report = gs.rebuild(self.cfg)
+        self.assertEqual((report["skipped"], sorted(report["recovered"]), report["errors"]), (None, [A, B], []))
+        after = self.rows()
+        self.assertEqual([plain(rows[0]), plain(rows[1]), rows[2], rows[3]["content"]],
+                         [plain(after[0]), plain(after[1]), after[2], after[3]["content"]])
+        self.assertEqual({k: self.seqs(k) for k in (A, B)}, journals)   # re-indexed at their own sequence
+        self.assertTrue(gs.stats()["full_at"])
+        self.assertFalse(os.path.exists(common.wl("locks", "agent.lock")))
+        self.assertFalse(os.path.exists(common.wl("locks", gs.GRAPH_LOCK)))
+
+    def test_a_rebuild_after_each_crash_point_keeps_the_journal(self):   # EG-A17
+        self.sync()
+        failing_sync = gs._sync
+
+        def in_transaction(con, table, *rest):
+            if table == "edges":
+                raise Boomed()
+            return failing_sync(con, table, *rest)
+
+        points = {"before publish 1": lambda: mock.patch.object(gs.common, "write_json", side_effect=Boomed),
+                  "between publish 1 and 2": lambda: mock.patch.object(gs, "write_ticket", side_effect=Boomed),
+                  "inside the SQL transaction": lambda: mock.patch.object(gs, "_sync", side_effect=in_transaction),
+                  "inside recovery": lambda: mock.patch.object(gs, "write_ticket", side_effect=Boomed)}
+        for n, (point, crash) in enumerate(points.items(), 2):
+            with self.subTest(point):
+                kept = self.seqs()
+                commits = dict(self.tk(A)["commits"])
+                extra = fx.commit_rec(n, "ABC-1001 Step %d" % n, repo="scratch", files=["src/orders/step%d.py" % n])
+                commits[extra["sha"]] = extra
+                self.put(A, commits=commits)   # the inputs moved: the next sync publishes
+                with crash():
+                    self.assertIn(A, self.sync()["errors"])
+                    if point == "inside recovery":   # the repair itself crashes once more
+                        self.assertIn(A, gs.rebuild(self.cfg)["errors"])
+                report = gs.rebuild(self.cfg)
+                self.assertEqual((report["skipped"], report["errors"]), (None, []))
+                self.assertIn(A, report["recovered"] + report["built"])
+                now = self.seqs()
+                self.assertEqual(now[:len(kept)], kept, "a retained journal position was lost or rewritten")
+                self.assertEqual([b for _, b in now], [None] * len(now), "no reset baseline")
+                self.assertEqual([s for s, _ in now], sorted({s for s, _ in now}))
+                self.assertEqual(len(now), len(kept) + 1)   # exactly one entry for the change
+                self.consistent(A)
+                self.consistent(B)
+                self.assertEqual(self.sync()["built"], [])
+
+    def test_a_pinned_pruned_source_stays_labelled_and_counts_as_the_ledger_counts_it(self):   # EG-A23
+        self.sync()
+
+        def workflow_row():
+            for row in self.rows()[2]:
+                if row["workflow"] == self.rec["id"] and row["alias"] == "ac1":
+                    return row
+            raise AssertionError("no workflow row for ac1")
+
+        before = workflow_row()
+        run = next(n for n in self.rows()[0] if n["type"] == "test_run" and n["attrs"]["evidence"] == "test:t1")
+        tk = self.tk(A)
+        del tk["tests"]["t1"]   # pinned by the workflow: the record is gone, the pin keeps its copy
+        common.write_json(store.ticket_path(A), tk)
+        self.assertEqual(self.sync()["built"], [A])
+        for when in ("after sync", "after rebuild"):
+            with self.subTest(when):
+                nodes, edges, _, _ = self.rows()
+                copy_ = next(n for n in nodes if n["id"] == run["id"])   # the same identity as the live source
+                self.assertEqual((copy_["lifecycle"], copy_["attrs"]["note"], copy_["attrs"]["pinned"]),
+                                 ("source_missing", gb.PINNED_COPY, True))
+                self.assertTrue([e for e in edges if e["type"] == "SUPPORTED_BY" and e["dst"] == run["id"]])
+                row = workflow_row()
+                ledger = row["detail"]["verification"]["ledger"]
+                self.assertEqual(ledger, before["detail"]["verification"]["ledger"])
+                self.assertEqual(row["verification"], LEDGER[ledger])
+                delta = gs.load_history(A)[1]["journal"][-1]["delta"]["evidence"]
+                self.assertNotIn(run["id"], [r[0] for r in delta["added"]])   # never a new observation
+                self.assertIn(run["id"], [r[0] for r in delta["changed"]])
+                self.assertEqual(gs.rebuild(self.cfg)["errors"], [])
+
+    def test_with_the_lock_held_by_another_process_rebuild_is_skipped_and_writes_nothing(self):
+        self.sync()
+        folder = self.signals()
+        proc = self.child(LOCK_CHILD, folder)
+        self.wait_for(os.path.join(folder, "held"), [proc])
+        before = everything(common.home())
+        report = gs.rebuild(self.cfg, wait_s=0)
+        self.assertEqual(report["skipped"], gs.SKIPPED)
+        self.assertEqual((report["built"], report["recovered"]), ([], []))
+        self.assertEqual(everything(common.home()), before)
+        open(os.path.join(folder, "done"), "w").close()
+        proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0)
+
+    def test_a_held_graph_lock_skips_sync_and_rebuild(self):
+        from chitragupta.agent import Lock
+        self.sync()
+        held = Lock(gs.GRAPH_LOCK)
+        self.assertTrue(held.acquire())
+        self.addCleanup(held.release)
+        self.put(A, title="changed")
+        before = everything(common.home())
+        self.assertTrue(self.sync()["busy"])
+        self.assertEqual(gs.rebuild(self.cfg, wait_s=0)["skipped"], gs.SKIPPED)
+        self.assertEqual(everything(common.home()), before)
+        self.assertFalse(os.path.exists(common.wl("locks", "agent.lock")))   # rebuild let its own lock go
+
+    def test_two_processes_syncing_the_same_home(self):   # EG-A16
+        folder = self.signals()
+        procs = [self.child(SYNC_CHILD, folder, tag) for tag in ("one", "two")]
+        for tag in ("one", "two"):
+            self.wait_for(os.path.join(folder, "ready-" + tag), procs)
+        open(os.path.join(folder, "go"), "w").close()
+        reports = []
+        for proc in procs:
+            out, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err.decode())
+            reports += json.loads(out.decode().strip().splitlines()[-1])
+        built = [k for r in reports for k in r["built"] + r["recovered"]]
+        self.assertEqual(sorted(built), [A, B], "every ticket built exactly once")
+        self.assertEqual([k for r in reports for k in r["errors"]], [])
+        for key in (A, B):
+            self.assertEqual(self.seqs(key), [(1, None)])
+            self.consistent(key)
+        con = gs.open_write()
+        try:
+            for table in ("nodes", "edges"):
+                dupes = con.execute("SELECT ticket, id, COUNT(*) FROM %s GROUP BY ticket, id HAVING COUNT(*) > 1"
+                                    % table).fetchall()
+                self.assertEqual(dupes, [])
+        finally:
+            con.close()
+        expected = gb.ticket_graph(gb.load_inputs(A, self.cfg))
+        nodes, edges, statuses, source = self.rows()
+        self.assertEqual(source["content"], expected["content"])   # no lost row
+        self.assertEqual((len(nodes), len(edges), len(statuses)),
+                         (len(expected["nodes"]), len(expected["edges"]), len(expected["statuses"])))
+
+    def test_stats_report_rows_errors_and_how_far_behind(self):
+        self.assertEqual(gs.stats(self.cfg)["behind"], 2)   # nothing built yet
+        self.sync()
+        stats = gs.stats(self.cfg)
+        self.assertEqual((stats["state"], stats["tickets"], stats["behind"], stats["last_error"], stats["full_at"]),
+                         ("ok", 2, 0, "", ""))
+        self.assertEqual(stats["rows"], stats["nodes"] + stats["edges"] + stats["requirements"])
+        self.assertTrue(stats["generation"] > 0 and stats["built_at"])
+        self.assertNotIn("behind", gs.stats())   # only computed on request
+        self.put(A, title="changed")
+        self.assertEqual(gs.stats(self.cfg)["behind"], 1)
+        gs.rebuild(self.cfg)
+        stats = gs.stats(self.cfg)
+        self.assertEqual(stats["behind"], 0)
+        self.assertTrue(stats["full_at"])
+        self.assertGreater(stats["generation"], 0)
 
 
 def gb_plan(workflow, index):
