@@ -7,7 +7,7 @@ import copy
 import difflib
 import re
 
-from . import activity, gitcmd, hosts, profile
+from . import activity, common, gitcmd, hosts, profile, workflowmodel
 from . import companionevidence as evidence_rows
 from . import companionplanning as planning
 from . import graphmodel
@@ -1104,3 +1104,89 @@ def implementation_rows(workflow, requirement_index, edges, ticket_has_changes):
         out[rid] = graphmodel.implementation([row for row in mine if row["src"] in sources], steps,
                                              ticket_has_changes)
     return out
+
+
+# --- verification (design section 11): the Companion's ledger, attached to the revision its baseline confirmed ---
+
+NEWER_HEAD = "a newer head was observed after the recorded context"
+
+
+def workflow_context(workflow):
+    """The workflow's current context exactly as the ledger sees it: `companion.context` (it authorizes the record
+    and reads cached facts only; nothing is inspected). The one input of this module that reads files, so the
+    loader calls it and the result is passed to `verification_rows`."""
+    from . import companion
+    return companion.context(workflow)
+
+
+def _later(a, b):
+    """True when timestamp `a` is known to be after `b`."""
+    a, b = common.parse_ts(a), common.parse_ts(b)
+    return bool(a and b and a > b)
+
+
+def verification_rows(workflow, requirement_index, edges=(), ctx=None, refs=()):
+    """Verification per requirement for one workflow, from the ledger and nothing else.
+
+    `workflowmodel.verification(baseline, evidence, context)` is called unchanged. Its row for a criterion speaks
+    for the revision that criterion's baseline confirmed: the graph shows that result there, and for the
+    requirement's current revision applies `graphmodel.verification`, which is `Unverified` whenever Jira's wording
+    moved on. So the graph never shows more than the ledger.
+
+    workflow  `workflow_inputs(...)`, or None for the ticket-level rows (every requirement `Unverified`: no
+              confirmed baseline speaks for it, and ticket-level runs change nothing)
+    edges     the edges `mapping_edges` returned; this workflow's `SUPPORTED_BY` edges come back with the ledger's
+              applicability and reason, every other edge unchanged
+    ctx       `workflow_context(workflow)`; computed here when not given
+    refs      `references(...)` for the workflow's repository and location: a PR head or branch tip seen after
+              the workflow's recorded observation, on another commit, is listed as a gap and overrides nothing
+    → {rows: {gr: {state, basis, reason, revision, confirmed, ledger, excluded, criterion}}, edges, gaps, ledger}"""
+    reqs = requirement_index.get("requirements") or {}
+    if workflow is None:
+        return {"rows": {rid: dict(graphmodel.verification(None, None, entry["revision"]), revision=entry["revision"],
+                                   confirmed=None, ledger=None, excluded=False, criterion=None)
+                         for rid, entry in reqs.items()}, "edges": list(edges), "gaps": [], "ledger": {}}
+    wid = workflow["id"]
+    ctx = workflow_context(workflow) if ctx is None else ctx
+    current = evidence_rows.applicable(ctx)
+    baseline = workflow["baselines"][workflow["baseline"]]
+    ledger = workflowmodel.verification(baseline, workflow.get("evidence") or [], current)
+    mapped = ((requirement_index.get("baselines") or {}).get(wid) or {}).get(workflow["baseline"]) or {}
+    rows, cited = {}, {}
+    for row in ledger["rows"]:
+        entry = mapped.get(row["criterion"])
+        if entry is None:
+            continue
+        rid, confirmed = entry["requirement"], entry["revision"]
+        now = (reqs.get(rid) or {}).get("revision") or confirmed
+        there = graphmodel.verification(row, confirmed, confirmed)   # what the ledger says, on its own revision
+        rows[rid] = dict(graphmodel.verification(row, confirmed, now), revision=now, criterion=row["criterion"],
+                         excluded=bool(row.get("excluded")), ledger=row["status"],
+                         confirmed=dict(there, revision=confirmed,
+                                        lifecycle="current" if confirmed == now else "historical"))
+        for c in row.get("evidence") or []:
+            cited[(c["id"], row["criterion"])] = (c["applicability"], c["reason"])
+    pins = {p["id"]: p for p in workflow.get("evidence") or [] if isinstance(p, dict) and p.get("id")}
+    out = []
+    for edge in edges:
+        if edge.get("type") != "SUPPORTED_BY" or edge.get("workflow") != wid:
+            out.append(edge)
+            continue
+        attrs = edge.get("attrs") or {}
+        found = cited.get((attrs.get("pin"), attrs.get("criterion")))
+        if found is None:   # mapped under an earlier baseline: the ledger does not cite it; the same rule applies
+            pin = pins.get(attrs.get("pin")) or {}
+            found = workflowmodel.applies(pin, current)
+        edge = copy.deepcopy(edge)
+        edge["attrs"].update(applicability=found[0], reason=found[1], cited=attrs.get("pin") in {k[0] for k in cited})
+        edge["version"] = graphmodel.version(edge)
+        out.append(edge)
+    gaps = []
+    if ctx.get("observed_at") and ctx.get("head"):
+        for ref in refs or ():
+            if _later(ref.get("observed_at"), ctx["observed_at"]) and same_head(ref.get("head"), ctx["head"]) is not True:
+                gaps.append({"kind": "newer head", "reference": ref.get("name"), "head": ref.get("head"),
+                             "observed_at": ref.get("observed_at"), "context_head": ctx["head"],
+                             "context_observed_at": ctx["observed_at"], "reason": NEWER_HEAD})
+    return {"rows": rows, "edges": out, "gaps": gaps,
+            "ledger": {row["criterion"]: row["status"] for row in ledger["rows"]}}

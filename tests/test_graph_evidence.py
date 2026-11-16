@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from chitragupta import companion, graphbuild as gb, graphmodel as gm, hosts
+from chitragupta import companion, graphbuild as gb, graphmodel as gm, hosts, workflowmodel as model
 from chitragupta.safety import commands
 from tests import graphfixture as fx
 
@@ -943,6 +943,192 @@ class NoMapping(Mappings):
         out = self.build(wf)
         self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")   # no steps: the requirement has a link
         self.assertEqual(self.status(wf, out)[EXPORT]["state"], "Unverified association")
+
+
+HEAD1, HEAD2 = "a1b2c3d4e5f6", "0f9e8d7c6b5a"
+FILTER2 = "Orders can be filtered by status and by date"
+EMPTY = "An empty result shows a clear message"
+LEDGER = {"Verified": "Verified within recorded scope", "Partial": "Partial", "Missing": "Failed",
+          "Unverified": "Unverified"}
+
+
+class Verification(fx.Workflows):
+    """Built on real workflows: observed context, captured runs and mappings through the Companion's own calls."""
+
+    def started_with(self, texts):
+        return self.associate(self.workflow(texts, steps=STEPS if len(texts) >= 2 else None, approve=True))
+
+    def history(self, *reads):
+        req = {}
+        for seq, texts in enumerate(reads, 1):
+            rec = fx.card(KEY, texts)
+            req = gb.requirement_snapshot(req, rec, rec["card"], (), "x", TICKET, seq)[0]
+        return req
+
+    def build(self, rec, *reads, refs=()):
+        wf = gb.workflow_inputs(companion.get(rec["id"]))
+        self.wf = wf
+        self.index = gb.baseline_links(self.history(*(reads or ([FILTER, EXPORT],))), [wf], TICKET)
+        tk = self.tk()
+        ident = {"scratch": gb.repo_identity("scratch", tk, [], [wf["binding"]])}
+        graph = gb.commit_nodes(tk, ident, TICKET)
+        runs = gb.test_nodes(tk, ident, TICKET)
+        graph = {"nodes": graph["nodes"] + runs["nodes"], "edges": graph["edges"] + runs["edges"]}
+        self.mapped = gb.mapping_edges(wf, self.index, graph)
+        out = gb.verification_rows(wf, self.index, self.mapped["edges"], refs=refs)
+        self.assertEqual(out, gb.verification_rows(wf, self.index, self.mapped["edges"], refs=refs))
+        return out
+
+    def by_text(self, out):
+        return {self.index["requirements"][rid]["text"]: row for rid, row in out["rows"].items()}
+
+    def supported(self, out):
+        return [e for e in out["edges"] if e["type"] == "SUPPORTED_BY"]
+
+    def test_a_current_complete_pass_is_verified_within_recorded_scope(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        out = self.build(rec)
+        rows = self.by_text(out)
+        self.assertEqual((rows[FILTER]["state"], rows[FILTER]["basis"], rows[FILTER]["ledger"], rows[FILTER]["criterion"]),
+                         ("Verified within recorded scope", "observed", "Verified", "ac1"))
+        self.assertEqual((rows[FILTER]["confirmed"]["lifecycle"], rows[FILTER]["confirmed"]["revision"]),
+                         ("current", rows[FILTER]["revision"]))
+        self.assertEqual((rows[EXPORT]["state"], rows[EXPORT]["ledger"]), ("Unverified", "Unverified"))
+        self.assertEqual(out["ledger"], {"ac1": "Verified", "ac2": "Unverified"})
+        edge = self.supported(out)[0]
+        self.assertEqual((edge["attrs"]["applicability"], edge["attrs"]["reason"], edge["attrs"]["cited"]),
+                         ("current", "", True))
+        self.assertEqual(edge["version"], gm.version(edge))
+        others = [e for e in out["edges"] if e["type"] != "SUPPORTED_BY"]
+        self.assertEqual(others, [e for e in self.mapped["edges"] if e["type"] != "SUPPORTED_BY"])
+        self.assertNotIn("applicability", self.supported(self.mapped)[0]["attrs"])   # the input is not modified
+
+    def test_changed_wording_is_not_verified(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        out = self.build(rec, [FILTER, EXPORT], [FILTER2, EXPORT])   # same repository context, no new baseline
+        row = self.by_text(out)[FILTER2]
+        self.assertEqual((row["state"], row["reason"], row["ledger"]), ("Unverified", gm.VERIFY_CHANGED, "Verified"))
+        self.assertNotEqual(row["revision"], row["confirmed"]["revision"])
+        self.assertEqual((row["confirmed"]["state"], row["confirmed"]["lifecycle"]),
+                         ("Verified within recorded scope", "historical"))   # A's result stays on A
+        rid = next(r for r, e in self.index["requirements"].items() if e["text"] == FILTER2)
+        self.assertEqual(row["confirmed"]["revision"], self.index["requirements"][rid]["confirmed"][self.wf["id"]])
+
+    def test_a_mapped_current_failing_run_is_failed(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        self.captured_test(rec, "t2", status="failed")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        rec = self.map(rec, evidence="test:t2", criteria=["ac1"], coverage="complete")
+        row = self.by_text(self.build(rec))[FILTER]
+        self.assertEqual((row["state"], row["ledger"]), ("Failed", "Missing"))
+
+    def test_a_passing_unmapped_run_is_unverified(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        out = self.build(rec)
+        self.assertEqual({r["state"] for r in out["rows"].values()}, {"Unverified"})
+        self.assertEqual(self.supported(out), [])
+        ticket = gb.verification_rows(None, self.index, self.mapped["edges"])
+        self.assertEqual(sorted(ticket["rows"]), sorted(self.index["requirements"]))
+        self.assertEqual({(r["state"], r["reason"]) for r in ticket["rows"].values()},
+                         {("Unverified", "no confirmed baseline covers this requirement")})
+
+    def test_a_jira_only_requirement_is_unverified(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        out = self.build(rec, [FILTER, EXPORT, EMPTY])
+        empty = next(r for r, e in self.index["requirements"].items() if e["text"] == EMPTY)
+        self.assertEqual(self.index["requirements"][empty]["status"], "unconfirmed")
+        self.assertNotIn(empty, out["rows"])   # this workflow does not speak for it
+        self.assertEqual(gb.verification_rows(None, self.index)["rows"][empty]["state"], "Unverified")
+
+    def test_a_pass_at_r1_with_the_context_now_at_r2_is_historical_only(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1", head=HEAD1)
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        rec = self.observe(rec, head=HEAD2)
+        out = self.build(rec)
+        row = self.by_text(out)[FILTER]
+        self.assertEqual((row["state"], row["ledger"]), ("Historical only", "Unverified"))
+        edge = self.supported(out)[0]
+        self.assertEqual((edge["attrs"]["applicability"], edge["attrs"]["reason"]),
+                         ("historical", "changed since observation: head"))
+
+    def test_unknown_context_is_never_current(self):
+        rec = self.started_with([FILTER, EXPORT])   # no observation recorded: head unknown
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        out = self.build(rec)
+        self.assertEqual(self.by_text(out)[FILTER]["state"], "Unverified")
+        attrs = self.supported(out)[0]["attrs"]
+        self.assertEqual(attrs["applicability"], "unknown")
+        self.assertTrue(attrs["reason"].startswith("not captured: "))
+
+    def test_graph_never_exceeds_ledger(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT, EMPTY]))
+        self.captured_test(rec, "t1")
+        self.captured_test(rec, "t2", status="failed")
+        self.captured_test(rec, "t3")
+        self.captured_test(rec, "t4", head=HEAD2)
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        rec = self.map(rec, evidence="test:t2", criteria=["ac2"], coverage="complete")
+        rec = self.map(rec, evidence="test:t3", criteria=["ac3"], coverage="partial")
+        rec = self.map(rec, evidence="test:t4", criteria=["ac3"], coverage="complete")
+        rec = self.map(rec, criteria=["ac2"], manual={"kind": "acceptance", "outcome": "passed", "text": "Checked",
+                                                      "revision": HEAD1, "limits": "One account"})
+        verified = companion.verify(rec["id"], rec["revision"])
+        ledger = {r["criterion"]: r["status"] for r in verified["verifications"][-1]["rows"]}
+        order = gm.ORDER["verification"]
+        for reads in (([FILTER, EXPORT, EMPTY],), ([FILTER, EXPORT, EMPTY], [FILTER2, EXPORT, EMPTY])):
+            out = self.build(verified, *reads)
+            self.assertEqual(out["ledger"], ledger)   # the same function, the same answer
+            for rid, row in out["rows"].items():
+                self.assertLessEqual(order.index(row["state"]), order.index(LEDGER[ledger[row["criterion"]]]),
+                                     (row["criterion"], row["state"], ledger[row["criterion"]]))
+        self.assertEqual(ledger, {"ac1": "Verified", "ac2": "Missing", "ac3": "Partial"})
+
+    def test_a_newer_head_is_a_gap_and_never_an_override(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        newer = {"name": "PR #7 head", "kind": "pull_request", "head": HEAD2, "observed_at": "2026-11-08T11:00:00+00:00"}
+        out = self.build(rec, refs=[newer])
+        self.assertEqual(self.by_text(out)[FILTER]["state"], "Verified within recorded scope")   # not overridden
+        gap = out["gaps"][0]
+        self.assertEqual((gap["reference"], gap["head"], gap["context_head"], gap["reason"]),
+                         ("PR #7 head", HEAD2, HEAD1, gb.NEWER_HEAD))
+        for ref in (dict(newer, observed_at="2026-11-08T09:00:00+00:00"), dict(newer, head=HEAD1 + "0" * 28),
+                    dict(newer, observed_at="")):
+            self.assertEqual(self.build(rec, refs=[ref])["gaps"], [], ref)
+
+    def test_an_earlier_baseline_pin_takes_the_same_rule_and_is_not_cited(self):
+        rec = self.observe(self.started_with([FILTER, EXPORT]))
+        self.captured_test(rec, "t1")
+        self.captured_test(rec, "t3", head=HEAD2)
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        wf = gb.workflow_inputs(companion.get(rec["id"]))
+        earlier = model.baseline(fx.criteria_rows([FILTER]))
+        wf["baselines"][earlier["id"]] = earlier
+        old = dict(wf["evidence"][0], id="test:t3", source_ref="tests:t3", baseline=earlier["id"],
+                   context=dict(wf["evidence"][0]["context"], head=HEAD2))
+        wf["evidence"].append(old)   # mapped under an earlier baseline: the ledger does not cite it
+        index = gb.baseline_links(self.history([FILTER, EXPORT]), [wf], TICKET)
+        tk = self.tk()
+        ident = {"scratch": gb.repo_identity("scratch", tk, [], [wf["binding"]])}
+        mapped = gb.mapping_edges(wf, index, gb.test_nodes(tk, ident, TICKET))
+        out = gb.verification_rows(wf, index, mapped["edges"])
+        edges = {e["attrs"]["pin"]: e["attrs"] for e in out["edges"] if e["type"] == "SUPPORTED_BY"}
+        self.assertEqual(sorted(edges), ["test:t1", "test:t3"])
+        self.assertEqual((edges["test:t1"]["applicability"], edges["test:t1"]["cited"]), ("current", True))
+        self.assertEqual((edges["test:t3"]["applicability"], edges["test:t3"]["reason"], edges["test:t3"]["cited"]),
+                         ("historical", "changed since observation: head", False))
+        self.assertEqual(out["ledger"], {"ac1": "Verified", "ac2": "Unverified"})   # the earlier pin counts for nothing
 
 
 if __name__ == "__main__":
