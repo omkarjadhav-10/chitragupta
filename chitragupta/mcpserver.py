@@ -1,4 +1,4 @@
-"""Chitragupta's read-only MCP server: Claude Code asks the worklog through 10 tools instead of reading files.
+"""Chitragupta's read-only MCP server: Claude Code asks the worklog through 14 tools instead of reading files.
 
 Started by Claude Code from the plugin's .mcp.json (bin/cg-mcp → hooks/run.py mcp). Transport: stdio,
 newline-delimited JSON-RPC 2.0; stdout carries protocol messages only (anything else printed while serving goes to
@@ -103,6 +103,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "period": _s(enum=("today", "week", "month", "records", "wins")), "date": _s(_DATE),
          "include_ids": {"type": "boolean"}, "page": _PAGE}}},
+    # Evidence Graph (graphviews): `workflow` and `cursor` are accepted, not advertised (the tools/list size cap)
+    {"name": "get_graph",
+     "description": "Requirement trace: plan, code, tests, PRs, statuses, changes.",
+     "inputSchema": {"type": "object", "properties": {
+         "key": _s(), "view": _s(enum=("summary", "trace", "changes")), "requirement": _s(), "since": _s(),
+         "page": _PAGE}, "required": ["key"]}},
 ]
 # Every tool accepts `page` without advertising it: an answer longer than one page ends with "… more: page=N (of M)",
 # which names it (kept out of the schemas for the tools/list size cap).
@@ -910,7 +916,36 @@ def tool_get_progress(args, cfg):
     return progress.markdown(period, date, cfg, include_ids=bool(inc))
 
 
+def tool_get_graph(args, cfg):
+    """The Evidence Graph as text: summary, a requirement's trace, or the changes since a journal sequence. The same
+    envelope `cli graph` and the Companion bridge return, rendered by graphviews.render_text."""
+    from . import graphviews
+    key = _key(_arg(args, "key", True))
+    view = _arg(args, "view") or "summary"
+    if view not in graphviews.VIEWS:
+        raise ToolError("`view` must be summary, trace or changes")
+    req = {"view": view, "ticket": key}
+    for name in ("requirement", "workflow", "cursor"):
+        value = _arg(args, name)
+        if value:
+            req[name] = value
+    since = args.get("since")
+    if since not in (None, ""):
+        if isinstance(since, bool) or not (isinstance(since, int) or (isinstance(since, str) and since.strip().isdigit())):
+            raise ToolError("`since` must be a journal sequence number")
+        req["since"] = int(since)
+    try:
+        env = graphviews.read(req)
+    except PermissionError:
+        from .dashboard import api
+        raise ToolError(_outside_text(key, api.scope_of(key, cfg)))
+    except ValueError as e:
+        raise ToolError(str(e))
+    return graphviews.render_text(env)
+
+
 HANDLERS = {
+    "get_graph": tool_get_graph,
     "search": tool_search, "get_ticket": tool_get_ticket, "get_day": tool_get_day, "get_timesheet": tool_get_timesheet,
     "get_branch_status": tool_get_branch_status, "get_db_table": tool_get_db_table, "get_db_flow": tool_get_db_flow,
     "get_db_investigation": tool_get_db_investigation, "get_db_impact": tool_get_db_impact,

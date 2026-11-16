@@ -20,6 +20,10 @@ or a model.
 | `cli graph status` | What the index holds and how many of your tickets it is behind on |
 | `cli graph rebuild` | Replace the index from cached records (see [Rebuild and recovery](#rebuild-and-recovery)) |
 
+Claude can ask the same three questions through the read-only MCP tool `get_graph(key, view?, requirement?, since?)`
+(the same text, see [mcp.md](mcp.md)); the optional native Companion reads them as `graph_summary`, `graph_trace` and
+`graph_changes` through its bridge (the same JSON as `--json`).
+
 A requirement is named by its id (`gr_…`), by the alias a task's baseline gives it (`ac2`), or by its order on the
 card (`R3`). When two tasks on the ticket both use `ac1`, add `--workflow w_…`. Long answers end with
 `More: pass cursor …`; rerun the same command with `--cursor`. `--json` prints the full envelope, `--privacy` hides

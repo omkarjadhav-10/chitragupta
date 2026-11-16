@@ -21,7 +21,14 @@ from chitragupta import (common, companion, companion_mcp, companionevidence as 
 from chitragupta.companionexecution import record_dispatch
 
 READS = ("snapshot", "planner", "detail", "review", "plan", "changes", "verification", "jobs", "handoff", "database",
-         "drafts")
+         "drafts", "graph_summary", "graph_trace", "graph_changes")
+
+
+def graph_args(op, rec):
+    """The graph operations take a ticket (and a requirement for the trace), not a workflow."""
+    if not op.startswith("graph_"):
+        return {}
+    return dict({"ticket": rec["binding"]["ticket"]}, **({"requirement": "ac1"} if op == "graph_trace" else {}))
 
 
 def tree(*roots):
@@ -99,14 +106,18 @@ class EnvelopeContract(ViewBase):
         for op in READS:
             with self.subTest(op=op):
                 out = self.read(op, workflow=rec["id"]) if op not in ("snapshot", "planner", "database") \
-                    else self.read(op)
+                    and not op.startswith("graph_") else self.read(op, **graph_args(op, rec))
                 self.assertEqual(out["operation"], op)
                 self.assertLessEqual(len(json.dumps(out).encode()), views.MAX_BYTES)
         for bad in ({"operation": "save_plan"}, {"operation": "detail", "workflow": "../../x"},
                     {"operation": "snapshot", "tool": "x"}, {"operation": "plan", "plan": "p_../x"},
                     {"operation": "planner", "group": "everything"}, {"operation": "snapshot", "privacy": "yes"},
                     {"operation": "database", "flow": "f_; DROP"}, {"operation": "snapshot", "pinned": ["x"] * 11},
-                    {"operation": "snapshot", "ticket": "A" * 9000}, "snapshot"):
+                    {"operation": "snapshot", "ticket": "A" * 9000}, "snapshot",
+                    {"operation": "graph_trace", "ticket": "ABC-1001", "requirement": "ac1; x"},
+                    {"operation": "graph_changes", "ticket": "ABC-1001", "since": "1"},
+                    {"operation": "snapshot", "since": 1}, {"operation": "detail", "requirement": "ac1"},
+                    {"operation": "graph_summary"}):
             with self.subTest(bad=str(bad)[:60]):
                 with self.assertRaises(ValueError):
                     views.read(bad)
@@ -137,7 +148,9 @@ class SideEffects(ViewBase):
         with stack:
             for _ in range(10):  # reopening ten times: one view, no growth
                 for op in READS:
-                    if op in ("snapshot", "planner", "database"):
+                    if op.startswith("graph_"):
+                        self.read(op, **graph_args(op, rec))
+                    elif op in ("snapshot", "planner", "database"):
                         self.read(op)
                         self.read(op, workflow=rec["id"]) if op == "snapshot" else None
                     else:

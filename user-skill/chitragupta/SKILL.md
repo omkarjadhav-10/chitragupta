@@ -57,7 +57,11 @@ queries, dbflow, branches, artifacts, timeline, notes) · `get_day(date)` (YYYY-
 `list_tickets(q?, status?, repo?, since?, release?, mine?)` (`release=YYYY-MM`: my tickets scheduled that month;
 `mine=true`: only tickets that are mine now, each with why) · `get_alerts()` (scoped to my tickets) ·
 `get_progress(period?, date?, include_ids?)` (today / week / month / records / wins: my authored commits, committed
-changes, PRs raised and merged, completed tickets, each known / zero / partial / stale / unknown with why). Long
+changes, PRs raised and merged, completed tickets, each known / zero / partial / stale / unknown with why) ·
+`get_graph(key, view?, requirement?, since?)` (the ticket's Evidence Graph: `summary` for which requirements are
+planned, implemented and verified and the next action; `trace` with `requirement` (`ac2`, `R3` or a `gr_` id) for
+what supports one requirement; `changes` for what changed — use it for "is ac2 done / tested?", "what is
+left on ABC-1234?", "what changed since …"; keep its three statuses apart and repeat each link's basis). Long
 answers end with "more: page=N" — pass `page`.
 "Mine" always means the developer profile's confirmed identities (`docs/progress.md` of the plugin): Jira tickets
 assigned to my confirmed account or included by me, commits authored by a confirmed email, PRs authored by my

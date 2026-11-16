@@ -24,9 +24,10 @@ INPUT_BYTES = 8192
 TEXT_PAGE = 8000
 PACKET_PAGE = 24000
 OPERATIONS = ("snapshot", "planner", "detail", "review", "plan", "changes", "verification", "jobs", "handoff",
-              "database", "drafts")
+              "database", "drafts", "graph_summary", "graph_trace", "graph_changes")
 ARGS = {"operation", "workflow", "ticket", "plan", "base", "offset", "cursor", "flow", "investigation", "privacy",
-        "pinned", "group"}
+        "pinned", "group", "requirement", "since"}
+_GRAPH_REQ = re.compile(r"^(?:gr_[0-9a-f]{24}|ac\d{1,4}|R\d{1,6})$")
 GROUP_LABELS = {"new": "New", "planned": "Planned", "review_incomplete": "Review incomplete",
                 "in_development": "In development", "paused": "Paused", "awaiting_verification": "Testing",
                 "pr_review": "PR review", "completed": "Completed"}
@@ -1213,11 +1214,29 @@ def _validate(args):
     off = args.get("offset", 0)
     if isinstance(off, bool) or not isinstance(off, int) or not 0 <= off <= 10 ** 7:
         raise ValueError("invalid offset")
+    req = args.get("requirement")
+    if req is not None and (not isinstance(req, str) or not _GRAPH_REQ.fullmatch(req)):
+        raise ValueError("invalid requirement argument")
+    since = args.get("since")
+    if since is not None and (isinstance(since, bool) or not isinstance(since, int) or not 0 <= since < 10 ** 9):
+        raise ValueError("invalid since argument")
+    if (req is not None or since is not None) and not op.startswith("graph_"):
+        raise ValueError("requirement and since apply to the graph operations only")
     return op
+
+
+def _graph(op, args):
+    """The Evidence Graph operations: graphviews' own envelope, validated and access-checked there."""
+    from . import graphviews
+    return graphviews.read(dict({"view": op[len("graph_"):]},
+                                **{k: args[k] for k in ("ticket", "requirement", "workflow", "since", "cursor", "privacy")
+                                   if args.get(k) is not None}))
 
 
 def read(args):
     op = _validate(args)
+    if op.startswith("graph_"):
+        return _graph(op, args)
     if op == "snapshot":
         return snapshot(args)
     if op == "planner":

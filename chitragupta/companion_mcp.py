@@ -12,7 +12,8 @@ from . import companionviews, mcpserver
 MAX_LINE = 8192
 TOOL = {"name": "companion_read",
         "description": "Read cached, profile-scoped Chitragupta Companion projections (snapshot, planner, detail, "
-                       "review, plan, changes, verification, jobs, handoff, database). Read-only.",
+                       "review, plan, changes, verification, jobs, handoff, database) and a ticket's Evidence Graph "
+                       "(graph_summary, graph_trace with `requirement`, graph_changes with `since`). Read-only.",
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
                         "openWorldHint": False},
         "inputSchema": {"type": "object", "additionalProperties": False, "required": ["operation"], "properties": {
@@ -23,7 +24,8 @@ TOOL = {"name": "companion_read",
             "cursor": {"type": "string", "maxLength": 1024}, "flow": {"type": "string", "maxLength": 50},
             "investigation": {"type": "string", "maxLength": 50}, "privacy": {"type": "boolean"},
             "pinned": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 40}},
-            "group": {"type": "string", "maxLength": 40}}}}
+            "group": {"type": "string", "maxLength": 40},
+            "requirement": {"type": "string", "maxLength": 40}, "since": {"type": "integer", "minimum": 0}}}}
 
 
 class Server(mcpserver.Server):

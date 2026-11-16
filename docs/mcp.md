@@ -26,6 +26,7 @@ The tools are named `mcp__plugin_cg_chitragupta__<tool>` in Claude Code.
 | `list_tickets` | `q?`, `status?`, `repo?`, `since?`, `release?`, `mine?` | One line per ticket of yours (current, your earlier or collaborative work, or a parent kept as context; never a record of somebody else's work), newest activity first, each saying why it is yours or not (assigned to you, included by you, reassigned, assigned to someone else, unassigned, unknown). `mine=true`: only the tickets that are yours now. With `release` (`YYYY-MM` or `this-month`): your tickets scheduled that month by planned release date, with per-repo state and next step, then overdue and unresolved-date tickets ([releases.md](releases.md#the-monthly-overview)) |
 | `get_alerts` | none | Branch and PR delivery alerts and release and UAT reminders of **your** tickets (it says how many tickets assigned to someone else it left out), and worklog health warnings (paused capture, a stale tick, the last error, safety blocks) |
 | `get_progress` | `period?` (`today`, `week`, `month`, `records`, `wins`), `date?`, `include_ids?` | Your profile line, then that period's authored commits, committed changes, shared and co-authored commits, PRs raised and merged and completed tickets, each with known / zero / partial / stale / unknown and why; records with their coverage; the weekly wins. No email or account id unless `include_ids=true` ([progress.md](progress.md)) |
+| `get_graph` | `key`, `view?` (`summary`, `trace`, `changes`), `requirement?` (`gr_…`, `ac2`, `R3`; for `trace`), `since?` (a journal sequence; for `changes`) | The ticket's [Evidence Graph](evidence-graph.md), the same text as `cli graph`: `summary` gives each requirement with plan coverage, implementation and verification kept apart, counts, critical and ambiguous items and the one next action; `trace` gives one requirement's wording over time and what reaches it, layer by layer, each link with its basis; `changes` folds what changed since `since`. Also accepts `workflow` (when an alias is used by several tasks) and `cursor` (printed at the end of a long answer), not advertised. A ticket outside your scope answers like `get_ticket` |
 
 Every tool also takes `page` (not listed in the schemas, to keep the tool list small; a cut answer names it). An answer is at most 8,000 characters. A longer one is cut at a line break and ends with
 `… more: page=2 (of 3)`.
@@ -71,7 +72,9 @@ refreshes or queries anything: impact and comparison results are computed only b
 The optional native Companion (`companion/`, a separate plugin) starts its own small server,
 `python -m chitragupta.companion_mcp`, with one read-only tool, `companion_read`: the same bounded projections as the
 dashboard's Companion page (`snapshot`, `planner`, `detail`, `review`, `plan`, `changes`, `verification`, `jobs`,
-`handoff`, `database`, `drafts`). It has no mutation, no other tool and no forwarding, caps a request at 8 KiB and an answer at
+`handoff`, `database`, `drafts`), plus the Evidence Graph's `graph_summary`, `graph_trace` (with `requirement`) and
+`graph_changes` (with `since`), which take a `ticket` and return the same JSON envelope as `cli graph … --json`. It
+has no mutation, no other tool and no forwarding, caps a request at 8 KiB and an answer at
 64 KiB, and is not part of this server's tool list or context cost. See [companion.md](companion.md).
 
 ## How it starts
@@ -100,10 +103,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python hooks/run.py mcp
 ## Context cost
 
 - **With tool search (the Claude Code default)**, a session loads only the tool names and the server's instructions:
-  10 names (~400 characters with their `mcp__plugin_cg_chitragupta__` prefix) plus 255 characters of instructions.
-  That is about **160 tokens** per session. A tool's schema loads only when Claude looks it up.
+  14 names (~560 characters with their `mcp__plugin_cg_chitragupta__` prefix) plus 255 characters of instructions.
+  That is about **200 tokens** per session. A tool's schema loads only when Claude looks it up.
 - **When tools load upfront** (tool search off, or a `claude -p` run without the tool-search tool), the full
-  `tools/list` result is about 3,500 characters of compact JSON (a test keeps it under that), about **850 tokens**. Claude Code's own wrapping
-  brings it to roughly 800–900.
+  `tools/list` result is 3,783 characters of compact JSON (a test keeps it under 3,800; it was 3,474 before
+  `get_graph`), about **950 tokens**. One `get_graph` tool with a `view` argument costs about 310 characters; three
+  separate tools would have needed about 630.
 - **Answers** are capped at 8,000 characters (about 2,000 tokens) per call, well under Claude Code's 10,000-token
   warning for MCP output.

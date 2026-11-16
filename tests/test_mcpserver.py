@@ -12,7 +12,8 @@ from tests import support
 from tests.test_dashboard import TICKET, Base, _w, snapshot
 
 TOOLS = ["search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table", "get_db_flow",
-         "get_db_investigation", "get_db_impact", "get_db_comparison", "list_tickets", "get_alerts", "get_progress"]
+         "get_db_investigation", "get_db_impact", "get_db_comparison", "list_tickets", "get_alerts", "get_progress",
+         "get_graph"]
 
 
 def srv():
@@ -123,7 +124,8 @@ class TestProtocol(McpBase):
             self.assertEqual(t["inputSchema"]["type"], "object")
             for r in t["inputSchema"].get("required", []):
                 self.assertIn(r, t["inputSchema"]["properties"])
-        self.assertLess(len(json.dumps(tools, separators=(",", ":"))), 3500)  # ~800 tokens if loaded upfront
+        # 3,474 characters before get_graph; 3,783 with it (measured when it was added): ~870 tokens if loaded upfront
+        self.assertLess(len(json.dumps(tools, separators=(",", ":"))), 3800)
 
     def test_tool_argument_errors_are_results(self):
         self.assertIn("`q` is required", self.error_text("search"))
@@ -362,7 +364,9 @@ ALL_CALLS = [("search", {"q": "order"}), ("search", {"q": "discount", "ticket": 
     ("get_day", {"date": "today"}), ("get_day", {"date": "yesterday"}), ("get_timesheet", {"period": "week"}),
     ("get_timesheet", {"period": "month", "from": "-60"}), ("get_branch_status", {"key": TICKET}),
     ("get_db_table", {"name": "orders"}), ("get_db_flow", {}), ("get_db_flow", {"start": TICKET}),
-    ("get_db_flow", {"start": "orders"}), ("list_tickets", {}), ("get_alerts", {}), ("get_ticket", {"key": "ABC-9999"})]
+    ("get_db_flow", {"start": "orders"}), ("list_tickets", {}), ("get_alerts", {}), ("get_ticket", {"key": "ABC-9999"}),
+    ("get_graph", {"key": TICKET}), ("get_graph", {"key": TICKET, "view": "trace", "requirement": "ac1"}),
+    ("get_graph", {"key": TICKET, "view": "changes", "since": 0}), ("get_graph", {"key": "ABC-9999"})]
 
 
 class TestReadOnly(McpBase):
@@ -462,6 +466,54 @@ class TestIsolation(unittest.TestCase):
             self.assertEqual(json.loads(p.stdout.decode().splitlines()[0])["result"]["serverInfo"]["name"], "chitragupta")
         finally:
             support.rmtree(tmp)
+
+
+from tests.test_graph_store import SyncBase as _GraphHome  # noqa: E402  (a home with a card, a workflow and runs)
+
+
+class GraphSurfaces(_GraphHome):
+    """EG-A20: `get_graph`, the Companion bridge and `cli graph` give the same answer for the same ticket."""
+
+    def bridge(self, arguments):
+        from chitragupta import companion_mcp
+        return companion_mcp.Server().handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "companion_read", "arguments": arguments}})["result"]
+
+    def test_mcp_text_bridge_json_and_cli_agree(self):
+        from chitragupta import graphviews
+        from tests.test_cli import run_cli
+        m = srv()
+        self.sync()
+        for view, extra, flags in (("summary", {}, []), ("trace", {"requirement": "ac1"}, ["--requirement", "ac1"]),
+                                   ("changes", {"since": 0}, ["--since", "0"])):
+            with self.subTest(view=view):
+                env = graphviews.read(dict({"view": view, "ticket": "ABC-1001"}, **extra))
+                text = graphviews.render_text(env)
+                mcp = m.call_tool("get_graph", dict({"key": "ABC-1001", "view": view}, **extra))
+                self.assertFalse(mcp["isError"], mcp)
+                self.assertEqual(mcp["content"][0]["text"], m.paginate(text)[0])
+                bridged = self.bridge(dict({"operation": "graph_" + view, "ticket": "ABC-1001"}, **extra))
+                self.assertFalse(bridged["isError"], bridged)
+                self.assertEqual(bridged["structuredContent"], env)
+                rc, out, _ = run_cli("graph", view, "ABC-1001", *flags)
+                self.assertEqual((rc, out.rstrip("\n")), (0, text))
+
+    def test_outside_the_scope_and_bad_arguments(self):
+        m = srv()
+        self.sync()
+        os.remove(os.path.join(self.home, "data", "tickets", "ABC-1002.json"))
+        out = m.call_tool("get_graph", {"key": "ABC-1002"})
+        self.assertTrue(out["isError"])
+        self.assertIn("outside your personal scope", out["content"][0]["text"])
+        self.assertTrue(self.bridge({"operation": "graph_summary", "ticket": "ABC-1002"})["isError"])
+        for args, wanted in (({"key": "ABC-1001", "view": "everything"}, "`view` must be"),
+                             ({"key": "ABC-1001", "since": "soon"}, "`since` must be"),
+                             ({"key": "ABC-1001", "view": "trace", "requirement": "ac9"}, "unknown requirement"),
+                             ({"key": "../x"}, "ticket key")):
+            with self.subTest(args=args):
+                out = m.call_tool("get_graph", args)
+                self.assertTrue(out["isError"])
+                self.assertIn(wanted, out["content"][0]["text"])
 
 
 if __name__ == "__main__":

@@ -88,7 +88,7 @@ ACTION_KEYS = ("action", "method")
 OWN_MCP_SERVER = "plugin_cg_chitragupta"
 OWN_MCP_TOOLS = frozenset({"search", "get_ticket", "get_day", "get_timesheet", "get_branch_status", "get_db_table",
                            "get_db_flow", "get_db_investigation", "get_db_impact", "get_db_comparison",
-                           "list_tickets", "get_alerts", "get_progress"})
+                           "list_tickets", "get_alerts", "get_progress", "get_graph"})
 # Policy A for another plugin's MCP tools during a /cg: command: denied (a /cg: command only uses Chitragupta's tools),
 # but they're the other plugin's own background calls, not an attempt to write: logged with this category and left
 # out of the violation counts (log.summary).
