@@ -242,7 +242,8 @@ async function launch() {
     check(!v.length, 'graph trace: axe serious/critical ' + (v.join(', ') || 'none'));
     await sp.unroute(view('summary'));
     await sp.route(view('summary'), (r) => r.fulfill({ status: 403, json: { error: 'ticket is unavailable in the current profile', revoke: true } }));
-    await sp.goto(base + '#/graph?ticket=ABC-1001');
+    // a full load: a hash-only change keeps the same summary address, so nothing would be asked again
+    await sp.goto(base + '?r=revoked#/graph?ticket=ABC-1001');
     const revoked = await sp.getByText('Not available', { exact: true }).waitFor({ timeout: 10000 }).then(() => true, () => false);
     check(revoked && await sp.locator('.egx-req').count() === 0, 'graph: a revoked ticket clears the page');
     await sx.close();
