@@ -919,3 +919,188 @@ def test_nodes(tk, identities, ticket, branches=None):
         _put(graphmodel.edge("HAS_EVIDENCE", ticket, run, key, "observed", evidence_ref=ref,
                              attrs={"how": "session turn"}), edges)
     return _sorted(nodes, edges)
+
+
+# --- the developer's mappings (Companion evidence pins) and implementation status (design sections 6, 10, 11) ---
+# A requirement-level link exists only where a developer declared it. The one heuristic here, an exact path match,
+# produces inferred edges that are listed and never counted.
+
+PINNED_COPY = "pinned copy; source no longer retained"
+LEGACY_UNBOUND = "legacy-unbound"
+EXACT_PATH = "exact-path"
+PATH_CONFIDENCE = 0.5
+_IMPLEMENTS = ("commit", "file")
+_TESTS = ("test", "ci")
+_MANUAL = ("acceptance", "code_inspection")
+
+
+def _plan_lives(workflow):
+    """{plan id: lifecycle}, as `plan_nodes` decides it: versions before the judged plan are superseded."""
+    plans = workflow.get("plans") or {}
+    order = [pid for pid in workflow.get("plan_order") or sorted(plans) if pid in plans]
+    judged = judged_plan(workflow)[0]
+    pivot = order.index(judged) if judged in order else len(order) - 1
+    return {pid: "superseded" if n < pivot else "current" for n, pid in enumerate(order)}
+
+
+def _step_targets(workflow, pin, lives):
+    """Where a pin's step ids point. → [(plan id, step id, ambiguous)].
+
+    A pin that records its plan points into that plan only. A pin saved before plans were recorded is bound to a
+    step only where that can be proven: one saved plan has the id, or every plan that has it words the step the
+    same. Otherwise each candidate is returned as ambiguous and nothing is chosen."""
+    plans, out = workflow.get("plans") or {}, []
+    for sid in pin.get("steps") or []:
+        if pin.get("plan"):
+            if any(s["id"] == sid for s in (plans.get(pin["plan"]) or {}).get("steps") or []):
+                out.append((pin["plan"], sid, False))
+            continue
+        found = [(pid, s) for pid in lives for s in plans[pid].get("steps") or [] if s["id"] == sid]
+        if len(found) == 1 or (found and len({planning.norm(s.get("text")) for _, s in found}) == 1):
+            judged = judged_plan(workflow)[0]
+            pid = judged if any(p == judged for p, _ in found) else found[-1][0]
+            out.append((pid, sid, False))
+        else:
+            out += [(pid, sid, True) for pid, _ in found]
+    return out
+
+
+def mapping_edges(workflow, requirement_index, graph):
+    """Project one workflow's evidence pins into requirement-level edges.
+
+    graph  {nodes, edges} built so far for the ticket (commits, code changes, test runs, CI runs): a pin is linked
+           to the node of the source it names; a source the ticket record no longer holds gets a node made from
+           the pinned copy, `lifecycle: source_missing`
+    → {nodes, edges, unprojected}: new nodes only (observations, pinned copies), the declared edges, the inferred
+      exact-path edges, and the ids of pins whose kind has no requirement-level edge (pull requests, decisions)."""
+    wid, binding = workflow["id"], workflow.get("binding") or {}
+    key, ticket, repo_id = binding.get("ticket") or "", requirement_index.get("ticket"), binding.get("repo_id") or ""
+    have = {row["id"]: row for row in graph.get("nodes") or []}
+    by_evidence = {row["attrs"].get("evidence"): row["id"] for row in have.values() if row["type"] == "test_run"}
+    case_of = {row["dst"]: row["src"] for row in graph.get("edges") or [] if row["type"] == "EXECUTED_IN"}
+    commits, changes = {}, {}
+    for row in sorted(have.values(), key=lambda r: (r.get("repo_id") != repo_id, r["id"])):
+        if row["type"] == "commit":
+            commits.setdefault(row["attrs"].get("sha"), row["id"])
+        elif row["type"] == "code_change" and row.get("repo_id") in (repo_id, ""):
+            changes.setdefault(str(row["attrs"].get("path") or "").replace("\\", "/"), []).append(row["id"])
+    mapped = (requirement_index.get("baselines") or {}).get(wid) or {}
+    lives = _plan_lives(workflow)
+    place = {"workflow": wid, "repo_id": repo_id, "location": _place(binding.get("location"))}
+    nodes, edges, unprojected = {}, {}, []
+
+    def missing(kind, identity, label, attrs, pin):
+        """A node made from the pinned copy of a source the ticket record no longer holds."""
+        return _put(graphmodel.node(kind, identity, key, label or pin.get("label") or pin["id"],
+                                    dict(attrs, pinned=True, note=PINNED_COPY), lifecycle="source_missing",
+                                    repo_id=repo_id, observed_at=str(pin.get("observed_at") or ""),
+                                    source_ref="workflow:%s/evidence:%s" % (wid, pin["id"])), nodes)
+
+    def declare(kind, src, dst, scope, pin, attrs, life="current"):
+        row = graphmodel.edge(kind, src, dst, key, "declared", scope=scope, attrs=attrs, lifecycle=life, workflow=wid,
+                              evidence_ref="workflow:%s/evidence:%s" % (wid, pin["id"]),
+                              observed_at=str(pin.get("mapped_at") or ""))
+        row = edges.setdefault(row["id"], row)   # the same edge declared again keeps every actor and time
+        graphmodel.add_declaration(row, pin.get("mapped_by") or "", pin.get("mapped_at") or "", pin["id"])
+
+    def targets(pin):
+        """→ (the nodes an implementation pin names, the test case, the run or observation)."""
+        kind, _, rest = pin["id"].partition(":")
+        if pin["kind"] == "commit":
+            return [commits.get(rest) or missing("commit", (repo_id, rest), "", {"sha": rest, "short": rest[:9],
+                                                                                 "mine": "unknown"}, pin)], None, None
+        if pin["kind"] == "file":
+            path = rest.replace("\\", "/")
+            return changes.get(path) or [missing("code_change", (repo_id, UNKNOWN_LOCATION, path, "pinned"), path,
+                                                 {"path": path, "state": "unknown", "verified": False}, pin)], None, None
+        if pin["kind"] in _TESTS:
+            run = by_evidence.get(pin["id"])
+            if run is None:
+                head = ((pin.get("context") or {}) if isinstance(pin.get("context"), dict) else {}).get("head") or ""
+                parts = pin["id"].split(":")
+                identity = (ticket, rest) if pin["kind"] == "test" else (parts[1], repo_id, parts[-2], pin.get("attempt"))
+                run = missing("test_run", identity, "", {
+                    "status": pin.get("outcome") if pin.get("outcome") in RUN_STATES else "unknown",
+                    "source": "local" if pin["kind"] == "test" else "ci", "head": head, "evidence": pin["id"]}, pin)
+            return [], case_of.get(run), run
+        note = _put(graphmodel.node(
+            "observation", (wid, pin["id"]), key, pin.get("label") or pin["id"],
+            {"kind": pin["kind"], "outcome": pin.get("outcome"), "revision": pin.get("revision") or "",
+             "actor": pin.get("actor") or pin.get("mapped_by") or "", "limits": pin.get("limits") or "",
+             "basis": "self-reported", "evidence": pin["id"]},
+            observed_at=str(pin.get("observed_at") or ""), source_ref="workflow:%s/evidence:%s" % (wid, pin["id"]),
+            **place), nodes)
+        return [], None, note
+
+    for pin in workflow.get("evidence") or []:
+        if not isinstance(pin, dict) or not isinstance(pin.get("id"), str) or not pin.get("kind"):
+            continue
+        if pin["kind"] not in _IMPLEMENTS + _TESTS + _MANUAL:
+            unprojected.append(pin["id"])
+            continue
+        made, case, proof = targets(pin)
+        criteria = mapped.get(pin.get("baseline")) or {}
+        revisions = [(cid, revision_id(criteria[cid]["requirement"], criteria[cid]["revision"]))
+                     for cid in pin.get("criteria") or [] if cid in criteria]
+        common_attrs = {"criterion": None, "baseline": pin.get("baseline") or "", "pin": pin["id"]}
+        for cid, revision in revisions:
+            attrs = dict(common_attrs, criterion=cid)
+            for node in made:
+                declare("IMPLEMENTED_BY", revision, node, wid, pin, attrs)
+            if proof:
+                if case:
+                    declare("COVERED_BY_TEST", revision, case, wid, pin, attrs)
+                declare("SUPPORTED_BY", revision, proof, wid, pin,
+                        dict(attrs, coverage=pin.get("coverage") or "partial", outcome=pin.get("outcome"),
+                             kind=pin["kind"], steps=sorted(pin.get("steps") or [])))
+        for pid, sid, ambiguous in _step_targets(workflow, pin, lives) if made else []:
+            pnode = graphmodel.node_id("plan", wid, pid)
+            attrs = {"step": sid, "pin": pin["id"], "plan_binding": "recorded" if pin.get("plan") else "proven"}
+            if ambiguous:   # listed, never counted toward "Linked"
+                attrs.update(ambiguous=True, plan_binding=LEGACY_UNBOUND)
+            for node in made:
+                declare("IMPLEMENTED_BY", graphmodel.node_id("plan_step", pnode, sid), node, pnode, pin, attrs,
+                        lives.get(pid, "current"))
+
+    for pid, life in lives.items():   # the one heuristic: a file the plan names is a file that changed
+        named = {str(f.get("path") or "").replace("\\", "/") for f in
+                 ((workflow["plans"][pid].get("details") or {}).get("files") or []) if isinstance(f, dict)}
+        pnode = graphmodel.node_id("plan", wid, pid)
+        for path in sorted(named & set(changes)):
+            for node in changes[path]:
+                row = graphmodel.proposal({"schema": 1, "origin": EXACT_PATH, "type": "IMPLEMENTED_BY", "src": pnode,
+                                           "dst": node, "confidence": PATH_CONFIDENCE,
+                                           "rationale": "the plan names a file path that equals a changed path"},
+                                          ticket=key, scope=pnode)
+                row.update(workflow=wid, lifecycle=life)
+                row["version"] = graphmodel.version(row)
+                edges.setdefault(row["id"], row)
+    return dict(_sorted(nodes, edges), unprojected=sorted(unprojected))
+
+
+def implementation_rows(workflow, requirement_index, edges, ticket_has_changes):
+    """Implementation evidence per requirement: for one workflow (the requirements its current baseline confirms,
+    judged against its judged plan's implementation steps), or with `workflow` None the ticket-level rows, where
+    nothing is linked to a requirement and the only question is whether the ticket has changes at all.
+    → {gr: {state, basis, reason, edges}}"""
+    reqs = requirement_index.get("requirements") or {}
+    if workflow is None:
+        return {rid: graphmodel.implementation([], [], ticket_has_changes) for rid in reqs}
+    wid = workflow["id"]
+    baselines = (requirement_index.get("baselines") or {}).get(wid) or {}
+    judged = judged_plan(workflow)[0]
+    plan = (workflow.get("plans") or {}).get(judged) or {}
+    planned = {entry["requirement"]: cid for cid, entry in (baselines.get(plan.get("baseline")) or {}).items()}
+    pnode = graphmodel.node_id("plan", wid, judged) if judged else None
+    mine = [row for row in edges if row.get("workflow") == wid and row["type"] == "IMPLEMENTED_BY"]
+    out = {}
+    for entry in (baselines.get(workflow.get("baseline")) or {}).values():
+        rid = entry["requirement"]
+        cid = planned.get(rid)
+        steps = [graphmodel.node_id("plan_step", pnode, s["id"]) for s in plan.get("steps") or []
+                 if cid is not None and s.get("kind", "implementation") == "implementation"
+                 and cid in (s.get("criteria") or [])]
+        sources = set(steps) | {revision_id(rid, entry["revision"])}
+        out[rid] = graphmodel.implementation([row for row in mine if row["src"] in sources], steps,
+                                             ticket_has_changes)
+    return out

@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from chitragupta import graphbuild as gb, graphmodel as gm, hosts
+from chitragupta import companion, graphbuild as gb, graphmodel as gm, hosts
 from chitragupta.safety import commands
 from tests import graphfixture as fx
 
@@ -656,6 +656,293 @@ class LocalRuns(PrBase):
         self.assertEqual((run["repo_id"], run["attrs"]["applicability"]["reason"]), ("name:elsewhere",
                                                                                      gb.NOTHING_TO_COMPARE))
         self.assertEqual(gb.test_nodes(fx.ticket_record(), {}, TICKET), {"nodes": [], "edges": []})
+
+
+FILTER, EXPORT = "Orders can be filtered by status", "The filtered list can be exported as a spreadsheet"
+STEPS = [{"id": "one", "text": "Add the order filter", "criteria": ["ac1"]},
+         {"id": "two", "text": "Add the export", "criteria": ["ac2"]},
+         {"id": "check", "text": "Verify both", "kind": "verification", "criteria": ["ac1", "ac2"],
+          "depends_on": ["one", "two"]}]
+LIST = "src/orders/list.py"
+
+
+class Mappings(fx.Workflows):
+    def setUp(self):
+        super().setUp()
+        rec = fx.card(KEY, [FILTER, EXPORT])
+        self.history = gb.requirement_snapshot({}, rec, rec["card"], (), "x", TICKET, 1)[0]
+        self.commits = [fx.commit_rec(1, "ABC-1001 Add the order filter", repo="scratch", files=[LIST])]
+        self.tests = {}
+
+    def inputs(self, rec):
+        return gb.workflow_inputs(companion.get(rec["id"]))
+
+    def pin(self, wf, sid, criteria=(), steps=(), plan="judged", by="developer", at="2026-01-06T09:00:00+00:00", **extra):
+        row = dict({"id": sid, "kind": sid.split(":")[0], "criteria": sorted(criteria), "steps": sorted(steps),
+                    "coverage": "complete", "baseline": wf["baseline"], "mapped_by": by, "mapped_at": at,
+                    "pinned": True, "outcome": "observed", "label": sid}, **extra)
+        if steps and plan:
+            row["plan"] = gb.judged_plan(wf)[0] if plan == "judged" else plan
+        wf["evidence"].append(row)
+        return row
+
+    def build(self, wf, commits=None, files=()):
+        tk = fx.ticket_record(commits=self.commits if commits is None else commits, files=files, tests=self.tests)
+        self.index = gb.baseline_links(self.history, [wf], TICKET)
+        ident = {"scratch": gb.repo_identity("scratch", tk, [], [wf["binding"]])}
+        graph = gb.commit_nodes(tk, ident, TICKET)
+        runs = gb.test_nodes(tk, ident, TICKET)
+        self.graph = {"nodes": graph["nodes"] + runs["nodes"], "edges": graph["edges"] + runs["edges"]}
+        out = gb.mapping_edges(wf, self.index, self.graph)
+        self.assertEqual(out, gb.mapping_edges(wf, self.index, self.graph))   # deterministic
+        self.changes = bool(self.graph["nodes"])
+        return out
+
+    def status(self, wf, out):
+        rows = gb.implementation_rows(wf, self.index, out["edges"], self.changes)
+        return {self.index["requirements"][rid]["text"]: row for rid, row in rows.items()}
+
+    def revision(self, text):
+        rid, entry = next((r, e) for r, e in self.index["requirements"].items() if e["text"] == text)
+        return gb.revision_id(rid, entry["revision"])
+
+    def step(self, wf, sid, plan=None):
+        return gm.node_id("plan_step", gm.node_id("plan", wf["id"], plan or gb.judged_plan(wf)[0]), sid)
+
+    def commit_node(self, wf, n=1):
+        return gm.node_id("commit", wf["binding"]["repo_id"], fx.sha(n))
+
+    def of(self, rows, kind):
+        return [row for row in rows if row["type"] == kind]
+
+
+class DeclaredEdges(Mappings):
+    def test_a_commit_pin_links_the_requirement_and_the_step(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"], ["one"])
+        out = self.build(wf)
+        edges = self.of(out["edges"], "IMPLEMENTED_BY")
+        plan = gm.node_id("plan", wf["id"], wf["selected_plan"])
+        self.assertEqual({(e["src"], e["dst"], e["scope"]) for e in edges},
+                         {(self.revision(FILTER), self.commit_node(wf), wf["id"]),
+                          (self.step(wf, "one"), self.commit_node(wf), plan)})
+        for edge in edges:
+            self.assertEqual((edge["basis"], edge["confidence"], edge["workflow"], edge["lifecycle"]),
+                             ("declared", None, wf["id"], "current"))
+            self.assertEqual(edge["attrs"]["declarations"],
+                             [{"by": "developer", "at": "2026-01-06T09:00:00+00:00", "ref": "commit:" + fx.sha(1)}])
+        self.assertEqual((out["nodes"], out["unprojected"]), ([], []))
+        status = self.status(wf, out)
+        self.assertEqual((status[FILTER]["state"], status[FILTER]["basis"]), ("Linked", "declared"))
+        self.assertEqual(sorted(status[FILTER]["edges"]), sorted(e["id"] for e in edges))
+        self.assertEqual(status[EXPORT]["state"], "Unverified association")   # changes exist; none linked to it
+
+    def test_a_requirement_link_without_its_step_is_partial(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"])
+        self.assertEqual(self.status(wf, self.build(wf))[FILTER]["state"], "Partial")
+
+    def test_a_file_pin_links_every_change_of_that_path(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.commits.append(fx.commit_rec(2, "Tidy the list query", repo="scratch", files=[LIST]))
+        self.pin(wf, "file:" + LIST, ["ac1"])
+        out = self.build(wf)
+        self.assertEqual({e["dst"] for e in out["edges"]},
+                         {gm.node_id("code_change", self.commit_node(wf, n), LIST) for n in (1, 2)})
+
+    def test_a_real_pin_recorded_by_the_companion(self):
+        rec = self.workflow([FILTER, EXPORT], steps=STEPS)
+        self.put(commits={c["sha"]: c for c in self.commits})
+        rec = self.map(rec, evidence="commit:" + fx.sha(1), criteria=["ac1"], steps=["one"])
+        wf = self.inputs(rec)
+        self.assertEqual(wf["evidence"][0]["plan"], wf["selected_plan"])
+        out = self.build(wf)
+        self.assertEqual({e["src"] for e in out["edges"]}, {self.revision(FILTER), self.step(wf, "one")})
+        self.assertEqual(out["edges"][0]["attrs"]["declarations"][0]["by"], "developer")
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")
+
+    def test_test_pins_cover_and_support(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.tests = {"t1": run_rec("t1", head=R1, location=wf["binding"]["location"])}
+        self.pin(wf, "test:t1", ["ac1"], ["check"], outcome="passed", coverage="partial")
+        out = self.build(wf)
+        run = gm.node_id("test_run", TICKET, "t1")
+        case = next(e["src"] for e in self.graph["edges"] if e["type"] == "EXECUTED_IN")
+        self.assertEqual({(e["type"], e["src"], e["dst"]) for e in out["edges"]},
+                         {("COVERED_BY_TEST", self.revision(FILTER), case), ("SUPPORTED_BY", self.revision(FILTER), run)})
+        supported = self.of(out["edges"], "SUPPORTED_BY")[0]
+        self.assertEqual((supported["basis"], supported["attrs"]["coverage"], supported["attrs"]["outcome"],
+                          supported["attrs"]["kind"], supported["attrs"]["steps"], supported["attrs"]["criterion"]),
+                         ("declared", "partial", "passed", "test", ["check"], "ac1"))
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Unverified association")   # a test is not a change
+
+    def test_manual_observations_get_their_own_node(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "acceptance:abc123", ["ac2"], outcome="passed", actor="dev-a", revision=R1[:12],
+                 limits="One account only", label="Exported 20 rows", origin="self-reported")
+        self.pin(wf, "code_inspection:def456", ["ac1"], ["one"], outcome="failed", revision=R1[:12], limits="Diff only")
+        out = self.build(wf)
+        notes = {n["attrs"]["kind"]: n for n in self.of(out["nodes"], "observation")}
+        accepted = notes["acceptance"]
+        self.assertEqual(accepted["id"], gm.node_id("observation", wf["id"], "acceptance:abc123"))
+        self.assertEqual((accepted["label"], accepted["attrs"]["outcome"], accepted["attrs"]["actor"],
+                          accepted["attrs"]["limits"], accepted["attrs"]["basis"], accepted["workflow"]),
+                         ("Exported 20 rows", "passed", "dev-a", "One account only", "self-reported", wf["id"]))
+        self.assertEqual({(e["type"], e["src"], e["dst"]) for e in out["edges"]},
+                         {("SUPPORTED_BY", self.revision(EXPORT), accepted["id"]),
+                          ("SUPPORTED_BY", self.revision(FILTER), notes["code_inspection"]["id"])})
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Unverified association")   # an inspection is no commit
+
+    def test_two_mappings_of_one_edge_keep_both_actors_and_times(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"], ["one"], by="dev-b", at="2026-01-07T09:00:00+00:00")
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"], by="dev-a", at="2026-01-06T09:00:00+00:00")
+        out = self.build(wf)
+        edge = next(e for e in out["edges"] if e["src"] == self.revision(FILTER))
+        self.assertEqual([(d["by"], d["at"]) for d in edge["attrs"]["declarations"]],
+                         [("dev-a", "2026-01-06T09:00:00+00:00"), ("dev-b", "2026-01-07T09:00:00+00:00")])
+        self.assertEqual(len(out["edges"]), 2)
+        self.assertEqual(edge["version"], gm.version(edge))
+
+    def test_pull_request_and_decision_pins_are_listed_not_projected(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "pr:scratch:7", ["ac1"])
+        self.pin(wf, "decision:d1", ["ac1"])
+        out = self.build(wf)
+        self.assertEqual((out["edges"], out["nodes"], out["unprojected"]), ([], [], ["decision:d1", "pr:scratch:7"]))
+
+    def test_a_pruned_source_is_a_labelled_pinned_copy(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(8), ["ac1"], label="ABC-1001 An older change")
+        self.pin(wf, "test:gone", ["ac1"], outcome="passed", label="pytest tests", context={"head": R2, "location": "x"})
+        self.pin(wf, "file:src/orders/old.py", ["ac2"])
+        out = self.build(wf)
+        copies = {n["type"]: n for n in out["nodes"]}
+        self.assertEqual(sorted(copies), ["code_change", "commit", "test_run"])
+        for node in copies.values():
+            self.assertEqual((node["lifecycle"], node["attrs"]["note"], node["attrs"]["pinned"]),
+                             ("source_missing", "pinned copy; source no longer retained", True))
+        self.assertEqual(copies["commit"]["id"], self.commit_node(wf, 8))   # the same identity if it ever returns
+        self.assertEqual((copies["commit"]["label"], copies["test_run"]["attrs"]["status"],
+                          copies["test_run"]["attrs"]["head"]), ("ABC-1001 An older change", "passed", R2))
+        self.assertEqual(copies["test_run"]["id"], gm.node_id("test_run", TICKET, "gone"))
+        self.assertEqual({e["type"] for e in out["edges"]}, {"IMPLEMENTED_BY", "SUPPORTED_BY"})
+
+
+class StepBinding(Mappings):
+    def two_versions(self, second_steps):
+        first = self.workflow([FILTER, EXPORT], steps=STEPS)
+        rec = companion.save_plan(first["id"], first["revision"],
+                                  fx.plan_body(steps=second_steps, text="A second way to do it."))
+        wf = self.inputs(rec)
+        v1, v2 = wf["plan_order"]
+        self.assertEqual(wf["selected_plan"], v2)
+        return wf, v1, v2
+
+    REUSED = [{"id": "one", "text": "Rewrite the export job", "criteria": ["ac2"]},
+              {"id": "two", "text": "Add the order filter", "criteria": ["ac1"]}]
+
+    def test_a_step_id_reused_in_v2_gets_no_edge_from_a_v1_pin(self):
+        wf, v1, v2 = self.two_versions(self.REUSED)
+        self.pin(wf, "commit:" + fx.sha(1), steps=["one"], plan=v1)
+        out = self.build(wf)
+        self.assertEqual([(e["src"], e["lifecycle"], e["attrs"]["plan_binding"]) for e in out["edges"]],
+                         [(self.step(wf, "one", v1), "superseded", "recorded")])
+        self.assertNotIn(self.step(wf, "one", v2), [e["src"] for e in out["edges"]])
+        status = self.status(wf, out)
+        self.assertEqual({status[FILTER]["state"], status[EXPORT]["state"]}, {"Unverified association"})
+
+    def test_a_legacy_pin_is_ambiguous_when_the_step_changed_meaning(self):
+        wf, v1, v2 = self.two_versions(self.REUSED)
+        self.pin(wf, "commit:" + fx.sha(1), ["ac2"], ["one"], plan=None)
+        out = self.build(wf)
+        steps = [e for e in out["edges"] if e["src"] != self.revision(EXPORT)]
+        self.assertEqual({e["src"] for e in steps}, {self.step(wf, "one", v1), self.step(wf, "one", v2)})
+        for edge in steps:
+            self.assertEqual((edge["attrs"]["ambiguous"], edge["attrs"]["plan_binding"]), (True, gb.LEGACY_UNBOUND))
+        self.assertEqual(len(out["edges"]), 3)   # the requirement edge is kept: the pin names the criterion
+        self.assertEqual(self.status(wf, out)[EXPORT]["state"], "Partial")   # ambiguous edges never make it Linked
+
+    def test_a_legacy_pin_is_bound_when_only_one_plan_has_the_step(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"], ["one"], plan=None)
+        out = self.build(wf)
+        edge = next(e for e in out["edges"] if e["src"] == self.step(wf, "one"))
+        self.assertEqual(edge["attrs"]["plan_binding"], "proven")
+        self.assertNotIn("ambiguous", edge["attrs"])
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")
+
+    def test_a_legacy_pin_is_bound_when_every_plan_words_the_step_the_same(self):
+        wf, v1, v2 = self.two_versions(STEPS)   # the same steps under a new plan text
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"], ["one"], plan=None)
+        out = self.build(wf)
+        steps = [e for e in out["edges"] if e["src"] != self.revision(FILTER)]
+        self.assertEqual([(e["src"], e["attrs"]["plan_binding"]) for e in steps], [(self.step(wf, "one", v2), "proven")])
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")
+
+    def test_a_pin_of_an_unknown_plan_or_step_has_no_step_edge(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.pin(wf, "commit:" + fx.sha(1), steps=["one"], plan="p_" + "0" * 64)
+        self.pin(wf, "commit:" + fx.sha(1), steps=["nine"])
+        self.assertEqual(self.build(wf)["edges"], [])
+
+
+class Heuristic(Mappings):
+    def named(self, wf, *paths):
+        wf["plans"][wf["selected_plan"]]["details"] = {"files": [{"path": p, "basis": "evidence"} for p in paths]}
+
+    def test_an_exact_path_is_an_inferred_edge_that_changes_no_status(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.named(wf, LIST, "src\\orders\\other.py")
+        out = self.build(wf)
+        plan = gm.node_id("plan", wf["id"], wf["selected_plan"])
+        self.assertEqual([(e["type"], e["src"], e["dst"], e["basis"], e["confidence"], e["workflow"]) for e in out["edges"]],
+                         [("IMPLEMENTED_BY", plan, gm.node_id("code_change", self.commit_node(wf), LIST), "inferred",
+                           0.5, wf["id"])])
+        self.assertEqual(out["edges"][0]["attrs"]["origin"], gb.EXACT_PATH)
+        self.assertEqual(out["edges"][0]["version"], gm.version(out["edges"][0]))
+        status = self.status(wf, out)
+        self.assertEqual({status[FILTER]["state"], status[EXPORT]["state"]}, {"Unverified association"})
+        self.assertEqual(status[FILTER]["edges"], [])
+
+    def test_a_similar_basename_creates_no_edge(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.named(wf, "list.py", "src/orders/list.pyc", "src/orders/List.py", "src/orders", "other/src/orders/list.py")
+        self.assertEqual(self.build(wf)["edges"], [])
+
+    def test_declared_and_inferred_edges_are_both_kept(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        self.named(wf, LIST)
+        self.pin(wf, "file:" + LIST, ["ac1"], ["one"])
+        out = self.build(wf)
+        self.assertEqual(sorted(e["basis"] for e in out["edges"]), ["declared", "declared", "inferred"])
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")
+
+
+class NoMapping(Mappings):
+    def test_changes_without_a_mapping_are_an_unverified_association(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        out = self.build(wf)
+        self.assertEqual(out, {"nodes": [], "edges": [], "unprojected": []})
+        status = self.status(wf, out)
+        self.assertEqual({(r["state"], r["basis"]) for r in status.values()}, {("Unverified association", "observed")})
+        ticket = gb.implementation_rows(None, self.index, out["edges"], True)
+        self.assertEqual({r["state"] for r in ticket.values()}, {"Unverified association"})
+        self.assertEqual(sorted(ticket), sorted(self.index["requirements"]))
+
+    def test_nothing_recorded_is_none(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], steps=STEPS))
+        out = self.build(wf, commits=[])
+        self.assertFalse(self.changes)
+        self.assertEqual({r["state"] for r in self.status(wf, out).values()}, {"None"})
+        self.assertEqual({r["state"] for r in gb.implementation_rows(None, self.index, [], False).values()}, {"None"})
+
+    def test_a_workflow_without_a_plan(self):
+        wf = self.inputs(self.workflow([FILTER, EXPORT], plan=False))
+        self.pin(wf, "commit:" + fx.sha(1), ["ac1"])
+        out = self.build(wf)
+        self.assertEqual(self.status(wf, out)[FILTER]["state"], "Linked")   # no steps: the requirement has a link
+        self.assertEqual(self.status(wf, out)[EXPORT]["state"], "Unverified association")
 
 
 if __name__ == "__main__":
