@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-16
+
 ### Added
 - **Companion** ([docs/companion.md](docs/companion.md)): a ticket becomes a recoverable task in `data/workflows/` (local only). Content-addressed, hash-checked checkpoints and an atomic head; every save carries the revision it edited (a concurrent save keeps your text as a conflict); *Not saved* on a full disk or busy lock with the draft kept; `python -m chitragupta.companion recover <w_…>` quarantines incomplete files. Stages follow one explicit table (new → planning → planned → review → approved → execution ready → in development → awaiting verification / PR review → completed, with pause, reopen, cancel and archive); blocked, stale, cancelled and execution-status-unknown are overlays that keep the stage. Jira status never drives the stage.
 - Companion **Daily Planner** (dashboard **Companion** page, `/cg:plan`, `cli companion planner`): your in-scope tickets and tasks in eight stage groups with *why* each is suggested; several attempts or repositories give a chooser, never a guess. Requirement baselines are proposed from the cached Jira card (configured `companion.criteria_fields`, now also requested by the card read, then cited acceptance-criteria lines): the 3,000-character cut, failed reads and missing criteria are named gaps, comments stay proposals until you accept them (Jira is never edited), and criterion IDs survive rewording and reordering.
