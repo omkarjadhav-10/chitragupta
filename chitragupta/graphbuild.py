@@ -5,7 +5,9 @@ This part versions the requirements read from the cached Jira card (design secti
 """
 import copy
 import difflib
+import re
 
+from . import activity, gitcmd
 from . import companionplanning as planning
 from . import graphmodel
 from .workflowmodel import digest
@@ -424,3 +426,183 @@ def plan_coverage_rows(workflow, requirement_index):
         out[rid] = dict(status, plan=graphmodel.node_id("plan", wid, judged) if judged else None, judged=label,
                         alias=alias, excluded=entry["excluded"], rationale=entry["rationale"])
     return out
+
+
+# --- repositories, commits and code changes (design sections 5 and 10 "Code and commits") ---
+# Everything comes from records the tick already wrote. No Git command, no process, no file read.
+
+UNKNOWN_LOCATION = "unknown-location"
+MAX_FILES = 200
+
+
+def _place(path):
+    """A location as a comparison key (no filesystem access): slashes one way, no trailing one, drive paths folded."""
+    text = str(path or "").replace("\\", "/").rstrip("/")
+    return text.lower() if re.match(r"^[A-Za-z]:", text) else text
+
+
+def repo_identity(repo_key, tk, ledgers, bindings, repo_json=None):
+    """The canonical identity of the repository a ticket record calls `repo_key` (a folder name).
+
+    ledgers    activity ledgers already loaded (`{repo: {id, path}}`); bindings: workflow bindings
+               (`{repo_id, location}`); repo_json: `data/git/<repo_key>/repo.json`
+    Order: a ledger at a location this ticket recorded → a workflow binding there → `repo.json` adapted (its
+    `path` is the local folder, so only `remote_path` and the host fields are used) → the folder name.
+    → {id, identity_basis, locations: {location: id}} plus `location` when exactly one is known and `candidates`
+    when the sources disagree and nothing ties the ticket to one of them (`identity_basis: "ambiguous"`)."""
+    def here(path):
+        return bool(path) and gitcmd.repo_key(str(path)) == repo_key
+
+    recorded = {_place(f.get("repo_root")) for f in ((tk or {}).get("files") or {}).values()
+                if isinstance(f, dict) and here(f.get("repo_root"))}
+    recorded |= {_place(b.get("location")) for b in bindings or [] if here((b or {}).get("location"))}
+    found, locations = [], {}   # (basis, id, tied to a recorded location)
+    for led in ledgers or []:
+        repo = (led or {}).get("repo") or {}
+        if repo.get("id") and here(repo.get("path")):
+            found.append(("ledger", repo["id"], _place(repo["path"]) in recorded))
+            locations[_place(repo["path"])] = repo["id"]
+    for binding in bindings or []:
+        if (binding or {}).get("repo_id") and here(binding.get("location")):
+            found.append(("binding", binding["repo_id"], True))
+            locations.setdefault(_place(binding["location"]), binding["repo_id"])
+    meta = repo_json or {}
+    if meta.get("host") in ("github", "gitlab", "azure"):
+        info = {k: meta[k] for k in ("host", "org", "project", "repo", "instance") if meta.get(k)}
+        if meta.get("remote_path"):
+            info["path"] = meta["remote_path"]
+        adapted = activity.canonical_id(info, "")
+        if not adapted.startswith("path:"):
+            found.append(("repo.json", adapted, False))
+    out = {"locations": locations}
+    if len(locations) == 1:
+        out["location"] = next(iter(locations))
+    tied = [row for row in found if row[2]]
+    for rows in (tied, found):   # what the ticket is tied to decides first; then every source, if they agree
+        ids = sorted({row[1] for row in rows})
+        if len(ids) == 1:
+            return dict(out, id=ids[0], identity_basis=next(row[0] for row in rows if row[1] == ids[0]))
+        if rows is tied and ids:
+            break
+    if not found:
+        return dict(out, id="name:" + repo_key, identity_basis="folder-name")
+    return dict(out, id="name:" + repo_key, identity_basis="ambiguous", candidates=sorted({row[1] for row in found}))
+
+
+def _how(key, commit):
+    if key and key in str(commit.get("subject") or ""):
+        return "commit message"
+    if key and key in str(commit.get("ref") or ""):
+        return "branch name"
+    return "recorded attribution"
+
+
+def commit_nodes(tk, identities, ticket):
+    """Commits, code changes and the relationships between commits, from one ticket record.
+
+    identities  {repo_key: repo_identity(...)}; a repository without one gets the folder-name identity
+    ticket      the ticket node id
+    → {nodes, edges}. Ticket-level evidence only: nothing here reaches a requirement."""
+    key = (tk or {}).get("id") or ""
+    nodes, edges = {}, {}
+
+    def identity(name):
+        rkey = gitcmd.repo_key(str(name or ""))
+        return rkey, identities.get(rkey) or {"id": "name:" + rkey, "identity_basis": "folder-name", "locations": {}}
+
+    def put(row, into):
+        into.setdefault(row["id"], row)
+        return row["id"]
+
+    def weak(ident):
+        extra = {"identity_basis": ident["identity_basis"]}
+        if ident.get("candidates"):
+            extra["candidates"] = ident["candidates"]
+        return extra
+
+    def commit(repo, sha, mine, subject="", date="", ref="", complete=True):
+        rkey, ident = identity(repo)
+        attrs = dict({"sha": sha, "short": sha[:9], "date": date, "mine": mine, "ref": ref,
+                      "sha_basis": "full" if complete else "prefix"}, **weak(ident))
+        return put(graphmodel.node("commit", (ident["id"], sha), key, subject or sha[:9], attrs, repo_id=ident["id"],
+                                   observed_at=str(date or ""), source_ref="ticket:%s/commit:%s" % (key, sha)), nodes)
+
+    def evidence(dst, how, ref):
+        put(graphmodel.edge("HAS_EVIDENCE", ticket, dst, key, "observed", evidence_ref=ref, attrs={"how": how}), edges)
+
+    full = {}   # repo_key -> full shas this record knows
+    commits = (tk or {}).get("commits") or {}
+    for sha in sorted(commits):
+        c = commits[sha]
+        rkey, ident = identity(c.get("repo_name"))
+        full.setdefault(rkey, set()).add(sha)
+        node = commit(rkey, sha, True, c.get("subject"), c.get("date"), c.get("ref"))
+        evidence(node, _how(key, c), "ticket:%s/commit:%s" % (key, sha))
+        for path in sorted(set(c.get("files") or []))[:MAX_FILES]:
+            change = put(graphmodel.node("code_change", (node, path), key, path,
+                                         {"path": path, "state": "committed", "verified": True}, repo_id=ident["id"],
+                                         observed_at=str(c.get("date") or ""),
+                                         source_ref="ticket:%s/commit:%s" % (key, sha)), nodes)
+            put(graphmodel.edge("PART_OF_COMMIT", change, node, key, "observed",
+                                evidence_ref="ticket:%s/commit:%s" % (key, sha)), edges)
+
+    files = (tk or {}).get("files") or {}
+    for name in sorted(files):
+        f = files[name]
+        if not isinstance(f, dict) or not f.get("changed") or f.get("committed") or f.get("verified_by") != "edit":
+            continue
+        path = f.get("path") or name
+        rkey, ident = identity(f.get("repo"))
+        location = _place(f.get("repo_root")) or UNKNOWN_LOCATION
+        repo_id = ident["locations"].get(location) or ident["id"]
+        change = put(graphmodel.node("code_change", (repo_id, location, path, "uncommitted"), key, path,
+                                     dict({"path": path, "state": "uncommitted", "verified": bool(f.get("verified"))},
+                                          **weak(ident)),
+                                     repo_id=repo_id, location="" if location == UNKNOWN_LOCATION else location,
+                                     observed_at=str(f.get("last") or ""), source_ref="ticket:%s/file:%s" % (key, path)),
+                     nodes)
+        evidence(change, "session edit", "ticket:%s/file:%s" % (key, path))
+
+    repos = ((tk or {}).get("git") or {}).get("repos") or {}
+    for name in sorted(repos):
+        repo = repos[name] or {}
+        rkey, _ = identity(name)
+        known = set(full.get(rkey) or ())
+        prs = {p.get("number"): p for p in repo.get("prs") or [] if isinstance(p, dict)}
+        for p in prs.values():
+            known.update(s for s in (p.get("merge_commit"), p.get("head_at_merge"), p.get("head")) if s)
+
+        def whole(sha):
+            """The full sha of a recorded prefix when exactly one known commit starts with it."""
+            hits = [s for s in known if s.startswith(sha)]
+            return (hits[0], True) if len(hits) == 1 else (sha, len(sha) >= 40)
+
+        for row in repo.get("rows") or []:
+            ref = "delivery:%s/%s" % (rkey, row.get("id") or "")
+            ids = []
+            for sha in list(row.get("shas") or []) + list(row.get("loose") or []):
+                sha, complete = whole(str(sha))
+                node = graphmodel.node_id("commit", identity(rkey)[1]["id"], sha)
+                if node not in nodes:
+                    commit(rkey, sha, "unknown", row.get("subject"), row.get("date"), complete=complete)
+                    evidence(node, "delivery row", ref)
+                ids.append(node)
+            same, loose = ids[:len(row.get("shas") or [])], ids[len(row.get("shas") or []):]
+            for other in same[1:]:   # the same patch on another branch
+                put(graphmodel.edge("EQUIVALENT_TO", other, same[0], key, "observed", evidence_ref=ref,
+                                    attrs={"patch": "same"}), edges)
+            for copy_ in loose:      # a -x copy whose patch differs: lineage, not equivalence
+                if same:
+                    put(graphmodel.edge("CHERRY_PICKED_FROM", copy_, same[0], key, "observed", evidence_ref=ref,
+                                        attrs={"patch": "changed"}), edges)
+            for cell in (row.get("cells") or {}).values():   # the delivery check found this row inside a squash merge
+                p = prs.get((cell or {}).get("pr")) if (cell or {}).get("s") == "squash" else None
+                if p and p.get("state") == "merged" and p.get("merge_commit") and p.get("head_at_merge"):
+                    merge = commit(rkey, p["merge_commit"], "unknown", "Squash merge of pull request #%s" % p["number"],
+                                   p.get("merged_at"))
+                    for node in same:
+                        if node != merge:
+                            put(graphmodel.edge("SQUASHED_INTO", node, merge, key, "observed", evidence_ref=ref,
+                                                attrs={"pr": p["number"]}), edges)
+    return {"nodes": sorted(nodes.values(), key=lambda row: row["id"]),
+            "edges": sorted(edges.values(), key=lambda row: row["id"])}
