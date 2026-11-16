@@ -2,7 +2,29 @@
 import json
 import os
 
+from chitragupta import companion, companionplanning as planning
+from tests.test_companion_state import JIRA, Base as _CompanionBase, plan_body
+
 FETCHED = "2026-01-05T10:00:00+00:00"
+
+
+def criteria_rows(texts):
+    """Confirmed criteria as the Companion keeps them when they come from the card: acN with the cited fragment."""
+    return [{"id": "ac%d" % i, "text": text,
+             "fragment": {"field": "description", "index": i, "digest": planning.fingerprint(text)}}
+            for i, text in enumerate(texts, 1)]
+
+
+class Workflows(_CompanionBase):
+    """Real workflow records in a temp home (frozen clock, every process start a tripwire)."""
+
+    def workflow(self, texts, key="ABC-1001", repo=None, steps=None, plan=True, approve=False):
+        rec = companion.create(key, repo or self.repo, JIRA, criteria_rows(texts))
+        if plan:
+            rec = companion.save_plan(rec["id"], rec["revision"], plan_body(steps))
+        if plan and approve:
+            rec = self.approve(rec)
+        return rec
 
 
 def card(key, criteria, truncated=False, error=None, found=True, comments=(), fetched_at=FETCHED):
