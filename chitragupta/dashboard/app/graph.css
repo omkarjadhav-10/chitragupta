@@ -20,5 +20,30 @@
 .egx-group { margin: 0 0 var(--s4); }
 .egx-group > summary { cursor: pointer; padding: var(--s2) 0; color: var(--ink-2); }
 .egx-trace { margin-top: var(--s5); border-top: 1px solid var(--rule); padding-top: var(--s3); }
+.egx-filters { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); align-items: center; margin: 0 0 var(--s3); }
+.egx-filters .seg { flex-wrap: wrap; max-width: 100%; }
+.egx-check { display: inline-flex; gap: var(--s1); align-items: center; font-size: var(--fs-s); color: var(--ink-2); min-height: 30px; }
+/* the layered trace: the order of the columns is the claim being traced; it wraps rather than scroll sideways */
+.egx-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--s3); min-width: 0; }
+.egx-col { min-width: 0; border: 1px solid var(--rule); border-radius: var(--r-card); padding: var(--s2) var(--s3); background: var(--surface); }
+.egx-col h3 { font-size: var(--fs-s); margin: 0 0 var(--s2); }
+.egx-col-req { background: var(--sunk); }
+.egx-cards { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s2); }
+.egx-card { min-width: 0; }
+.egx-card-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; font: inherit;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong); border-radius: var(--r-control);
+  padding: var(--s2); cursor: pointer; overflow-wrap: anywhere; min-height: 32px; }
+.egx-card-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.egx-card-btn[aria-expanded="true"] { border-color: var(--accent); }
+.egx-card-label { font-weight: 600; }
+.egx-basis { font-size: var(--fs-xs); color: var(--ink-2); }
+.egx-inferred .egx-card-btn { border-style: dashed; }
+.egx-detail { margin: var(--s2) 0 0; padding: var(--s2); border-left: 2px solid var(--rule-strong); }
+.egx-textlist, .egx-changelist { margin: var(--s2) 0; padding-left: var(--s4); overflow-wrap: anywhere; }
+.egx-textlist ul { padding-left: var(--s4); }
+.egx-other, .egx-changes { margin-top: var(--s4); }
+.egx-since { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin: var(--s2) 0; font-size: var(--fs-s); }
+.egx-since input { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: var(--r-control); padding: 4px 8px; width: 9rem; min-height: 30px; }
 .egx-state { margin: var(--s4) 0; }
 @media (max-width: 720px) { .egx-text { min-width: 0; } .egx-status { white-space: normal; } }

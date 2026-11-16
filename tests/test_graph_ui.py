@@ -104,7 +104,30 @@ class Page(unittest.TestCase):
                      "Load more", "Choose a ticket", "Removed from Jira", "Not confirmed in a task baseline"):
             self.assertIn(text, js)
         self.assertIn("res.error.status === 403", js)   # a 403 clears the page, as on the Companion page
-        self.assertIn('data-egx-trace="placeholder"', js)   # the trace panel arrives in the next dashboard step
+
+    def test_the_trace_explorer(self):
+        js = read("pages/graph.js")
+        layers = re.search(r"const LAYERS = \[(.*?)\];", js, re.S).group(1)
+        self.assertEqual(re.findall(r"\['([a-z ]+)', '[A-Za-z ]+'\]", layers), list(graphviews.LAYERS))
+        for text in ("Show as text", "Other evidence on this ticket", "What changed", "Include historical", "Only gaps",
+                     "Inferred: a suggestion, not counted", "Load more of the trace", "Since journal position"):
+            self.assertIn(text, js)
+        for link in graphviews.WALK["requirement_revision"] + graphviews.WALK["commit"]:
+            self.assertRegex(js, r"\b%s: '" % link, link)   # every link type the trace walks has words
+        self.assertIn("aria-expanded=${open ? 'true' : 'false'} aria-controls=${id}", js)   # details open in place
+        self.assertIn("hidden=${!open}", js)
+        self.assertIn("aria-pressed=${(f.basis || '') === v ? 'true' : 'false'}", js)
+        self.assertIn("e.key !== 'Escape'", js)   # Escape closes the open card
+        self.assertIn("e.key === 'ArrowDown'", js)   # arrows move in the requirement list
+        self.assertIn("setParams(patch)", js)   # filters live in the URL: the selection survives, no page load
+        for value in ("observed", "declared", "inferred"):
+            self.assertIn("'%s'" % value, js)
+
+    def test_linked_from_the_ticket_page_and_the_verification_tab(self):
+        self.assertIn("href=${'#/graph?ticket=' + encodeURIComponent(t.key)}", read("pages/tickets.js"))
+        companion = read("pages/companion.js")
+        verify = companion[companion.index("function VerifyTab"):companion.index("// ---", companion.index("function VerifyTab"))]
+        self.assertIn("'#/graph?ticket=' + encodeURIComponent(d.ticket)", verify)
 
     def test_every_status_has_an_icon_and_a_word(self):
         js = read("pages/graph.js")

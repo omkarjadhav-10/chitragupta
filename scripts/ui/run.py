@@ -7,6 +7,8 @@ release records of tests/test_dashboard_releases.py and the profile and progress
 tests/test_dashboard_progress.py) in a temp folder, serves the dashboard from this checkout on a
 free port, and runs scripts/ui/check.js: every page in light and dark (axe, console errors, requests leaving
 127.0.0.1, first-view time), 1440/1280/900 px layouts, the command palette, shortcuts, tabs and a keyboard-only walk.
+The Evidence Graph scenario (scripts/ui/graphhome.py) builds the graph of the synthetic tickets and check.js walks the
+graph page (390 and 900 px, light and dark, keyboard, every state).
 The database scenario (scripts/ui/dbhome.py, from tests/dbfixture.py) is merged into the same home and
 scripts/ui/dbcheck.js runs the seven database walkthroughs at 390/768/900/1280/1440 px in light and dark plus a
 keyboard pass; its trace runs through the fake database MCP in this process (mcpjobs.run is a tripwire). --db-only
@@ -48,11 +50,15 @@ def main(argv):
     add_v2_fixtures(home, days)
     add_release_fixtures(home, days)
     add_progress_fixtures(home, days)
+    sys.path.insert(0, HERE)
+    import graphhome  # the Evidence Graph scenario: cached cards, then one graphstore.sync
+    graph = graphhome.add(home)
+    print("evidence graph built for %s" % ", ".join(graph["built"]))
     # the database scenario (scripts/ui/dbhome.py): the fake database MCP replaces mcpjobs.run in this process
     db = None
     env = dict(os.environ)
+    env["CG_UI_GRAPH"] = "1"
     if "--no-db" not in argv:
-        sys.path.insert(0, HERE)
         import dbhome
         db = dbhome.patch(dbhome.add(home))
         info = os.path.join(home, "ui-db-info.json")

@@ -3,6 +3,7 @@
 // Fails (exit 1) on: a serious or critical axe violation, a console or page error, any request that leaves
 // 127.0.0.1, a first view slower than 1 s, horizontal scrolling at every tested width, or a keyboard check that doesn't hold.
 // With CG_UI_DB (set by run.py) dbcheck.js first runs the database walkthroughs; CG_UI_DB_ONLY stops after them.
+// With CG_UI_GRAPH (set by run.py after scripts/ui/graphhome.py built the graph) the Evidence graph page is checked too.
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
@@ -16,7 +17,8 @@ const PAGES = [['today', '#/today'], ['day', '#/day/' + today], ['tickets', '#/t
   ['ticket-requests', '#/tickets/ABC-1001?tab=requests'], ['timesheet', '#/timesheet?day=' + today], ['knowledge', '#/knowledge'],
   ['knowledge-apis', '#/knowledge?tab=apis'], ['search', '#/search?q=order'], ['health', '#/health'], ['setup', '#/setup'],
   ['settings', '#/settings'], ['db', '#/db'], ['db-table', '#/db/shop.orders'], ['team', '#/team'],
-  ['progress', '#/progress'], ['progress-day', '#/progress?date=' + today], ['profile', '#/profile'], ['history', '#/history']];
+  ['progress', '#/progress'], ['progress-day', '#/progress?date=' + today], ['profile', '#/profile'], ['history', '#/history']]
+  .concat(process.env.CG_UI_GRAPH ? [['graph', '#/graph?ticket=ABC-1001'], ['graph-empty', '#/graph?ticket=ABC-1002']] : []);
 let failed = 0;
 function check(cond, msg) { console.log((cond ? '  ok   ' : '  FAIL ') + msg); if (!cond) failed++; }
 
@@ -150,6 +152,101 @@ async function launch() {
     es.addEventListener('cursor', () => { clearTimeout(t); es.close(); res(true); });
   }));
   check(sse, 'live updates: /api/events sends a cursor');
+
+  // Before the checks below that save Settings: a settings write changes the profile signature, after which the
+  // graph correctly answers "rebuilding" until the next background run.
+  // ------------------------------------------------------------------ evidence graph (scripts/ui/graphhome.py)
+  if (process.env.CG_UI_GRAPH) {
+    console.log('evidence graph');
+    const noScroll = (p) => p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+    for (const theme of ['light', 'dark']) {
+      for (const width of [390, 900]) {
+        const gx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme });
+        const gp = await gx.newPage();
+        const errs = [];
+        gp.on('pageerror', (e) => errs.push(e.message));
+        gp.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+        gp.on('request', (r) => { if (!r.url().startsWith(base) && !/^(data|blob):/.test(r.url())) errs.push('request left the machine: ' + r.url()); });
+        const tag = 'graph ' + theme + ' · ' + width + ' px';
+        await gp.goto(base + '?theme=' + theme + '#/graph?ticket=ABC-1001');
+        await gp.locator('.egx-req').first().waitFor();
+        check(await gp.locator('.egx-req').count() === 3, tag + ': the three requirements are listed');
+        await gp.locator('.egx-req').first().focus();
+        await gp.keyboard.press('ArrowDown');
+        check(await gp.evaluate(() => document.activeElement === document.querySelectorAll('.egx-list .egx-req')[1]), tag + ': ArrowDown moves to the next requirement');
+        await gp.keyboard.press('Enter');
+        await gp.locator('.egx-columns').waitFor();
+        check(/req=gr_/.test(gp.url()), tag + ': Enter selects it and opens its trace');
+        check(await gp.locator('.egx-columns .egx-col').count() === 7, tag + ': the requirement and one column per layer');
+        await gp.evaluate(() => { window.egxStay = 1; });
+        await gp.getByRole('button', { name: 'Observed', exact: true }).click();
+        await gp.waitForFunction(() => /basis=observed/.test(location.hash));
+        await gp.locator('.egx-columns').waitFor();
+        check(/req=gr_/.test(gp.url()) && await gp.evaluate(() => window.egxStay === 1), tag + ': a filter keeps the selection without a page load');
+        await gp.getByRole('button', { name: 'Show as text', exact: true }).click();
+        check(await gp.locator('#egx-text-trace .egx-textlist').isVisible(), tag + ': the trace reads as a nested list');
+        await gp.locator('.egx-other > summary').click();
+        check(await gp.locator('.egx-other .egx-card').count() >= 2, tag + ': the ticket\'s other evidence is listed');
+        check(await noScroll(gp), tag + ': no horizontal scroll with the trace open');
+        await gp.goto(base + '?theme=' + theme + '#/graph?ticket=ABC-1003');
+        const more = gp.getByRole('button', { name: 'Load more', exact: true });
+        await more.waitFor();
+        await more.click();
+        const all60 = await gp.waitForFunction(() => document.querySelectorAll('.egx-list .egx-req').length === 60, null, { timeout: 10000 }).then(() => true, () => false);
+        check(all60, tag + ': more than 50 requirements: Load more reaches all 60');
+        check(await noScroll(gp), tag + ': no horizontal scroll with 60 requirements');
+        await gp.goto(base + '?theme=' + theme + '#/graph?ticket=ABC-1002');
+        const empty = await gp.getByText('No requirements yet', { exact: true }).waitFor({ timeout: 10000 }).then(() => true, () => false);
+        check(empty, tag + ': a ticket without requirements says so');
+        check(!errs.length, tag + ': no errors' + (errs.length ? ' — ' + errs.join(' | ') : ''));
+        await gx.close();
+      }
+    }
+    // states this home has no data for, served as envelopes of the real shape: every link basis, all verified, revoked
+    const sx = await browser.newContext({ viewport: { width: 1280, height: 900 }, bypassCSP: true });
+    const sp = await sx.newPage();
+    const real = await (await sp.request.get(base + 'api/graph?view=summary&ticket=ABC-1001')).json();
+    const rid = real.rows[0].id;
+    const traceReal = await (await sp.request.get(base + 'api/graph?view=trace&ticket=ABC-1001&requirement=' + rid)).json();
+    const ok = { state: 'Verified within recorded scope', basis: 'observed', reason: 'applicable passing evidence with complete coverage' };
+    const allVerified = { ...real, requirements: { ...real.requirements, current: real.rows.length, unconfirmed: 0 },
+      counts: { ...real.counts, verification: { 'Verified within recorded scope': real.rows.length } },
+      rows: real.rows.map((r) => ({ ...r, status: 'current', statuses: { ...r.statuses, combined: { ...r.statuses.combined, verification: ok } } })) };
+    const item = (layer, type, label, basis, confidence) => ({ layer, node: { id: 'g_' + type + '_' + basis, type, label, lifecycle: 'current', attrs: {}, source_ref: 'synthetic' },
+      edge: { id: 'ge_' + basis, type: 'IMPLEMENTED_BY', basis, confidence, scope: '', lifecycle: 'current', evidence_ref: 'synthetic',
+        declarations: basis === 'declared' ? [{ by: 'developer', at: '2026-01-05T10:00:00Z', ref: 'synthetic' }] : [] } });
+    const linked = [item('code changes', 'code_change', 'src/OrderService.java', 'inferred', 0.5), item('commits', 'commit', 'Fix order total', 'declared', null),
+      item('tests and runs', 'test_run', 'passed: unit tests', 'observed', null)];
+    const traceServed = { ...traceReal, items: linked.concat(traceReal.items), total: traceReal.total + linked.length,
+      totals: { ...traceReal.totals, 'code changes': 1, commits: 1, 'tests and runs': 1 } };
+    const view = (name) => (u) => u.pathname === '/api/graph' && u.searchParams.get('view') === name;
+    await sp.route(view('summary'), (r) => r.fulfill({ json: allVerified }));
+    await sp.route(view('trace'), (r) => r.fulfill({ json: traceServed }));
+    await sp.goto(base + '#/graph?ticket=ABC-1001&req=' + rid);
+    const verifiedText = await sp.getByText('Every requirement is verified within its recorded scope').waitFor({ timeout: 10000 }).then(() => true, () => false);
+    check(verifiedText, 'graph: the all-verified state has its own text');
+    await sp.locator('.egx-col .egx-card-btn').first().waitFor();
+    const cols = await sp.locator('.egx-columns').innerText();
+    check(/inferred · 0\.5/.test(cols) && /declared · implements it/.test(cols) && /observed · implements it/.test(cols), 'graph: every link shows its basis');
+    check(await sp.getByText('Inferred: a suggestion, not counted').count() >= 1, 'graph: inferred links are visibly labelled');
+    const cardBtn = sp.locator('.egx-col .egx-card-btn').first();
+    await cardBtn.focus();
+    await sp.keyboard.press('Enter');
+    check(await cardBtn.getAttribute('aria-expanded') === 'true' && await sp.locator('.egx-col .egx-detail:not([hidden])').count() === 1, 'graph: Enter opens a card\'s details in place');
+    await sp.keyboard.press('Escape');
+    check(await cardBtn.getAttribute('aria-expanded') === 'false' && await sp.evaluate(() => document.activeElement && document.activeElement.classList.contains('egx-card-btn')),
+      'graph: Escape closes the details and keeps focus on the card');
+    await sp.addScriptTag({ content: AXE });
+    const v = await sp.evaluate(async () => (await window.axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] }))
+      .violations.filter((x) => x.impact === 'serious' || x.impact === 'critical').map((x) => x.id + ' ×' + x.nodes.length + ' (' + x.nodes[0].target.join(' ') + ')'));
+    check(!v.length, 'graph trace: axe serious/critical ' + (v.join(', ') || 'none'));
+    await sp.unroute(view('summary'));
+    await sp.route(view('summary'), (r) => r.fulfill({ status: 403, json: { error: 'ticket is unavailable in the current profile', revoke: true } }));
+    await sp.goto(base + '#/graph?ticket=ABC-1001');
+    const revoked = await sp.getByText('Not available', { exact: true }).waitFor({ timeout: 10000 }).then(() => true, () => false);
+    check(revoked && await sp.locator('.egx-req').count() === 0, 'graph: a revoked ticket clears the page');
+    await sx.close();
+  }
 
   console.log('redesign interactions');
   const recorded = await (await page.request.get(base + 'api/today')).json();

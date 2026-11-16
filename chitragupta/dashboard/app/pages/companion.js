@@ -441,7 +441,8 @@ function VerifyTab({ d, ver, act, busy, more, form, setForm }) {
           ${cap(e.kind || 'evidence')} · ${e.outcome || 'no outcome'} · ${e.basis} · ${e.revision ? 'revision ' + String(e.revision).slice(0, 12) : 'revision not captured'} · ${e.observed_at ? fmtTs(e.observed_at) : 'time unknown'}
           · <strong>${e.applicability === 'current' ? 'current' : e.applicability === 'historical' ? 'historical' : 'applicability unknown'}</strong>${e.reason ? ' (' + e.reason + ')' : ''}</li>`)}
           ${r.evidence_total > r.evidence.length ? html`<li>${r.evidence_total - r.evidence.length} more not shown</li>` : null}</ul></details>` : null}</li>`)}</ul>
-      ${ver.more ? html`<button type="button" class="btn" onClick=${more}>More criteria</button>` : null}</section>
+      ${ver.more ? html`<button type="button" class="btn" onClick=${more}>More criteria</button>` : null}
+      ${d.ticket ? html`<p class="small"><a href=${'#/graph?ticket=' + encodeURIComponent(d.ticket)}>Trace each requirement in the evidence graph</a></p>` : null}</section>
     ${can ? html`<details class="more"><summary>Record an acceptance observation (self-reported)</summary>
       <${Field} id="cmp-ob-c" label="Criterion"><select id="cmp-ob-c" value=${f.criterion || ''} onChange=${(e) => setForm(Object.assign({}, f, { criterion: e.currentTarget.value }))}>
         <option value="">Choose</option>${ver.rows.map((r) => html`<option key=${r.criterion} value=${r.criterion}>${r.criterion}</option>`)}</select></${Field}>

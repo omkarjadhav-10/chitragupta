@@ -436,7 +436,8 @@ export function TicketPage({ route }) {
         ${EXPORT ? html`<p class="exportline">Exported ${String((t.export || {}).at || '').replace('T', ' ').slice(0, 16)} · ${(t.export || {}).mode || 'full'}</p>`
           : html`<div class="pagehead-act"><a class="btn" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=full'} download title="Everything as recorded, for your own use"><${Icon} name="download" size=${16} />Export</a>
             <a class="btn quiet" href=${'/api/tickets/' + encodeURIComponent(t.key) + '/export?mode=shareable'} download title="Redacted for sharing: no links, hosts, paths, payloads, query results or QA values">Export to share</a>
-            <${ShareButton} k=${t.key} /></div>`}
+            <${ShareButton} k=${t.key} />
+            <a class="btn quiet" href=${'#/graph?ticket=' + encodeURIComponent(t.key)} title="Each requirement traced to plan, code, tests, pull requests and release">Evidence graph</a></div>`}
         </div></div>
       ${!(t.brief && (t.brief.has_brief || t.brief.summary)) && t.tldr ? html`<p class="ticket-summary">${t.tldr}</p>` : null}
       ${tab === 'branches' ? null : html`<${GitAlerts} g=${t.git} />`}

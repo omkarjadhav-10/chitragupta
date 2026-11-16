@@ -31,6 +31,27 @@ card (`R3`). When two tasks on the ticket both use `ac1`, add `--workflow w_…`
 `More: pass cursor …`; rerun the same command with `--cursor`. `--json` prints the full envelope, `--privacy` hides
 requirement text, commit subjects, PR titles and plan step text (ids, states, counts and short shas remain).
 
+## Using the explorer on the dashboard
+
+Open **Evidence graph** from the More menu (<kbd>g</kbd> <kbd>v</kbd>), from **Evidence graph** on a ticket's page, or
+from the Companion's Verification tab, and pick a ticket.
+
+- **Requirements**: each row shows the alias, the wording and the three statuses as an icon and a word; *Critical*
+  marks what needs attention first. Requirements not confirmed in a task baseline and ones removed from Jira have their
+  own groups. <kbd>↑</kbd> / <kbd>↓</kbd> move between requirements and <kbd>Enter</kbd> selects one.
+- **Trace**: the selected requirement and one column per layer — plan steps, code, commits, tests, pull requests,
+  release — read left to right. Each card says how it is linked: `observed · …`, `declared · …` or
+  `inferred · 0.5 · …`; an inferred card is dashed and labelled *Inferred: a suggestion, not counted*. Select a card
+  (<kbd>Tab</kbd> to it, <kbd>Enter</kbd>) to open its details in place: its source, lifecycle, the link and its
+  evidence, whether it applies now and why, and who declared it. <kbd>Esc</kbd> closes it.
+- **Filters**: *All links*, *Observed*, *Declared* or *Inferred*; *Include historical* adds earlier wording and
+  superseded links; *Only gaps* keeps what does not count as it stands (historical, inferred, not applicable now) and
+  shows the empty layers. Filters are part of the address, so they keep your selection and survive a reload.
+- **Show as text**: the same trace as a nested list, for reading or copying.
+- **Other evidence on this ticket**: commits, runs and pull requests of the ticket that are not linked to this
+  requirement.
+- **What changed**: the changes since the last one, or since a journal position you enter.
+
 ## The evidence model
 
 Every link carries one **basis**:
