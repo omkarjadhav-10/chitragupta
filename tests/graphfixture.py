@@ -54,6 +54,31 @@ def pull_request(number, state="open", merge_commit=None, head=None, source="fea
             "src": "gh", "head": head}
 
 
+def check_run(run_id, name="unit tests", outcome="passed", at="2026-01-05T10:00:00+00:00"):
+    """One check run as the CI reader hands it to `hosts.ci_record`."""
+    return {"id": run_id, "name": name, "app": "actions", "outcome": outcome, "status": "completed",
+            "conclusion": "success" if outcome == "passed" else "failure", "started_at": at, "completed_at": at}
+
+
+def read_ci(pr, runs, at="2026-01-05T10:05:00+00:00", coverage="complete", reason=""):
+    """Record one CI read for the PR's current head exactly as the tick does (`hosts.ci_record`); → the stored
+    block that delivery keeps in `git.repos[<repo>].ci[<number>]`. Call again after moving `pr["head"]`."""
+    from chitragupta import hosts
+    hosts.ci_record(pr, {"path": "acme/shop"}, {"runs": list(runs), "coverage": coverage, "reason": reason,
+                                               "total": len(runs)}, at)
+    return pr.pop("ci")
+
+
+def branch_rec(name, shas):
+    """One stored branch of the ticket with its own commits (9-character prefixes, as delivery keeps them)."""
+    return {"branch": name, "commits": [{"sha": s[:9], "subject": "", "date": ""} for s in shas]}
+
+
+def stage_rec(state, target="release/2026.01", counts=None, detail=""):
+    return {"state": state, "target": target, "detail": detail or "%s in %s" % (state, target),
+            "counts": counts or {"in": 1, "of": 1, "check": 0, "reverted": 0, "open": 0}, "pending_prs": [], "why": []}
+
+
 def ticket_record(key="ABC-1001", commits=(), files=(), repos=None, **fields):
     """A `data/tickets/<KEY>.json` record with the parts the graph reads."""
     from chitragupta import store

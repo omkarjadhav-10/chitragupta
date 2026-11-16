@@ -7,7 +7,8 @@ import copy
 import difflib
 import re
 
-from . import activity, gitcmd
+from . import activity, gitcmd, hosts, profile
+from . import companionevidence as evidence_rows
 from . import companionplanning as planning
 from . import graphmodel
 from .workflowmodel import digest
@@ -474,7 +475,8 @@ def repo_identity(repo_key, tk, ledgers, bindings, repo_json=None):
         adapted = activity.canonical_id(info, "")
         if not adapted.startswith("path:"):
             found.append(("repo.json", adapted, False))
-    out = {"locations": locations}
+    provider, instance = profile.host_instance(meta)
+    out = {"locations": locations, "provider": provider or "", "instance": instance or ""}
     if len(locations) == 1:
         out["location"] = next(iter(locations))
     tied = [row for row in found if row[2]]
@@ -487,6 +489,49 @@ def repo_identity(repo_key, tk, ledgers, bindings, repo_json=None):
     if not found:
         return dict(out, id="name:" + repo_key, identity_basis="folder-name")
     return dict(out, id="name:" + repo_key, identity_basis="ambiguous", candidates=sorted({row[1] for row in found}))
+
+
+def _identity(identities, name):
+    """(repo_key, identity) of a repository a record names by its folder; unknown ones say so."""
+    rkey = gitcmd.repo_key(str(name or ""))
+    return rkey, (identities or {}).get(rkey) or {"id": "name:" + rkey, "identity_basis": "folder-name",
+                                                  "locations": {}}
+
+
+def _put(row, into):
+    into.setdefault(row["id"], row)
+    return row["id"]
+
+
+def _weak(ident):
+    extra = {"identity_basis": ident["identity_basis"]}
+    if ident.get("candidates"):
+        extra["candidates"] = ident["candidates"]
+    return extra
+
+
+def _commit(key, ident, sha, mine, subject="", date="", ref="", complete=True):
+    attrs = dict({"sha": sha, "short": sha[:9], "date": date, "mine": mine, "ref": ref,
+                  "sha_basis": "full" if complete else "prefix"}, **_weak(ident))
+    return graphmodel.node("commit", (ident["id"], sha), key, subject or sha[:9], attrs, repo_id=ident["id"],
+                           observed_at=str(date or ""), source_ref="ticket:%s/commit:%s" % (key, sha))
+
+
+def _known_shas(tk, rkey, repo):
+    """Every full commit id this record holds for one repository: own commits and the PRs' heads and merges."""
+    known = {sha for sha, c in ((tk or {}).get("commits") or {}).items()
+             if gitcmd.repo_key(str((c or {}).get("repo_name") or "")) == rkey}
+    for p in (repo or {}).get("prs") or []:
+        if isinstance(p, dict):
+            known.update(s for s in (p.get("merge_commit"), p.get("head_at_merge"), p.get("head")) if s)
+    return known
+
+
+def _whole(known, sha):
+    """(sha, complete): the full id of a recorded prefix when exactly one known commit starts with it."""
+    sha = str(sha or "")
+    hits = [s for s in known if s.startswith(sha)] if sha else []
+    return (hits[0], True) if len(hits) == 1 else (sha, len(sha) >= 40)
 
 
 def _how(key, commit):
@@ -507,35 +552,20 @@ def commit_nodes(tk, identities, ticket):
     nodes, edges = {}, {}
 
     def identity(name):
-        rkey = gitcmd.repo_key(str(name or ""))
-        return rkey, identities.get(rkey) or {"id": "name:" + rkey, "identity_basis": "folder-name", "locations": {}}
+        return _identity(identities, name)
 
-    def put(row, into):
-        into.setdefault(row["id"], row)
-        return row["id"]
-
-    def weak(ident):
-        extra = {"identity_basis": ident["identity_basis"]}
-        if ident.get("candidates"):
-            extra["candidates"] = ident["candidates"]
-        return extra
+    put, weak = _put, _weak
 
     def commit(repo, sha, mine, subject="", date="", ref="", complete=True):
-        rkey, ident = identity(repo)
-        attrs = dict({"sha": sha, "short": sha[:9], "date": date, "mine": mine, "ref": ref,
-                      "sha_basis": "full" if complete else "prefix"}, **weak(ident))
-        return put(graphmodel.node("commit", (ident["id"], sha), key, subject or sha[:9], attrs, repo_id=ident["id"],
-                                   observed_at=str(date or ""), source_ref="ticket:%s/commit:%s" % (key, sha)), nodes)
+        return put(_commit(key, identity(repo)[1], sha, mine, subject, date, ref, complete), nodes)
 
     def evidence(dst, how, ref):
         put(graphmodel.edge("HAS_EVIDENCE", ticket, dst, key, "observed", evidence_ref=ref, attrs={"how": how}), edges)
 
-    full = {}   # repo_key -> full shas this record knows
     commits = (tk or {}).get("commits") or {}
     for sha in sorted(commits):
         c = commits[sha]
         rkey, ident = identity(c.get("repo_name"))
-        full.setdefault(rkey, set()).add(sha)
         node = commit(rkey, sha, True, c.get("subject"), c.get("date"), c.get("ref"))
         evidence(node, _how(key, c), "ticket:%s/commit:%s" % (key, sha))
         for path in sorted(set(c.get("files") or []))[:MAX_FILES]:
@@ -567,15 +597,11 @@ def commit_nodes(tk, identities, ticket):
     for name in sorted(repos):
         repo = repos[name] or {}
         rkey, _ = identity(name)
-        known = set(full.get(rkey) or ())
+        known = _known_shas(tk, rkey, repo)
         prs = {p.get("number"): p for p in repo.get("prs") or [] if isinstance(p, dict)}
-        for p in prs.values():
-            known.update(s for s in (p.get("merge_commit"), p.get("head_at_merge"), p.get("head")) if s)
 
         def whole(sha):
-            """The full sha of a recorded prefix when exactly one known commit starts with it."""
-            hits = [s for s in known if s.startswith(sha)]
-            return (hits[0], True) if len(hits) == 1 else (sha, len(sha) >= 40)
+            return _whole(known, sha)
 
         for row in repo.get("rows") or []:
             ref = "delivery:%s/%s" % (rkey, row.get("id") or "")
@@ -606,3 +632,169 @@ def commit_nodes(tk, identities, ticket):
                                                 attrs={"pr": p["number"]}), edges)
     return {"nodes": sorted(nodes.values(), key=lambda row: row["id"]),
             "edges": sorted(edges.values(), key=lambda row: row["id"])}
+
+
+# --- pull requests, CI and release evidence (design section 10). Read from the record; no provider is called. ---
+
+_PROVIDER = {"gh": "github", "glab": "gitlab", "az": "azure"}
+STAGES = ("release", "qa", "uat")
+
+
+def pull_request_id(ident, number, src=""):
+    """A pull request is (provider, instance, canonical repository, number): never the number alone."""
+    return graphmodel.node_id("pull_request", ident.get("provider") or _PROVIDER.get(src) or "",
+                              ident.get("instance") or "", ident["id"], number)
+
+
+def _sorted(nodes, edges):
+    return {"nodes": sorted(nodes.values(), key=lambda row: row["id"]),
+            "edges": sorted(edges.values(), key=lambda row: row["id"])}
+
+
+def pr_nodes(tk, identities, ticket, commits=()):
+    """Pull requests of the ticket's branches, shared integration PRs, and the CI runs of each PR head.
+
+    commits  the nodes `commit_nodes` returned: `INCLUDED_IN_PR` is drawn only to commits that exist
+    → {nodes, edges}"""
+    key = (tk or {}).get("id") or ""
+    have = {row["id"] for row in commits or () if row.get("type") == "commit"}
+    nodes, edges = {}, {}
+    repos = ((tk or {}).get("git") or {}).get("repos") or {}
+    release = ((tk or {}).get("release") or {}).get("repos") or {}
+    for name in sorted(set(repos) | set(release)):
+        repo = repos.get(name) or {}
+        rkey, ident = _identity(identities, name)
+        known = _known_shas(tk, rkey, repo)
+        own = set()
+        for p in repo.get("prs") or []:
+            if not isinstance(p, dict) or p.get("number") is None:
+                continue
+            own.add(p["number"])
+            p = evidence_rows.with_ci(repo, p)
+            head = str(p.get("head") or "").lower()
+            ci = hosts.ci_state(p)
+            ref = "git:%s:pr:%s" % (rkey, p["number"])
+            node = _put(graphmodel.node(
+                "pull_request", (ident.get("provider") or _PROVIDER.get(p.get("src")) or "", ident.get("instance") or "",
+                                 ident["id"], p["number"]), key, "#%s %s" % (p["number"], p.get("title") or ""),
+                dict({"number": p["number"], "state": p.get("state"), "review": p.get("review") or "", "head": head,
+                      "source": p.get("source"), "target": p.get("target"), "shared": False,
+                      "ci": {"state": ci["state"], "head": ci["head"], "coverage": ci["coverage"],
+                             "stale": ci["stale"], "checks": ci["checks"], "observed_at": ci["observed_at"],
+                             "reason": ci["reason"]}}, **_weak(ident)),
+                repo_id=ident["id"], observed_at=str(p.get("merged_at") or p.get("created_at") or ""), source_ref=ref),
+                nodes)
+            _put(graphmodel.edge("HAS_EVIDENCE", ticket, node, key, "observed", evidence_ref=ref,
+                                 attrs={"how": "branch link"}), edges)
+            branch = next((b for b in repo.get("branches") or [] if isinstance(b, dict)
+                           and b.get("branch") == p.get("source")), {})
+            for c in branch.get("commits") or []:   # the PR source branch's own commits
+                sha, _ = _whole(known, c.get("sha"))
+                commit = graphmodel.node_id("commit", ident["id"], sha)
+                if commit in have:
+                    _put(graphmodel.edge("INCLUDED_IN_PR", commit, node, key, "observed", evidence_ref=ref,
+                                         attrs={"at_head": bool(sha) and head.startswith(sha.lower())}), edges)
+            if p.get("state") == "merged" and p.get("merge_commit"):
+                merge = graphmodel.node_id("commit", ident["id"], p["merge_commit"])
+                if merge not in have:
+                    _put(_commit(key, ident, p["merge_commit"], "unknown", "Merge of pull request #%s" % p["number"],
+                                 p.get("merged_at")), nodes)
+                _put(graphmodel.edge("INCLUDED_IN_PR", merge, node, key, "observed", evidence_ref=ref,
+                                     attrs={"at_head": False, "merge": True}), edges)
+            for row, _ in evidence_rows.ci_rows(rkey, p):   # one per run attempt, on the head it ran for
+                current = row["head"] == head
+                life = "current" if current else "historical"
+                run_id = row["id"].rsplit(":", 2)[1]
+                case = _put(graphmodel.node("test_case", (row["provider"], ident["id"], row["check"]), key, row["check"],
+                                            {"test_type": "ci-check", "app": row["app"]}, repo_id=ident["id"],
+                                            source_ref=ref), nodes)
+                run = _put(graphmodel.node(
+                    "test_run", (row["provider"], ident["id"], run_id, row["attempt"]), key, row["label"],
+                    {"status": row["outcome"], "source": "ci", "head": row["head"], "attempt": row["attempt"],
+                     "pr": p["number"], "evidence": row["id"], "context": sorted(row["context"]),
+                     "applicability": "current head" if current else "earlier head"},
+                    lifecycle=life, repo_id=ident["id"], observed_at=str(row["observed_at"] or ""),
+                    source_ref=row["source_ref"]), nodes)
+                _put(graphmodel.edge("EXECUTED_IN", case, run, key, "observed", evidence_ref=row["source_ref"],
+                                     lifecycle=life), edges)
+                _put(graphmodel.edge("CHECKED_BY", node, run, key, "observed", scope=row["head"],
+                                     evidence_ref=row["source_ref"], lifecycle=life), edges)
+        for p in (release.get(name) or {}).get("shared") or []:
+            if not isinstance(p, dict) or p.get("number") is None or p["number"] in own:
+                continue   # carried by someone else's PR: linked to the ticket, never credited to it
+            ref = "release:%s:shared:%s" % (rkey, p["number"])
+            node = _put(graphmodel.node(
+                "pull_request", (ident.get("provider") or _PROVIDER.get(p.get("src")) or "", ident.get("instance") or "",
+                                 ident["id"], p["number"]), key, "#%s %s" % (p["number"], p.get("title") or ""),
+                dict({"number": p["number"], "state": p.get("state"), "review": "", "head": "",
+                      "source": p.get("source"), "target": p.get("target"), "shared": True,
+                      "carries": p.get("carries"), "of": p.get("of"), "role": p.get("role"),
+                      "ci": {"state": "unavailable", "reason": "not read for shared pull requests"}}, **_weak(ident)),
+                repo_id=ident["id"], observed_at=str(p.get("merged_at") or p.get("created_at") or ""), source_ref=ref),
+                nodes)
+            _put(graphmodel.edge("HAS_EVIDENCE", ticket, node, key, "observed", evidence_ref=ref,
+                                 attrs={"how": "shared integration pull request"}), edges)
+    return _sorted(nodes, edges)
+
+
+def release_nodes(tk, identities, ticket, commits=()):
+    """Release evidence, one node per fact and never merged: inclusion per stage and repository, UAT deployment,
+    UAT acceptance. States are taken as `release` decided them (a stale or unpinned stage is already `unknown`).
+    A commit is linked to an inclusion only through its own delivery row (the same patch), never through a
+    cherry-pick whose patch changed. → {nodes, edges}"""
+    key = (tk or {}).get("id") or ""
+    have = {row["id"] for row in commits or () if row.get("type") == "commit"}
+    nodes, edges = {}, {}
+    rel = (tk or {}).get("release") or {}
+    repos = ((tk or {}).get("git") or {}).get("repos") or {}
+
+    def fact(ident, kind, bound, label, attrs, ref, observed="", life="current"):
+        node = _put(graphmodel.node("release_evidence", (ticket, ident, kind, bound), key, label, attrs, repo_id=ident,
+                                    observed_at=str(observed or ""), source_ref=ref, lifecycle=life), nodes)
+        _put(graphmodel.edge("HAS_RELEASE_EVIDENCE", ticket, node, key, "observed", evidence_ref=ref,
+                             lifecycle=life), edges)
+        return node
+
+    for name in sorted(rel.get("repos") or {}):
+        entry = rel["repos"][name] or {}
+        if entry.get("candidate"):
+            continue
+        rkey, ident = _identity(identities, name)
+        stale = bool((entry.get("freshness") or {}).get("stale"))
+        known = _known_shas(tk, rkey, repos.get(name) or {})
+        for role in STAGES:
+            stage = (entry.get("stages") or {}).get(role)
+            if not isinstance(stage, dict):
+                continue
+            ref = "release:%s:stage:%s" % (rkey, role)
+            node = fact(ident["id"], "inclusion", role, "%s: %s" % (role, stage.get("state") or "unknown"),
+                        dict({"fact": "inclusion", "environment": role, "state": stage.get("state") or "unknown",
+                              "target": stage.get("target"), "counts": stage.get("counts") or {},
+                              "detail": stage.get("detail") or "", "freshness": "stale" if stale else "fresh"},
+                             **_weak(ident)), ref, (entry.get("complete_at") or {}).get(role))
+            for row in (repos.get(name) or {}).get("rows") or []:
+                cell = (row.get("cells") or {}).get(role)
+                if not isinstance(cell, dict) or not cell.get("s"):
+                    continue
+                for sha in row.get("shas") or []:   # the row's patch-equal commits only; `loose` copies never
+                    commit = graphmodel.node_id("commit", ident["id"], _whole(known, sha)[0])
+                    if commit in have:
+                        _put(graphmodel.edge("HAS_RELEASE_EVIDENCE", commit, node, key, "observed", evidence_ref=ref,
+                                             attrs={"state": cell["s"]}), edges)
+    uat = rel.get("uat") if isinstance(rel.get("uat"), dict) else {}
+    for kind, name in (("deployed", "deployment"), ("accepted", "acceptance")):
+        found = uat.get(kind)
+        if isinstance(found, dict):
+            state = "yes" if found.get("state") == "yes" else "unknown"
+            fact("", name, found.get("rev") or "", "UAT %s: %s" % (name, state),
+                 {"fact": name, "environment": "uat", "state": state, "revision": found.get("rev"),
+                  "source": found.get("source") or "", "carried": bool(found.get("carried"))},
+                 "release:uat:%s" % kind, found.get("at"))
+        for old in uat.get("history") or []:   # what was confirmed for an earlier UAT revision stays history
+            if isinstance(old, dict) and old.get("kind") == kind and old.get("rev") \
+                    and old["rev"] != (found or {}).get("rev"):
+                fact("", name, old["rev"], "UAT %s: yes (earlier revision)" % name,
+                     {"fact": name, "environment": "uat", "state": "yes", "revision": old["rev"],
+                      "source": old.get("source") or "", "carried": False},
+                     "release:uat:%s:%s" % (kind, old["rev"]), old.get("at"), "historical")
+    return _sorted(nodes, edges)
