@@ -620,6 +620,25 @@ def _since(journal, value):
     return None, ("dropped by retention" if since < journal[0]["seq"] else "unknown sequence")
 
 
+def _window(journal, since, generation):
+    """→ (the entries after `since`, None), or (None, reason) when they are not one continuous window of this
+    profile generation."""
+    by_seq = {e["seq"]: e for e in journal}
+    entries = [e for e in journal if e["seq"] > since]
+    if since and by_seq[since].get("profile_generation") != generation:
+        return None, "from another profile generation (profile changed)"
+    previous = since or None
+    for e in entries:
+        if e.get("profile_generation") != generation:
+            return None, "profile changed"
+        if e.get("baseline"):
+            return None, "reset by recovery"
+        if e.get("prev") != previous:
+            return None, "history is not continuous after %s" % since
+        previous = e["seq"]
+    return entries, None
+
+
 def _fold(entries):
     reqs, ev, status, source, more, coarse = {}, {}, {}, [], 0, False
     for e in entries:
@@ -686,19 +705,9 @@ def changes(args, cfg=None):
     since, why = _since(journal, args.get("since"))
     if why:
         return unavailable(why)
-    by_seq = {e["seq"]: e for e in journal}
-    entries = [e for e in journal if e["seq"] > since]
-    if since and by_seq[since].get("profile_generation") != generation:
-        return unavailable("from another profile generation (profile changed)")
-    previous = since or None
-    for e in entries:
-        if e.get("profile_generation") != generation:
-            return unavailable("profile changed")
-        if e.get("baseline"):
-            return unavailable("reset by recovery")
-        if e.get("prev") != previous:
-            return unavailable("history is not continuous after %s" % since)
-        previous = e["seq"]
+    entries, why = _window(journal, since, generation)
+    if why:
+        return unavailable(why)
     reqs, ev, status, source, more, coarse = _fold(entries)
     stored = {n["id"] for n in scope["rows"][0]}
     hidden = stored - set(nodes)   # present in the index, not for this caller
@@ -755,6 +764,168 @@ def changes(args, cfg=None):
                current=_current_state(view),
                **{"from": since, "to": journal[-1]["seq"]})
     return cv._finish(_paged(out, "changes", args, scope, graph, items))
+
+
+# ---------------------------------------------------------------- resume: called by companionviews.detail and companioncli
+
+RESUME_CAP = 10
+NEW = {"commits": ("commit",), "tests": ("test_run", "observation"), "prs": ("pull_request", "release_evidence")}
+NOT_YET = {"not_built": "the evidence graph is not built yet",
+           "rebuilding": "the evidence graph is rebuilding for the current profile"}
+
+
+def checkpoint(ticket, cfg=None):
+    """The ticket's journal position now, for a workflow's `graph_checkpoint`: {seq, at, profile_generation}, or None
+    when there is nothing to record (no index, an index or head of another profile generation, no history). Reads
+    only. A graph behind its inputs records the older position, so what follows is reported as new, never lost."""
+    cfg = cfg if cfg is not None else common.load_config()
+    generation = profile.signature(cfg)
+    con = graphstore.open_read()
+    if con is None or graphstore.meta(con).get("profile_generation") != generation:
+        return None
+    found, data = graphstore.load_history(ticket)
+    if found != "ok" or not data.get("journal") or data["journal"][-1].get("profile_generation") != generation:
+        return None
+    return {"seq": data["journal"][-1]["seq"], "at": common.now_iso(), "profile_generation": generation}
+
+
+def _applies(node):
+    """A delta item's applicability now: a run's own state, else the node's lifecycle; gone from the graph → removed."""
+    if node is None:
+        return "removed"
+    app = (node.get("attrs") or {}).get("applicability")
+    if isinstance(app, dict):
+        return app.get("state") or "unknown"
+    return app if isinstance(app, str) and app else node.get("lifecycle")
+
+
+def _listed(items):
+    items = sorted(items, key=lambda i: (-(i.get("seq") or 0), str(i.get("id") or ""), str(i.get("kind") or "")))
+    return {"total": len(items), "items": items[:RESUME_CAP]}
+
+
+def _since_mark(journal, mark, generation):
+    """→ (entries after the checkpoint, None) or (None, why the checkpoint counts as absent)."""
+    if not isinstance(mark, dict) or not mark:
+        return None, "no graph checkpoint recorded yet"
+    if mark.get("profile_generation") != generation:
+        return None, "the checkpoint is from another profile generation"
+    seq = mark.get("seq")
+    if not journal or not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        return None, "history unavailable" if not journal else "the checkpoint is unreadable"
+    since, why = _since(journal, seq)
+    if why:
+        return None, {"unknown sequence": "the checkpoint is not in the graph history"}.get(
+            why, "the checkpoint's history was " + why)
+    return _window(journal, since, generation)
+
+
+def resume(ticket, workflow, since, cfg=None, privacy=False):
+    """Resume's bounded graph delta for one workflow since its `graph_checkpoint` (`since`): completed since, newly
+    invalidated, outstanding requirements, new commits / tests / pull requests / Jira changes, and the one next
+    action; each list at most RESUME_CAP items beside its total. A checkpoint that is missing, of another profile
+    generation or no longer continuous with the journal counts as absent: no delta, the reason, and still the
+    outstanding requirements and next action. Not built, rebuilding or behind → {state: "unavailable", reason}.
+    One way only: companionviews.detail and companioncli call this; it never calls companion.resume or them."""
+    cfg = cfg if cfg is not None else common.load_config()
+    try:
+        scope = _scope(ticket, cfg)
+    except PermissionError as exc:
+        return {"state": "unavailable", "reason": str(exc)}
+    if scope["state"] != "ok":
+        return {"state": "unavailable", "reason": NOT_YET[scope["state"]]}
+    if _stale(ticket, cfg, scope["source"]):
+        return {"state": "unavailable", "reason": "the evidence graph is behind; it catches up on the next background run"}
+    if workflow not in scope["workflows"]:
+        return {"state": "unavailable", "reason": "this task is not in the evidence graph yet"}
+    view, generation = _filtered(scope["rows"], scope), scope["generation"]
+    nodes = view["nodes"]
+
+    def alias(r):
+        a = r["node"]["attrs"]
+        return _text((a.get("aliases") or {}).get(workflow) or a.get("alias") or r["id"], False, 40)
+
+    reqs = sorted((r for r in _requirements(view) if not r["removed"]), key=lambda r: (
+        r["node"]["attrs"].get("ordinal") is None, r["node"]["attrs"].get("ordinal") or 0, r["id"]))
+    own = {r["id"]: next((row for row in r["rows"] if row["workflow"] == workflow), None) for r in reqs}
+    mine = [r for r in reqs if own[r["id"]]] or reqs   # this task's requirements; all of them before it has a baseline
+
+    def statuses(r):
+        row = own[r["id"]]
+        if row and row.get("detail"):
+            return {dim: _brief(row["detail"][dim]) for dim in DIMENSIONS}, bool(row["detail"].get("excluded"))
+        return r["combined"], r["excluded"]
+
+    action_rows, outstanding = [], []
+    for r in mine:
+        st, excluded = statuses(r)
+        action_rows.append({"id": r["id"], "aliases": [alias(r)], "excluded": excluded, "statuses": st})
+        if not excluded and any(st[dim]["state"] != _BEST[dim] for dim in DIMENSIONS):
+            outstanding.append({"id": r["id"], "label": alias(r), "statuses": {dim: st[dim]["state"] for dim in DIMENSIONS}})
+    prs = [{"number": n["attrs"].get("number"), "state": n["attrs"].get("state")}
+           for n in nodes.values() if n["type"] == "pull_request" and not n["attrs"].get("shared")]
+    source_state = _requirement_source(ticket, scope["source"].get("coverage") or {}, privacy)["state"]
+    found, data = graphstore.load_history(ticket)
+    journal = data.get("journal") if found == "ok" else None
+    entries, why = _since_mark(journal, since, generation)
+    out = {"state": "ok", "checkpoint": {"state": "absent" if why else "ok", "reason": why,
+                                         "seq": (since or {}).get("seq") if not why else None,
+                                         "at": (since or {}).get("at") if not why else None},
+           "to": journal[-1]["seq"] if journal else None,
+           "outstanding": {"total": len(outstanding), "items": outstanding[:RESUME_CAP]},
+           "next_action": graphmodel.next_action(action_rows, prs, source_state)}
+    completed, invalidated, new = [], [], {name: [] for name in ("commits", "tests", "prs", "jira")}
+    if entries is not None:
+        reqs_seen, ev, status, source, more, coarse = _fold(entries)
+        hidden = {n["id"] for n in scope["rows"][0]} - set(nodes)
+        labels = {r["id"]: alias(r) for r in reqs}
+        for rid, (event, seq) in reqs_seen.items():
+            if rid not in hidden:
+                new["jira"].append({"kind": "requirement " + event, "id": rid, "label": labels.get(rid), "seq": seq})
+        for s in source:
+            new["jira"].append({"kind": "requirements source", "id": None, "label": "%s → %s" % (s.get("from"), s.get("to")),
+                                "seq": s["seq"]})
+        for rid, e in ev.items():
+            if rid in hidden or (e["workflow"] and e["workflow"] != workflow) or \
+                    (e["location"] and not scope["location_ok"](e["location"])):
+                continue
+            node = nodes.get(rid)
+            item = {"kind": e["type"], "state": e["state"], "id": rid, "seq": e["seq"],
+                    "label": _label(node, privacy) if node else None, "applicability": _applies(node)}
+            if e["type"] == "test_run" and node:
+                item["outcome"] = _text((node.get("attrs") or {}).get("status"), False, 40)
+            if e["state"] == "removed" or (e["state"] == "changed" and node and node["lifecycle"] in OLD + ("source_missing",)):
+                invalidated.append(item)
+                continue
+            for name, kinds in NEW.items():
+                if e["type"] in kinds and (e["state"] == "added" or name == "prs"):
+                    new[name].append(item)
+        rows = scope["rows"][0] + scope["rows"][1] + scope["rows"][2]
+        every = {r.get("workflow") for r in rows if r.get("workflow")}
+        every |= set((scope["source"].get("coverage") or {}).get("workflows") or [])
+        ticket_level_ok = every <= scope["workflows"]   # a ticket-level transition mixes every workflow
+        for (rid, w, dim), (before, after, seq) in status.items():
+            # this task's own rows; a ticket-level one only for a requirement this task has no row for
+            skip = w != workflow if w else (not ticket_level_ok or rid not in own or own[rid] is not None)
+            if before == after or rid in hidden or skip:
+                continue
+            row = {"kind": dim, "id": rid, "label": labels.get(rid), "from": before, "to": after, "seq": seq}
+            if after == _BEST[dim]:
+                completed.append(row)
+            elif before == _BEST[dim]:
+                invalidated.append(dict(row, kind=dim + " no longer complete"))
+        out.update(more=more, coarse=coarse)
+    out.update(completed=_listed(completed), invalidated=_listed(invalidated),
+               new={name: _listed(items) for name, items in new.items()})
+    return out
+
+
+def shrink_resume(env):
+    """A shrink step for an envelope holding a resume delta as `graph`: three items per list."""
+    g = env.get("graph") or {}
+    for part in [g.get(k) for k in ("completed", "invalidated", "outstanding")] + list((g.get("new") or {}).values()):
+        if isinstance(part, dict):
+            part["items"] = part["items"][:3]
 
 
 # ---------------------------------------------------------------- dispatch and text

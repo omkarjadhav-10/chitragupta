@@ -64,6 +64,44 @@ def planner_text(env):
     return lines
 
 
+GRAPH_LISTS = (("completed", "Completed since"), ("invalidated", "No longer holds"), ("outstanding", "Outstanding"))
+GRAPH_NEW = (("commits", "New commits"), ("tests", "New tests and runs"), ("prs", "Pull requests and release"),
+             ("jira", "Jira changes"))
+
+
+def graph_lines(g):
+    """The Evidence Graph part of the resume brief (graphviews.resume); a missing graph is one line."""
+    if not g:
+        return []
+    if g.get("state") != "ok":
+        return ["", "Evidence graph: unavailable (%s)" % g.get("reason")]
+    cp = g["checkpoint"]
+    lines = ["", "Evidence graph since your checkpoint: " + (
+        "sequence %s → %s" % (cp["seq"], g.get("to")) if cp["state"] == "ok" else "no comparison (%s)" % cp["reason"])]
+
+    def show(title, part):
+        if not part or not part["total"]:
+            return
+        lines.append("%s (%d):" % (title, part["total"]))
+        for i in part["items"]:
+            if "statuses" in i:
+                text = ", ".join("%s %s" % (k.replace("_", " "), v) for k, v in i["statuses"].items())
+            elif "from" in i and i.get("kind") != "requirements source":
+                text = "%s: %s → %s" % (i["kind"].replace("_", " "), i["from"], i["to"])
+            else:
+                text = " · ".join(str(x) for x in (i.get("kind"), i.get("outcome"), i.get("applicability")) if x)
+            lines.append("- %s: %s" % (i.get("label") or i.get("id") or "", text))
+        if part["total"] > len(part["items"]):
+            lines.append("  … %d in total" % part["total"])
+    for name, title in GRAPH_LISTS[:2]:
+        show(title, g.get(name))
+    for name, title in GRAPH_NEW:
+        show(title, (g.get("new") or {}).get(name))
+    show(GRAPH_LISTS[2][1], g.get("outstanding"))
+    lines.append("Graph next action: %s" % g.get("next_action"))
+    return lines
+
+
 def detail_text(d, changes=None):
     m = d["measures"]
     lines = ["%s · %s · %s" % (d["ticket"], d["title"], d["repository"]),
@@ -100,6 +138,7 @@ def detail_text(d, changes=None):
                                               item.get("observed_at") or "time unknown"))
     if (ch.get("total") or d["changes"]["total"]) > 10:
         lines.append("  … %d in total" % (ch.get("total") or d["changes"]["total"]))
+    lines += graph_lines(d.get("graph"))
     lines.append("Actions here: " + ", ".join(a["name"] for a in d["actions"]))
     if d.get("switch"):
         lines.append("Other active tasks: " + ", ".join("%s (%s)" % (s["ticket"], s["stage"]) for s in d["switch"]))

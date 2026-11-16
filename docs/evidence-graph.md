@@ -31,6 +31,20 @@ card (`R3`). When two tasks on the ticket both use `ac1`, add `--workflow w_…`
 `More: pass cursor …`; rerun the same command with `--cursor`. `--json` prints the full envelope, `--privacy` hides
 requirement text, commit subjects, PR titles and plan step text (ids, states, counts and short shas remain).
 
+## In Resume
+
+When you pause a Companion task, record a checkpoint or mark changes reviewed, the task notes the ticket's journal
+position (`graph_checkpoint: {seq, at, profile_generation}`; nothing is noted while the graph is not built). The
+Resume tab and `/cg:resume` then show, for that task only: requirements **completed since**, evidence that **no
+longer holds**, **new commits**, **new tests and runs** (outcome and applicability), **pull requests and release**,
+**Jira changes** (requirements added, reworded, removed, restored; the source's completeness), what is still
+**outstanding**, and the one next action. Each list shows at most 10 items beside its total.
+
+A checkpoint from another profile generation, or one the history no longer reaches, counts as absent: the view says
+why and still lists what is outstanding. When the graph is not built, rebuilding, behind its inputs or unreadable,
+the section reads *unavailable* and the rest of the Resume view is exactly as before. The call goes one way: Resume
+asks the graph; the graph never calls Resume, and the resume candidate offered never depends on it.
+
 ## Using the explorer on the dashboard
 
 Open **Evidence graph** from the More menu (<kbd>g</kbd> <kbd>v</kbd>), from **Evidence graph** on a ticket's page, or

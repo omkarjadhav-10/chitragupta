@@ -483,6 +483,28 @@ function Impact({ im }) {
     <details class="more"><summary>Coverage limits (${im.coverage})</summary><ul class="small">${im.limits.map((l, i) => html`<li key=${i}>${l}</li>`)}</ul></details></section>`;
 }
 
+// The Evidence Graph since this task's checkpoint (graphviews.resume); unavailable → one line, the rest unchanged.
+const GRAPH_PARTS = [['completed', 'Completed since'], ['invalidated', 'No longer holds'], ['commits', 'New commits'],
+  ['tests', 'New tests and runs'], ['prs', 'Pull requests and release'], ['jira', 'Jira changes'], ['outstanding', 'Outstanding']];
+function graphItem(i) {
+  if (i.statuses) return Object.entries(i.statuses).map(([k, v]) => k.replace(/_/g, ' ') + ' ' + v).join(', ');
+  if (i.from !== undefined && i.kind !== 'requirements source') return i.kind.replace(/_/g, ' ') + ': ' + i.from + ' → ' + i.to;
+  return [i.kind, i.outcome, i.applicability].filter(Boolean).join(' · ');
+}
+function GraphDelta({ g, ticket }) {
+  if (!g) return null;
+  const link = html`<a href=${'#/graph?ticket=' + encodeURIComponent(ticket)}>Open the evidence graph</a>`;
+  if (g.state !== 'ok') return html`<section class="sec" aria-labelledby="cmp-eg-h"><h3 id="cmp-eg-h">Evidence graph</h3>
+    <p class="small muted">Unavailable: ${g.reason}</p></section>`;
+  const parts = GRAPH_PARTS.map(([k, label]) => [label, g[k] || (g.new || {})[k]]).filter(([, p]) => p && p.total);
+  return html`<section class="sec" aria-labelledby="cmp-eg-h"><div class="sec-head"><h3 id="cmp-eg-h">Evidence graph since your checkpoint</h3>
+      <p class="sub">${g.checkpoint.state === 'ok' ? 'From ' + fmtTs(g.checkpoint.at) : 'No comparison: ' + g.checkpoint.reason}</p></div>
+    <p class="small"><strong>Next:</strong> ${g.next_action}</p>
+    ${parts.map(([label, p]) => html`<div key=${label}><h4 class="small">${label} (${p.total})</h4><ul class="cmp-changes">${p.items.map((i, n) => html`<li key=${n}>${i.label || i.id || ''} <span class="muted small">${graphItem(i)}</span></li>`)}</ul>
+      ${p.total > p.items.length ? html`<p class="small muted">${p.total - p.items.length} more in the graph.</p>` : null}</div>`)}
+    <p class="small">${link}</p></section>`;
+}
+
 // ------------------------------------------------------------------ resume view by situation (A-E)
 function ResumeTab({ d, changes, moreChanges, act, busy, goTab, form, setForm, db }) {
   const f = form || {};
@@ -513,6 +535,7 @@ function ResumeTab({ d, changes, moreChanges, act, busy, goTab, form, setForm, d
       ${changes && changes.items.length ? html`<ul class="cmp-changes">${changes.items.map((c) => html`<li key=${c.id}>${cap(c.change)} ${c.kind}: ${c.label} <span class="muted small">${c.provenance} · ${c.observed_at ? fmtTs(c.observed_at) : 'time unknown'}${c.state !== 'available' ? ' · ' + c.state : ''}</span></li>`)}</ul>` : null}
       <div class="btnline">${changes && changes.more ? html`<button type="button" class="btn quiet" onClick=${moreChanges}>More changes</button>` : null}
         ${changes && changes.unread.length ? html`<button type="button" class="btn" disabled=${busy} onClick=${() => act('acknowledge', { events: changes.unread })}>Mark changes reviewed</button>` : null}</div></section>
+    <${GraphDelta} g=${d.graph} ticket=${d.ticket} />
     ${cont ? html`<section class="sec" aria-labelledby="cmp-ct-h"><h3 id="cmp-ct-h">Continuation</h3>
       <dl class="kv">${cont.carry_forward && cont.carry_forward.length ? html`<dt>Carry forward</dt><dd>${cont.carry_forward.map((s) => s.step).join(', ')}</dd>` : null}
         ${cont.remaining && cont.remaining.length ? html`<dt>Remaining</dt><dd>${cont.remaining.join(', ')}</dd>` : null}

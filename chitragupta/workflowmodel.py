@@ -59,7 +59,7 @@ VERIFYING = {"test", "ci", "acceptance"}
 MANUAL = {"acceptance", "code_inspection"}
 DEFAULTS = {"history": [], "observations": [], "verifications": [], "completions": [], "obligations": [],
             "verification_request": None, "archived": None, "owner": None, "ingested_at": None,
-            "legacy_ingested": [], "imported": {}, "child_plan": None, "pr_applied": []}
+            "legacy_ingested": [], "imported": {}, "child_plan": None, "pr_applied": [], "graph_checkpoint": None}
 
 
 def digest(value):

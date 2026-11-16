@@ -45,6 +45,12 @@ runs under your normal Claude Code permissions; Chitragupta only notices its act
    offers only the actions that fit: reopen the saved plan and latest evaluation; continue interrupted development
    with *completed*, *pending*, *uncertain* and *revalidate* steps; finish outstanding tests; or continue an existing
    PR (never a second one). **Resume Execution** prepares a continuation packet the same way as Execute.
+   Pause, a checkpoint and **Mark changes reviewed** also note where the ticket's [Evidence Graph](evidence-graph.md)
+   stood; the Resume tab and `/cg:resume` then add *Evidence graph since your checkpoint*: requirements completed
+   since, evidence that no longer holds, new commits, tests and runs (with their outcome and whether they apply),
+   pull request and Jira changes, what is still outstanding and the graph's one next action. It only adds to the
+   view: when the graph is not built, rebuilding or behind it says *unavailable* and everything else is unchanged,
+   and it never changes which resume candidate is offered.
 8. **Verify.** **Verify Requirements** recomputes a requirement-by-requirement ledger: *Verified*, *Partial*,
    *Missing* or *Unverified*, with the evidence, the revision it applies to and why older evidence stopped applying.
    **Complete** is accepted only with an explicit decision and no open mandatory gap (failing or missing verification,

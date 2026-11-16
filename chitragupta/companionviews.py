@@ -747,6 +747,16 @@ def _applicability_text(row):
     return "%s: no current applicable evidence" % row["status"]
 
 
+def resume_graph(cfg, key, wid, since, privacy=False):
+    """The Evidence Graph's delta since the task's checkpoint, read after the resume candidate exists (one way: the
+    graph never calls back). Any failure → {state: "unavailable", reason}; the rest of the view is unchanged."""
+    try:
+        from . import graphviews
+        return graphviews.resume(key, wid, since, cfg, privacy)
+    except Exception as exc:
+        return {"state": "unavailable", "reason": "the evidence graph could not be read (%s)" % type(exc).__name__}
+
+
 def detail(wid, args=None):
     """RESUME-02 view of one workflow, with only its stage-appropriate actions, its decisions (FLOW-05) and its
     impact suggestions from recorded links (FLOW-06)."""
@@ -834,8 +844,11 @@ def detail(wid, args=None):
                          "completed": out["rollup"]["completed"], "hidden": out["rollup"]["hidden"],
                          "unfinished": [{"workflow": r["workflow"], "stage": r["stage"], "repository": _repo(r["location"])}
                                         for r in out["rollup"]["unfinished"]][:10]}
+    out["graph"] = resume_graph(cfg, key, wid, rec.get("graph_checkpoint"), out["privacy"])
     companion.authorize(rec)
-    return _finish(out, (lambda o: o["verification"].update(rows=o["verification"]["rows"][:5], more=True),
+    from . import graphviews   # the graph delta shrinks first, so the rest of the view stays as it was
+    return _finish(out, (graphviews.shrink_resume,
+                         lambda o: o["verification"].update(rows=o["verification"]["rows"][:5], more=True),
                          lambda o: o["changes"].update(items=o["changes"]["items"][:3]),
                          lambda o: o.update(plan_versions=o["plan_versions"][-5:]),
                          lambda o: o["impact"].update(items=o["impact"]["items"][:3], more=o["impact"]["total"] > 3),

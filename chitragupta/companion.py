@@ -454,7 +454,20 @@ def pause(wid, revision, summary):
         # Explicit pause is the reconciliation that releases ownership; it never claims a session stopped.
         rec.update(resume_stage=previous, summary=model.text(summary, 4000), next_action="Review continuation",
                    execution_status="unknown", owner=None)
+        _graph_checkpoint(rec)
     return _change(wid, revision, change, "task paused; capture continues")
+
+
+def _graph_checkpoint(rec):
+    """Where the ticket's Evidence Graph journal stands now ({seq, at, profile_generation}), so Resume can say what
+    changed since. Reads only; no graph, or any failure, leaves the field as it was. `resume` never reads the graph."""
+    try:
+        from . import graphviews
+        mark = graphviews.checkpoint(rec["binding"]["ticket"])
+    except Exception:
+        return
+    if mark:
+        rec["graph_checkpoint"] = mark
 
 
 def request_verification(wid, revision, checks, implementation_complete=False):
@@ -741,6 +754,7 @@ def acknowledge(wid, revision, event_ids):
             raise ValueError("acknowledge only displayed ingested evidence IDs")
         for sid in event_ids:
             rec["acknowledged"][sid] = rec["ingested"][sid]
+        _graph_checkpoint(rec)
     return _change(wid, revision, change, "changes explicitly reviewed", archived_ok=True)
 
 
@@ -754,6 +768,7 @@ def checkpoint(wid, revision, summary=""):
         rec["ingested_at"] = common.now_iso()
         rec["context"] = context(rec)
         rec["summary"] = model.text(summary, 4000)
+        _graph_checkpoint(rec)
     return _change(wid, revision, change, "canonical evidence checkpoint")
 
 
