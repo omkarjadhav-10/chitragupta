@@ -476,7 +476,8 @@ def repo_identity(repo_key, tk, ledgers, bindings, repo_json=None):
         if not adapted.startswith("path:"):
             found.append(("repo.json", adapted, False))
     provider, instance = profile.host_instance(meta)
-    out = {"locations": locations, "provider": provider or "", "instance": instance or ""}
+    out = {"repo_key": repo_key, "locations": locations, "provider": provider or "", "instance": instance or "",
+           "tracked": _place(meta.get("path"))}   # the clone whose branches and refs `data/git/<repo_key>` describes
     if len(locations) == 1:
         out["location"] = next(iter(locations))
     tied = [row for row in found if row[2]]
@@ -495,7 +496,7 @@ def _identity(identities, name):
     """(repo_key, identity) of a repository a record names by its folder; unknown ones say so."""
     rkey = gitcmd.repo_key(str(name or ""))
     return rkey, (identities or {}).get(rkey) or {"id": "name:" + rkey, "identity_basis": "folder-name",
-                                                  "locations": {}}
+                                                  "locations": {}, "repo_key": rkey, "tracked": ""}
 
 
 def _put(row, into):
@@ -797,4 +798,124 @@ def release_nodes(tk, identities, ticket, commits=()):
                      {"fact": name, "environment": "uat", "state": "yes", "revision": old["rev"],
                       "source": old.get("source") or "", "carried": False},
                      "release:uat:%s:%s" % (kind, old["rev"]), old.get("at"), "historical")
+    return _sorted(nodes, edges)
+
+
+# --- local test runs and their applicability (design section 10 "Tests") ---
+# A run is compared with named references only (a PR head, a work-branch tip). There is no global "current
+# revision", and nothing here verifies a requirement.
+
+MIN_HEAD = 7
+_HEX = re.compile(r"^[0-9a-f]+$")
+NOT_CAPTURED = "revision not captured"
+NOTHING_TO_COMPARE = "nothing to compare with"
+RUN_STATES = ("passed", "failed", "interrupted", "running", "unknown")
+
+
+def same_head(a, b):
+    """True / False when two commit ids can be compared, None when they cannot: each must be at least 7 hex
+    characters, and they are the same commit only when one is a prefix of the other."""
+    a, b = str(a or "").lower(), str(b or "").lower()
+    if min(len(a), len(b)) < MIN_HEAD or not _HEX.match(a) or not _HEX.match(b):
+        return None
+    return a.startswith(b) or b.startswith(a)
+
+
+def references(tk, identity, location, branches=None):
+    """What a local run in `location` may be compared with, for one repository: the heads of its open pull
+    requests, and the tips of the ticket's work branches when `location` is the clone those tips were read from.
+    → [{name, kind, head, observed_at}], sorted by name.
+
+    branches  `data/git/<repo_key>/branches.json` (branch → {tip, checked_at, …}) when the caller has it; without
+              it a branch tip is the newest own commit the ticket record lists (a 9-character prefix)."""
+    repo = (((tk or {}).get("git") or {}).get("repos") or {}).get((identity or {}).get("repo_key")) or {}
+    checked = str(((tk or {}).get("git") or {}).get("checked_at") or "")
+    out = {}
+    for p in repo.get("prs") or []:
+        if isinstance(p, dict) and p.get("state") in ("open", "draft") and p.get("head") and p.get("number") is not None:
+            name = "PR #%s head" % p["number"]
+            out[name] = {"name": name, "kind": "pull_request", "head": str(p["head"]).lower(), "observed_at": checked}
+    here = _place(location)
+    if here and here == (identity or {}).get("tracked"):
+        for b in repo.get("branches") or []:
+            if not isinstance(b, dict) or not b.get("branch") or b.get("status") == "abandoned":
+                continue
+            known = (branches or {}).get(b["branch"]) or {}
+            own = [c.get("sha") for c in b.get("commits") or [] if isinstance(c, dict) and c.get("sha")]
+            tip = known.get("tip") or (own[0] if own else "")
+            if tip:
+                name = "branch %s tip" % b["branch"]
+                out[name] = {"name": name, "kind": "branch", "head": str(tip).lower(),
+                             "observed_at": str(known.get("checked_at") or checked)}
+    return [out[name] for name in sorted(out)]
+
+
+def applicability(run, refs):
+    """One run against each reference. → {state, reason, references: [{name, kind, head, result}], text}.
+
+    state  `same commit` / `different commit` when every comparable reference names one commit; `ambiguous` when
+           the references name different commits (the run is shown against each, none is preferred);
+           `not comparable`; `unknown` with the reason when no head was captured or there is no reference."""
+    status = run.get("status") if run.get("status") in RUN_STATES else "unknown"
+    head = str(((run.get("context") or {}) if isinstance(run.get("context"), dict) else {}).get("head") or "").lower()
+    if same_head(head, head) is None:
+        return {"state": "unknown", "reason": NOT_CAPTURED, "references": [],
+                "text": "%s; applicability unknown: %s" % (status, NOT_CAPTURED)}
+    seen = "%s; HEAD observed after the run was %s" % (status, head[:MIN_HEAD])
+    if not refs:
+        return {"state": "unknown", "reason": NOTHING_TO_COMPARE, "references": [],
+                "text": "%s; applicability unknown: %s" % (seen, NOTHING_TO_COMPARE)}
+    rows, heads = [], []
+    for ref in refs:
+        same = same_head(head, ref.get("head"))
+        result = "not comparable" if same is None else "same commit" if same else "different commit"
+        rows.append({"name": ref["name"], "kind": ref.get("kind"), "head": ref.get("head"), "result": result})
+        if same is not None and not any(same_head(ref["head"], other) for other in heads):
+            heads.append(ref["head"])
+    results = {row["result"] for row in rows} - {"not comparable"}
+    if len(heads) > 1:
+        state, reason = "ambiguous", "the references name different commits"
+    elif not results:
+        state, reason = "not comparable", "no reference has a comparable commit id"
+    else:
+        state, reason = results.pop(), ""
+    text = seen + "".join("; %s is %s" % (row["name"], str(row["head"] or "")[:MIN_HEAD] or "unknown") for row in rows)
+    return {"state": state, "reason": reason, "references": rows, "text": text}
+
+
+def test_nodes(tk, identities, ticket, branches=None):
+    """Captured local test runs: a `test_case` per command, a `test_run` per record, and each run's applicability
+    against the references of its own repository and location. Ticket-level evidence: no requirement is touched.
+
+    branches  {repo_key: branches.json} when the caller has them (see `references`)
+    → {nodes, edges}"""
+    key = (tk or {}).get("id") or ""
+    nodes, edges = {}, {}
+    tests = (tk or {}).get("tests") or {}
+    for tid in sorted(tests):
+        t = tests[tid]
+        if not isinstance(t, dict):
+            continue
+        ctx = evidence_rows.captured_context(t.get("context")) or {}
+        location = _place(ctx.get("location"))
+        ident = _identity(identities, ctx["location"])[1] if ctx.get("location") else None
+        repo_id = ctx.get("repo_id") or ((ident["locations"].get(location) or ident["id"]) if ident else "")
+        refs = references(tk, ident, location, (branches or {}).get(ident.get("repo_key"))) if ident else []
+        status = t.get("status") if t.get("status") in RUN_STATES else "unknown"
+        command = " ".join(str(t.get("command") or "").split())
+        ref = "ticket:%s/test:%s" % (key, tid)
+        case = _put(graphmodel.node("test_case", (ticket, repo_id, command), key, command or "test command",
+                                    {"test_type": "command", "command": command}, repo_id=repo_id, source_ref=ref),
+                    nodes)
+        counts = {k: v for k, v in (t.get("counts") or {}).items()
+                  if isinstance(v, int) and not isinstance(v, bool)} if isinstance(t.get("counts"), dict) else {}
+        run = _put(graphmodel.node(
+            "test_run", (ticket, tid), key, "%s: %s" % (status, command or "test command"),
+            {"status": status, "counts": counts, "source": "local", "head": ctx.get("head") or "",
+             "head_basis": t.get("head_basis") or "", "context": sorted(ctx), "evidence": "test:" + tid,
+             "applicability": applicability(dict(t, context=ctx), refs)},
+            repo_id=repo_id, location=location, observed_at=str(t.get("at") or ""), source_ref=ref), nodes)
+        _put(graphmodel.edge("EXECUTED_IN", case, run, key, "observed", evidence_ref=ref), edges)
+        _put(graphmodel.edge("HAS_EVIDENCE", ticket, run, key, "observed", evidence_ref=ref,
+                             attrs={"how": "session turn"}), edges)
     return _sorted(nodes, edges)

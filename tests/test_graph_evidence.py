@@ -476,5 +476,187 @@ class Release(PrBase):
         self.assertEqual(gb.release_nodes(fx.ticket_record(), {}, TICKET), {"nodes": [], "edges": []})
 
 
+R1, R2, R3 = fx.sha(1), fx.sha(2), fx.sha(3)
+
+
+def run_rec(tid, status="passed", head=None, location=CLONE_A, command="python -m unittest tests.test_orders", **extra):
+    rec = {"id": tid, "at": "2026-01-05T11:00:00+00:00", "day": "2026-01-05", "session": "abcdef12",
+           "command": command, "status": status}
+    if head:
+        rec["context"] = {"head": head, "location": location}
+        rec["head_basis"] = "observed after run"
+    rec.update(extra)
+    return rec
+
+
+class SameHead(unittest.TestCase):
+    def test_a_prefix_of_seven_or_more_is_the_same_commit(self):
+        self.assertIs(gb.same_head(R1[:7], R1), True)
+        self.assertIs(gb.same_head(R1, R1[:9]), True)
+        self.assertIs(gb.same_head(R1, R1.upper()), True)
+        self.assertIs(gb.same_head(R1, R2), False)
+        self.assertIs(gb.same_head(R1[:7], R2[:12]), False)
+
+    def test_shorter_or_non_hex_is_not_comparable(self):
+        for a, b in ((R1[:6], R1), (R1, R1[:6]), ("", R1), (None, R1), (R1, None), ("main", R1), ("zzzzzzzz", R1),
+                     (R1 + " ", R1), (7, R1)):
+            self.assertIsNone(gb.same_head(a, b), (a, b))
+
+
+class Applicability(unittest.TestCase):
+    PR7 = {"name": "PR #7 head", "kind": "pull_request", "head": R2}
+    PR8 = {"name": "PR #8 head", "kind": "pull_request", "head": R3}
+
+    def test_a_run_at_r1_against_a_pr_at_r2_names_both(self):
+        got = gb.applicability(run_rec("t1", head=R1), [self.PR7])
+        self.assertEqual((got["state"], got["reason"]), ("different commit", ""))
+        self.assertEqual(got["references"], [{"name": "PR #7 head", "kind": "pull_request", "head": R2,
+                                              "result": "different commit"}])
+        self.assertEqual(got["text"], "passed; HEAD observed after the run was %s; PR #7 head is %s" % (R1[:7], R2[:7]))
+
+    def test_the_same_commit(self):
+        got = gb.applicability(run_rec("t1", "failed", head=R2), [dict(self.PR7, head=R2[:9])])
+        self.assertEqual((got["state"], got["references"][0]["result"]), ("same commit", "same commit"))
+        self.assertTrue(got["text"].startswith("failed; HEAD observed after the run was"))
+
+    def test_no_recorded_head_is_unknown(self):
+        for run in (run_rec("t1"), run_rec("t1", context={"head": "main", "location": CLONE_A}),
+                    run_rec("t1", context={"head": R1[:6], "location": CLONE_A}), run_rec("t1", context="x")):
+            got = gb.applicability(run, [self.PR7])
+            self.assertEqual((got["state"], got["reason"], got["references"]), ("unknown", gb.NOT_CAPTURED, []))
+        self.assertEqual(gb.applicability(run_rec("t1"), [self.PR7])["text"],
+                         "passed; applicability unknown: revision not captured")
+
+    def test_no_reference_is_unknown(self):
+        got = gb.applicability(run_rec("t1", head=R1), [])
+        self.assertEqual((got["state"], got["reason"]), ("unknown", gb.NOTHING_TO_COMPARE))
+        self.assertIn(R1[:7], got["text"])
+
+    def test_two_references_that_disagree_are_ambiguous_and_both_shown(self):
+        for head, results in ((R2, ["same commit", "different commit"]), (R1, ["different commit"] * 2)):
+            got = gb.applicability(run_rec("t1", head=head), [self.PR7, self.PR8])
+            self.assertEqual(got["state"], "ambiguous")
+            self.assertEqual([r["result"] for r in got["references"]], results)
+            self.assertIn("PR #7 head is", got["text"])
+            self.assertIn("PR #8 head is", got["text"])
+
+    def test_references_that_agree_are_not_ambiguous(self):
+        branch = {"name": "branch feature/ABC-1001 tip", "kind": "branch", "head": R2[:9]}
+        self.assertEqual(gb.applicability(run_rec("t1", head=R2), [self.PR7, branch])["state"], "same commit")
+        self.assertEqual(gb.applicability(run_rec("t1", head=R1), [self.PR7, branch])["state"], "different commit")
+
+    def test_a_reference_that_cannot_be_compared(self):
+        short = {"name": "branch x tip", "kind": "branch", "head": R2[:6]}
+        got = gb.applicability(run_rec("t1", head=R1), [short])
+        self.assertEqual((got["state"], got["references"][0]["result"]), ("not comparable", "not comparable"))
+        both = gb.applicability(run_rec("t1", head=R2), [short, self.PR7])
+        self.assertEqual((both["state"], [r["result"] for r in both["references"]]),
+                         ("same commit", ["not comparable", "same commit"]))
+
+
+class LocalRuns(PrBase):
+    def record(self, tests, prs=(), branches=None):
+        repo = {"repo": "shop", "prs": list(prs), "rows": [],
+                "branches": branches if branches is not None else [fx.branch_rec(BRANCH, [R2, R1])]}
+        return fx.ticket_record(repos={"shop": repo}, tests={t["id"]: t for t in tests},
+                                git={"repos": {"shop": repo}, "checked_at": "2026-01-05T12:00:00+00:00"})
+
+    def runs(self, tk, ident=None, branches=None):
+        ident = ident or self.ident(tk)
+        out = gb.test_nodes(tk, {"shop": ident}, TICKET, branches)
+        self.assertEqual(out, gb.test_nodes(tk, {"shop": ident}, TICKET, branches))
+        return out, {r["attrs"]["evidence"]: r for r in self.of(out["nodes"], "test_run")}
+
+    def test_case_run_and_ticket_evidence(self):
+        tk = self.record([run_rec("t1", head=R1, counts={"passed": 3, "note": "x"}),
+                          run_rec("t2", "failed", head=R2), run_rec("t3", command="npm test")])
+        out, runs = self.runs(tk)
+        cases = {c["attrs"]["command"]: c for c in self.of(out["nodes"], "test_case")}
+        self.assertEqual(sorted(cases), ["npm test", "python -m unittest tests.test_orders"])   # one per command
+        case = cases["python -m unittest tests.test_orders"]
+        self.assertEqual(case["id"], gm.node_id("test_case", TICKET, fx.SHOP, "python -m unittest tests.test_orders"))
+        self.assertEqual((case["attrs"]["test_type"], case["repo_id"]), ("command", fx.SHOP))
+        run = runs["test:t1"]
+        self.assertEqual(run["id"], gm.node_id("test_run", TICKET, "t1"))
+        self.assertEqual((run["attrs"]["status"], run["attrs"]["counts"], run["attrs"]["source"], run["attrs"]["head"],
+                          run["attrs"]["head_basis"], run["attrs"]["context"], run["repo_id"], run["location"]),
+                         ("passed", {"passed": 3}, "local", R1, "observed after run", ["head", "location"], fx.SHOP,
+                          "c:/work/shop"))
+        self.assertEqual({(e["src"], e["dst"]) for e in self.of(out["edges"], "EXECUTED_IN")},
+                         {(case["id"], runs["test:t1"]["id"]), (case["id"], runs["test:t2"]["id"]),
+                          (cases["npm test"]["id"], runs["test:t3"]["id"])})
+        evidence = self.of(out["edges"], "HAS_EVIDENCE")
+        self.assertEqual({(e["src"], e["dst"], e["attrs"]["how"]) for e in evidence},
+                         {(TICKET, r["id"], "session turn") for r in runs.values()})
+        self.assertEqual(runs["test:t3"]["repo_id"], "")   # no captured context: the repository is not claimed
+
+    def test_a_run_at_r1_is_shown_against_the_pr_head_at_r2(self):
+        tk = self.record([run_rec("t1", head=R1)], prs=[fx.pull_request(7, head=R2)], branches=[])
+        app = self.runs(tk)[1]["test:t1"]["attrs"]["applicability"]
+        self.assertEqual((app["state"], [(r["name"], r["result"]) for r in app["references"]]),
+                         ("different commit", [("PR #7 head", "different commit")]))
+        self.assertEqual(app["text"], "passed; HEAD observed after the run was %s; PR #7 head is %s" % (R1[:7], R2[:7]))
+
+    def test_no_recorded_head_is_unknown(self):
+        tk = self.record([run_rec("t1")], prs=[fx.pull_request(7, head=R2)])
+        run = self.runs(tk)[1]["test:t1"]
+        self.assertEqual((run["attrs"]["applicability"]["state"], run["attrs"]["applicability"]["reason"],
+                          run["attrs"]["head"]), ("unknown", "revision not captured", ""))
+
+    def test_two_open_prs_with_different_heads_are_ambiguous(self):
+        tk = self.record([run_rec("t1", head=R2)], branches=[],
+                         prs=[fx.pull_request(7, head=R2), fx.pull_request(8, head=R3),
+                              fx.pull_request(9, "merged", merge_commit=fx.sha(9), head=R1)])
+        app = self.runs(tk)[1]["test:t1"]["attrs"]["applicability"]
+        self.assertEqual((app["state"], [(r["name"], r["result"]) for r in app["references"]]),
+                         ("ambiguous", [("PR #7 head", "same commit"), ("PR #8 head", "different commit")]))
+
+    def test_branch_tips_count_only_in_the_clone_they_were_read_from(self):
+        tk = self.record([run_rec("t1", head=R2), run_rec("t2", head=R2, location=CLONE_B)])
+        ident = self.ident(tk)
+        self.assertEqual(ident["tracked"], "c:/work/shop")
+        refs = gb.references(tk, ident, CLONE_A)
+        self.assertEqual(refs, [{"name": "branch %s tip" % BRANCH, "kind": "branch", "head": R2[:9],
+                                 "observed_at": "2026-01-05T12:00:00+00:00"}])
+        self.assertEqual(gb.references(tk, ident, CLONE_B), [])
+        _, runs = self.runs(tk)
+        self.assertEqual(runs["test:t1"]["attrs"]["applicability"]["state"], "same commit")   # 9 characters suffice
+        other = runs["test:t2"]["attrs"]["applicability"]
+        self.assertEqual((other["state"], other["reason"]), ("unknown", gb.NOTHING_TO_COMPARE))
+
+    def test_the_branch_file_gives_the_full_tip_when_the_caller_has_it(self):
+        tk = self.record([run_rec("t1", head=R3)])
+        branches = {"shop": {BRANCH: {"tip": R3, "checked_at": "2026-01-05T12:30:00+00:00", "ticket": KEY}}}
+        refs = gb.references(tk, self.ident(tk), CLONE_A, branches["shop"])
+        self.assertEqual((refs[0]["head"], refs[0]["observed_at"]), (R3, "2026-01-05T12:30:00+00:00"))
+        self.assertEqual(self.runs(tk, branches=branches)[1]["test:t1"]["attrs"]["applicability"]["state"],
+                         "same commit")
+
+    def test_an_abandoned_branch_and_a_closed_pr_are_no_reference(self):
+        abandoned = dict(fx.branch_rec(BRANCH, [R2]), status="abandoned")
+        tk = self.record([run_rec("t1", head=R1)], prs=[fx.pull_request(7, "closed", head=R2)], branches=[abandoned])
+        self.assertEqual(gb.references(tk, self.ident(tk), CLONE_A), [])
+
+    def test_no_run_is_ever_marked_verified(self):
+        tk = self.record([run_rec("t1", head=R2), run_rec("t2", "failed")], prs=[fx.pull_request(7, head=R2)])
+        out, runs = self.runs(tk)
+        self.assertEqual({e["type"] for e in out["edges"]}, {"EXECUTED_IN", "HAS_EVIDENCE"})
+        for edge in out["edges"]:
+            self.assertEqual(edge["basis"], "observed")
+            for end in (edge["src"], edge["dst"]):
+                self.assertNotRegex(end, r"^g[rvps]_")
+        for node in out["nodes"]:
+            self.assertNotIn("verified", node["attrs"])
+            self.assertNotIn("verification", node["attrs"])
+        self.assertNotIn("verif", " ".join(r["attrs"]["applicability"]["text"] for r in runs.values()))
+
+    def test_an_unknown_repository_and_no_tests(self):
+        tk = self.record([run_rec("t1", head=R1, location="C:/work/elsewhere")])
+        run = self.runs(tk)[1]["test:t1"]
+        self.assertEqual((run["repo_id"], run["attrs"]["applicability"]["reason"]), ("name:elsewhere",
+                                                                                     gb.NOTHING_TO_COMPARE))
+        self.assertEqual(gb.test_nodes(fx.ticket_record(), {}, TICKET), {"nodes": [], "edges": []})
+
+
 if __name__ == "__main__":
     unittest.main()
