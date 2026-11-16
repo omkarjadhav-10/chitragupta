@@ -8,6 +8,8 @@ import json
 import os
 import re
 import sqlite3
+import time
+import traceback
 
 from . import common, graphmodel
 from .safety import paths
@@ -523,3 +525,150 @@ def stats():
     return {"state": "ok", "schema": SCHEMA, "builder": BUILDER, "generation": int(m.get("generation") or 0),
             "built_at": m.get("built_at") or "", "tickets": count["sources"], "nodes": count["nodes"],
             "edges": count["edges"], "requirements": count["requirements"], "bytes": os.path.getsize(db_path())}
+
+
+# --- incremental sync and the tick step (design section 12) ---
+# No process, network or model call: the builder reads cached records only. An unchanged ticket stops at its input
+# signature and writes nothing at all.
+
+LIMIT = 25        # tickets rebuilt per run
+BUDGET_S = 2.0    # checked between tickets, so one ticket can overrun it
+_TABLES_DATA = ("sources", "nodes", "edges", "requirements")
+
+
+def _ticket_keys():
+    try:
+        names = os.listdir(common.hp("data", "tickets"))
+    except OSError:
+        return []
+    return sorted(n[:-5] for n in names if n.endswith(".json") and _KEY.match(n[:-5]))
+
+
+def purge(con, profile_generation):
+    """The profile changed: every row goes before anything is rebuilt; the history files stay."""
+    with con:
+        for table in _TABLES_DATA:
+            con.execute("DELETE FROM %s" % table)
+        set_meta(con, profile_generation=profile_generation, generation=_generation(con) + 1)
+    reset()
+
+
+def _built(built, sig, profile_generation, at):
+    """`graphbuild.ticket_graph`'s result as `recover`'s rebuild contract and `publish`'s arguments take it."""
+    change = built.get("change") or {}
+    return {"graph": {name: built[name] for name in ("nodes", "edges", "statuses")}, "sig": sig,
+            "profile_generation": profile_generation, "at": at, "coverage": built.get("coverage"),
+            "requirements": built["requirements"],
+            "requirements_change": {name: list(change.get(name) or []) for name in ("added", "modified", "removed",
+                                                                                   "restored")},
+            "source_change": change.get("source")}
+
+
+def _order(everyone, first, cursor):
+    """Dirty tickets first, then the rest starting after the cursor and wrapping round."""
+    rest = [k for k in everyone if k not in first]
+    if cursor:
+        rest = [k for k in rest if k > cursor] + [k for k in rest if k <= cursor]
+    return list(first) + rest
+
+
+def _note(con, text):
+    if meta(con).get("last_error") != text:
+        with con:
+            set_meta(con, last_error=text)
+
+
+def _one(con, cfg, key, profile_generation, dirty, old_sig):
+    """One ticket: → None (nothing to do), 'deleted', 'recovered', 'unchanged' (signature updated only) or 'built'."""
+    from . import graphbuild
+    from .dashboard import api
+    if not api.scope_of(key, cfg).get("visible"):
+        if old_sig is None:
+            return None
+        with con:
+            delete_ticket(con, key)
+        return "deleted"
+    sig = graphbuild.input_signature(key, cfg)
+    if sig == old_sig and not dirty:
+        return None
+
+    def rebuild(history):
+        inputs = graphbuild.load_inputs(key, cfg, history)
+        return _built(graphbuild.ticket_graph(inputs), sig, profile_generation, inputs["at"])
+
+    if recover(con, key, rebuild)["action"] != "none":
+        return "recovered"   # current as of that rebuild, with this signature
+    row = con.execute("SELECT sig FROM sources WHERE ticket = ?", (key,)).fetchone()
+    if row and row[0] == sig:
+        return None
+    found, history = load_history(key)
+    if found != "ok":   # recover found nothing to repair: this is the first build
+        history = new_history(key)
+    inputs = graphbuild.load_inputs(key, cfg, history)
+    built = graphbuild.ticket_graph(inputs)
+    head = history.get("head")
+    if row and head and built["content"] == head["content"] and not (built.get("change") or {}).get("changed"):
+        with con:
+            con.execute("UPDATE sources SET sig = ?, coverage = ? WHERE ticket = ?",
+                        (sig, _dump(built.get("coverage") or {}), key))
+        return "unchanged"
+    args = _built(built, sig, profile_generation, inputs["at"])
+    publish(con, key, args["graph"], dict(history, requirements=built["requirements"]), sig, profile_generation,
+            inputs["at"], args["requirements_change"], args["source_change"], args["coverage"])
+    if built.get("dropped"):
+        _note(con, "%d edges of %s left out: an endpoint is missing" % (built["dropped"], key))
+    return "built"
+
+
+def sync(cfg, keys=None, limit=LIMIT, budget_s=BUDGET_S):
+    """Bring the index up to date, a bounded amount per call. `keys` are this run's dirty tickets: they come first
+    and are always checked by `recover`; the others only when their input signature changed. A busy index (another
+    writer) skips the run. → a report of what happened to which ticket."""
+    from . import profile
+    began = time.monotonic()
+    report = {"busy": False, "purged": False, "built": [], "recovered": [], "unchanged": [], "deleted": [],
+              "errors": [], "more": False}
+    try:
+        con = open_write(timeout=2.0)
+    except sqlite3.OperationalError:
+        report["busy"] = True
+        return report
+    try:
+        generation = profile.signature(cfg)
+        if meta(con).get("profile_generation") != generation:
+            purge(con, generation)
+            report["purged"] = True
+        stored = dict(con.execute("SELECT ticket, sig FROM sources").fetchall())
+        first = sorted({str(k).upper() for k in keys or () if _KEY.match(str(k).upper())})
+        everyone = sorted(set(_ticket_keys()) | set(stored) | set(first))
+        cursor = meta(con).get("cursor") or ""
+        done, last = 0, ""
+        for key in _order(everyone, first, cursor):
+            if done >= limit or time.monotonic() - began >= budget_s:
+                report["more"] = True
+                break
+            last = key
+            try:
+                outcome = _one(con, cfg, key, generation, key in first, stored.get(key))
+            except Exception:   # one ticket never stops the others; the next run tries it again
+                common.log(CALLER, "evidence graph %s failed: %s" % (key, traceback.format_exc()))
+                report["errors"].append(key)
+                done += 1
+                continue
+            if outcome:
+                report[outcome].append(key)
+                done += outcome in ("built", "recovered")
+        wanted = last if report["more"] else ""
+        if (meta(con).get("cursor") or "") != wanted:
+            with con:
+                set_meta(con, cursor=wanted)
+        return report
+    finally:
+        con.close()
+
+
+def tick(cfg, touched=()):
+    """The background step: nothing while paused."""
+    if os.path.exists(common.wl("PAUSED")):
+        return {"paused": True}
+    return sync(cfg, keys=touched)

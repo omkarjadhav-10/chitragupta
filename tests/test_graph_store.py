@@ -1,10 +1,16 @@
+import copy
 import os
 import unittest
 from unittest import mock
 
+from chitragupta import common, profile, store
+from chitragupta import graphbuild as gb
 from chitragupta import graphmodel as gm
 from chitragupta import graphstore as gs
+from tests import graphfixture as fx
 from tests.support import Isolated
+
+GB_PLAN = gb.plan_nodes
 
 A, B = "ABC-1001", "ABC-1002"
 REPO = "github:acme.test/shop/api"
@@ -564,6 +570,207 @@ class Recovery(HistoryBase):
         self.assertEqual(data["requirements"], {"next_ordinal": 7})
         self.assertEqual(data["journal"][0]["delta"]["requirements"]["added"], ["gr_1"])
         self.assertEqual(gs.ticket_rows(self.con, A)[3]["coverage"], {"jira": "ok"})
+
+
+FILTER, EXPORT = "Orders can be filtered by status", "The filtered list can be exported as a spreadsheet"
+STEPS = [{"id": "one", "text": "Add the order filter", "criteria": ["ac1"]},
+         {"id": "two", "text": "Add the export", "criteria": ["ac2"]},
+         {"id": "check", "text": "Verify both", "kind": "verification", "criteria": ["ac1", "ac2"],
+          "depends_on": ["one", "two"]}]
+
+
+def everything(home):
+    """Every file under the home with its bytes: 'byte-identical' means this is equal."""
+    out = {}
+    for d, _, files in os.walk(home):
+        for f in files:
+            with open(os.path.join(d, f), "rb") as fh:
+                out[os.path.join(d, f)] = fh.read()
+    return out
+
+
+class Sync(fx.Workflows):
+    """A synthetic home: a card, a ticket record with a commit and test runs, one approved workflow with a pin."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(gs.reset)
+        fx.write_card(common.home(), A, [FILTER, EXPORT])
+        self.rec = self.observe(self.associate(self.workflow([FILTER, EXPORT], steps=STEPS, approve=True)))
+        self.captured_test(self.rec, "t1")
+        self.captured_test(self.rec, "t2", status="failed")
+        self.rec = self.map(self.rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        self.put(A, commits={c["sha"]: c for c in [fx.commit_rec(1, "ABC-1001 Add the order filter", repo="scratch",
+                                                                 files=["src/orders/list.py"])]})
+        self.cfg = common.load_config()
+
+    def sync(self, **kw):
+        return gs.sync(kw.pop("cfg", self.cfg), **kw)
+
+    def rows(self, key=A):
+        con = gs.open_write()
+        try:
+            return gs.ticket_rows(con, key)
+        finally:
+            con.close()
+
+    def by_type(self, nodes, kind):
+        return [n for n in nodes if n["type"] == kind]
+
+    def ticket_level(self, statuses, text):
+        index = {n["id"]: n for n in self.rows()[0]}
+        for row in statuses:
+            if row["workflow"] == "" and index[gb.revision_id(row["requirement"], row["revision"])]["attrs"]["text"] == text:
+                return row
+        raise AssertionError("no ticket-level row for %r" % text)
+
+    def test_the_graph_holds_every_part(self):
+        report = self.sync()
+        self.assertEqual((sorted(report["built"]), report["errors"], report["purged"]), ([A, B], [], True))
+        nodes, edges, statuses, source = self.rows()
+        types = {n["type"] for n in nodes}
+        self.assertTrue({"ticket", "requirement", "requirement_revision", "plan", "plan_step", "commit", "code_change",
+                         "test_case", "test_run"} <= types, types)
+        self.assertEqual(len(self.by_type(nodes, "requirement")), 2)
+        have = {n["id"] for n in nodes}
+        self.assertEqual([e["id"] for e in edges if e["src"] not in have or e["dst"] not in have], [])
+        self.assertEqual(len([e for e in edges if e["type"] == "HAS_REQUIREMENT"]), 2)
+        self.assertEqual(len([e for e in edges if e["type"] == "SUPPORTED_BY"]), 1)
+        self.assertEqual({(r["workflow"] == "") for r in statuses}, {True, False})
+        self.assertEqual(len(statuses), 4)   # two requirements, each with a workflow row and a ticket-level row
+        self.assertEqual(self.ticket_level(statuses, FILTER)["verification"], "Verified within recorded scope")
+        self.assertEqual(self.ticket_level(statuses, EXPORT)["verification"], "Unverified")
+        self.assertEqual(source["coverage"]["workflows"], [self.rec["id"]])
+        self.assertEqual(gs.load_history(A)[1]["head"]["content"], source["content"])
+
+    def test_two_builds_of_the_same_home_are_identical(self):   # EG-A01
+        first = gb.ticket_graph(gb.load_inputs(A, self.cfg))
+        second = gb.ticket_graph(gb.load_inputs(A, self.cfg))
+        self.assertEqual(first, second)
+        self.sync()
+        before = self.rows()
+        journal = gs.load_history(A)[1]["journal"]
+        gs.reset()
+        os.remove(gs.db_path())   # the index is derived: build it again from the same home
+        report = self.sync()
+        self.assertEqual(sorted(report["recovered"]), [A, B])
+        after = self.rows()
+        self.assertEqual([plain(before[0]), plain(before[1]), before[2]], [plain(after[0]), plain(after[1]), after[2]])
+        self.assertEqual(before[3]["content"], after[3]["content"])
+        self.assertEqual(gs.load_history(A)[1]["journal"], journal)   # no new journal entry
+
+    def test_second_sync_writes_nothing(self):
+        self.sync()
+        before = everything(common.home())
+        report = self.sync()
+        self.assertEqual(everything(common.home()), before)
+        self.assertEqual((report["built"], report["recovered"], report["unchanged"], report["deleted"]), ([], [], [], []))
+        report = self.sync(keys=[A])   # a dirty ticket whose inputs did not change: checked, not rewritten
+        self.assertEqual(everything(common.home()), before)
+        self.assertEqual(report["built"], [])
+
+    def test_changing_only_the_criteria_fields_triggers_a_rebuild(self):
+        self.sync()
+        sig = self.rows()[3]["sig"]
+        cfg = dict(self.cfg, companion=dict(self.cfg.get("companion") or {}, criteria_fields=["customfield_10001"]))
+        self.assertEqual(gs.common.load_config().get("companion"), self.cfg.get("companion"))
+        report = self.sync(cfg=cfg)
+        self.assertFalse(report["purged"])
+        self.assertIn(A, report["unchanged"] + report["built"])
+        self.assertNotEqual(self.rows()[3]["sig"], sig)
+        self.assertEqual(self.sync(cfg=cfg)["unchanged"] + self.sync(cfg=cfg)["built"], [])
+
+    def test_a_ticket_that_left_the_scope_has_no_rows(self):
+        self.sync()
+        self.assertTrue(self.rows(B)[0])
+        os.remove(store.ticket_path(B))   # no record of your work on it: outside the personal projection
+        report = self.sync()
+        self.assertEqual(report["deleted"], [B])
+        self.assertEqual(self.rows(B), ([], [], [], None))
+        self.assertTrue(self.rows(A)[0])
+        self.assertTrue(os.path.exists(gs.history_path(B)))   # the canonical file stays
+
+    def test_a_profile_change_purges_everything_first(self):
+        self.sync()
+        cfg = copy.deepcopy(self.cfg)
+        cfg["profile"]["include_tickets"]["ABC-1003"] = "Third task"
+        self.assertNotEqual(profile.signature(cfg), profile.signature(self.cfg))
+        report = self.sync(cfg=cfg, limit=0)
+        self.assertEqual((report["purged"], report["more"], report["built"]), (True, True, []))
+        stats = gs.stats()
+        self.assertEqual((stats["tickets"], stats["nodes"], stats["edges"], stats["requirements"]), (0, 0, 0, 0))
+        self.assertEqual(gs.meta(gs.open_read())["profile_generation"], profile.signature(cfg))
+        report = self.sync(cfg=cfg)
+        self.assertFalse(report["purged"])
+        self.assertEqual(sorted(report["recovered"] + report["built"]), [A, B])
+        self.assertEqual(self.rows()[3]["coverage"]["workflows"], [])   # the workflow is bound to the old profile
+
+    def test_a_pruned_unpinned_test_record_leaves_no_node_and_no_dangling_edge(self):   # EG-A23
+        self.sync()
+        nodes = self.rows()[0]
+        self.assertEqual(sorted(n["attrs"]["evidence"] for n in self.by_type(nodes, "test_run")), ["test:t1", "test:t2"])
+        tk = self.tk(A)
+        del tk["tests"]["t2"], tk["tests"]["t1"]   # t1 is pinned by the workflow, t2 is not
+        common.write_json(store.ticket_path(A), tk)
+        self.assertEqual(self.sync()["built"], [A])
+        nodes, edges, _, _ = self.rows()
+        runs = {n["attrs"]["evidence"]: n for n in self.by_type(nodes, "test_run")}
+        self.assertEqual(sorted(runs), ["test:t1"])
+        self.assertEqual((runs["test:t1"]["lifecycle"], runs["test:t1"]["attrs"]["note"]),
+                         ("source_missing", gb.PINNED_COPY))
+        have = {n["id"] for n in nodes}
+        self.assertEqual([e["id"] for e in edges if e["src"] not in have or e["dst"] not in have], [])
+
+    def test_dropped_edges_are_counted(self):
+        inputs = gb.load_inputs(A, self.cfg)
+        real = gb.ticket_graph
+        with mock.patch.object(gb, "plan_nodes", lambda w, i: dict(gb_plan(w, i), nodes=[])):
+            built = real(inputs)
+        self.assertGreater(built["dropped"], 0)
+        self.assertEqual(built["coverage"]["dropped_edges"], built["dropped"])
+        ids = {n["id"] for n in built["nodes"]}
+        self.assertTrue(all(e["src"] in ids and e["dst"] in ids for e in built["edges"]))
+
+    def test_no_process_network_or_model_call(self):
+        def no_socket(*args, **kwargs):
+            raise AssertionError("the graph step opened a connection")
+        with mock.patch("socket.socket", no_socket), mock.patch("socket.create_connection", no_socket):
+            report = gs.tick(self.cfg, {A})
+        self.assertEqual(sorted(report["built"]), [A, B])
+        self.assertEqual(self.processes, [])
+
+    def test_nothing_happens_while_paused(self):
+        common.write_text(common.wl("PAUSED"), "")
+        self.assertEqual(gs.tick(self.cfg, {A}), {"paused": True})
+        self.assertFalse(os.path.exists(gs.db_path()))
+        self.assertFalse(os.path.exists(gs.history_path(A)))
+
+    def test_the_bound_and_the_rotating_cursor(self):
+        report = self.sync(limit=1)
+        self.assertEqual((report["built"], report["more"]), ([A], True))
+        self.assertEqual(gs.meta(gs.open_read())["cursor"], A)
+        report = self.sync(limit=1)   # starts after the cursor; stops before A, which it has not looked at
+        self.assertEqual((report["built"], report["more"]), ([B], True))
+        self.assertEqual(gs.meta(gs.open_read())["cursor"], B)
+        report = self.sync(limit=1)   # nothing left to build: the whole round fits and the cursor clears
+        self.assertEqual((report["built"], report["more"]), ([], False))
+        self.assertEqual(gs.meta(gs.open_read())["cursor"], "")
+
+    def test_a_failing_ticket_does_not_stop_the_others(self):
+        real = gb.ticket_graph
+
+        def broken(inputs):
+            if inputs["key"] == A:
+                raise RuntimeError("synthetic failure")
+            return real(inputs)
+        with mock.patch.object(gb, "ticket_graph", broken):
+            report = self.sync()
+        self.assertEqual((report["errors"], report["built"]), ([A], [B]))
+        self.assertEqual(self.sync()["built"], [A])
+
+
+def gb_plan(workflow, index):
+    return GB_PLAN(workflow, index)
 
 
 def common_write(path, obj):

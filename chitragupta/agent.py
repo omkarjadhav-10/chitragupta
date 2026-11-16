@@ -1316,6 +1316,11 @@ class Agent:
                 self._timed("companion",companionevidence.tick,self.cfg,set(self.store.dirty_tickets))
             except Exception:
                 common.log("agent", "companion checkpoint failed: " + traceback.format_exc())
+            try:
+                from . import graphstore  # the Evidence Graph index from cached records: no process, network or model
+                self._timed("evidence_graph",graphstore.tick,self.cfg,set(self.store.dirty_tickets))
+            except Exception:
+                common.log("agent", "evidence graph failed: " + traceback.format_exc())
         self._timed("health",self.update_health)
         from . import kb5
         changed = self._timed("render",render.render_all,self.store,self.cfg,h, days=self.store.dirty_days, tickets=self.store.dirty_tickets,

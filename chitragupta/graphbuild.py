@@ -1,10 +1,12 @@
-"""Evidence Graph builder: turns records Chitragupta already keeps into graph rows. Pure over its arguments:
-no file, no clock, no process, no network.
+"""Evidence Graph builder: turns records Chitragupta already keeps into graph rows. The builders are pure over their
+arguments: no file, no clock, no process, no network. Only `load_inputs`, `input_signature` and
+`workflow_context` read files (read-only), and `ticket_graph` assembles one ticket from what `load_inputs` returned.
 
 This part versions the requirements read from the cached Jira card (design section 9).
 """
 import copy
 import difflib
+import os
 import re
 
 from . import activity, common, gitcmd, hosts, profile, workflowmodel
@@ -1190,3 +1192,312 @@ def verification_rows(workflow, requirement_index, edges=(), ctx=None, refs=()):
                              "context_observed_at": ctx["observed_at"], "reason": NEWER_HEAD})
     return {"rows": rows, "edges": out, "gaps": gaps,
             "ledger": {row["criterion"]: row["status"] for row in ledger["rows"]}}
+
+
+# --- assemble one ticket (design sections 4 and 12) ---
+# `load_inputs` and `input_signature` read the canonical records (never write); `ticket_graph` is pure over what
+# `load_inputs` returned. The signature covers exactly the files the loader reads, except the history file.
+
+CONFIG_KEYS = ("companion.criteria_fields", "jira.parent_issue_types", "watched_repos")
+GIT_FILES = ("prs.json", "branches.json", "repo.json")
+DIMENSIONS = ("plan_coverage", "implementation", "verification")
+
+
+def _ticket_id(key, instance):
+    return graphmodel.node_id("ticket", instance or "", key)
+
+
+def _instance(cfg, workflows):
+    """Ticket identity: the workflows' one Jira instance, else the one configured instance, else key-only."""
+    bound = sorted({(w.get("binding") or {}).get("jira_instance") for w in workflows} - {None, ""})
+    if bound:
+        return bound[0] if len(bound) == 1 else ""
+    configured = sorted({a.get("instance", "") for a in profile.Policy(cfg).p["jira_accounts"]} - {""})
+    return configured[0] if len(configured) == 1 else ""
+
+
+def _workflow_records(key, tk, cfg):
+    """The ticket's workflows that pass `companion.authorize`, sorted by id. Anything missing, unreadable, waiting
+    for recovery or not authorized is simply not part of the graph."""
+    from . import companion, workflowstore
+    out = []
+    for wid in sorted({str(w) for w in ((tk.get("workflows") or {}).get("ids") or [])}):
+        try:
+            rec = workflowstore.load(wid)
+            if not rec or (rec.get("binding") or {}).get("ticket") != key:
+                continue
+            companion.authorize(rec, cfg)
+        except Exception:
+            continue
+        out.append(rec)
+    return out
+
+
+def _reads(tk, workflows):
+    """→ (repository keys, locations) one ticket's graph reads beyond its own record."""
+    names, places = set(), set()
+    names |= set(((tk.get("git") or {}).get("repos") or {})) | set(((tk.get("release") or {}).get("repos") or {}))
+    for c in (tk.get("commits") or {}).values():
+        if isinstance(c, dict) and c.get("repo_name"):
+            names.add(str(c["repo_name"]))
+    for f in (tk.get("files") or {}).values():
+        if isinstance(f, dict):
+            if f.get("repo"):
+                names.add(str(f["repo"]))
+            if f.get("repo_root"):
+                places.add(str(f["repo_root"]))
+    for t in (tk.get("tests") or {}).values():
+        ctx = evidence_rows.captured_context(t.get("context")) if isinstance(t, dict) else None
+        if (ctx or {}).get("location"):
+            places.add(ctx["location"])
+    for w in workflows:
+        if (w.get("binding") or {}).get("location"):
+            places.add(str(w["binding"]["location"]))
+    keys = {gitcmd.repo_key(str(n)) for n in names} | {gitcmd.repo_key(p) for p in places}
+    return sorted(k for k in keys if k.strip(".")), sorted(places)
+
+
+def _git_file(repo_key, name):
+    return common.hp("data", "git", repo_key, name)
+
+
+def _ledger_files(places):
+    out = set()
+    for place in places:
+        out.add(activity.ledger_path(activity.ledger_key(place)))
+        out.add(activity.ledger_path(gitcmd.repo_key(place)))   # the older name `activity.load` falls back to
+    return sorted(out)
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
+def _config_digest(cfg):
+    from . import configstore
+    return digest({name: configstore.get(cfg or {}, name, None) for name in CONFIG_KEYS})
+
+
+def input_signature(key, cfg):
+    """What a ticket's graph depends on, as one digest: the stat of every file the loader reads (ticket, card,
+    visible workflow heads, `data/git/<repo>/{prs,branches,repo}.json`, activity ledgers), the authorized workflow
+    ids, the profile signature, the store's SCHEMA and BUILDER and the configuration the builder reads. Not the
+    history file (this module's own output) and not the clock."""
+    from . import graphstore, store, workflowstore
+    from .dashboard import api
+    tk = api.read_json_cached(store.ticket_path(key), {})
+    tk = tk if isinstance(tk, dict) else {}
+    records = _workflow_records(key, tk, cfg)
+    names, places = _reads(tk, records)
+    files = [store.ticket_path(key), common.hp("data", "jira", key + ".json")]
+    files += [os.path.join(workflowstore.root(r["id"]), "head.json") for r in records]
+    for rkey in names:
+        files += [_git_file(rkey, name) for name in GIT_FILES]
+        meta = common.read_json(_git_file(rkey, "repo.json"), {}) or {}
+        if isinstance(meta, dict) and meta.get("path"):
+            places.append(str(meta["path"]))
+    files += _ledger_files(places)
+    return digest({"files": [[path, _stat(path)] for path in sorted(set(files))],
+                   "workflows": [r["id"] for r in records], "profile": profile.signature(cfg),
+                   "schema": graphstore.SCHEMA, "builder": graphstore.BUILDER, "config": _config_digest(cfg)})[:32]
+
+
+def load_inputs(key, cfg, history=None):
+    """Read one ticket's canonical inputs (read-only). `history` is the history file content to build against;
+    without it the file is read (a missing or unreadable one counts as new)."""
+    from . import brief, graphstore, store
+    tk = common.read_json(store.ticket_path(key), {}) or {}
+    tk = dict(tk) if isinstance(tk, dict) else {}
+    tk.setdefault("id", key)
+    workflows, contexts = [], {}
+    for rec in _workflow_records(key, tk, cfg):
+        workflow = workflow_inputs(rec)
+        try:
+            contexts[workflow["id"]] = workflow_context(workflow)
+        except Exception:   # it stopped being authorized between the two reads: leave it out
+            continue
+        workflows.append(workflow)
+    names, places = _reads(tk, workflows)
+    repo_json, branches = {}, {}
+    for rkey in names:
+        meta = common.read_json(_git_file(rkey, "repo.json"), {}) or {}
+        repo_json[rkey] = meta if isinstance(meta, dict) else {}
+        found = common.read_json(_git_file(rkey, "branches.json"), {}) or {}
+        branches[rkey] = found if isinstance(found, dict) else {}
+        if repo_json[rkey].get("path"):
+            places.append(str(repo_json[rkey]["path"]))
+    generation = profile.signature(cfg)
+    ledgers = {}
+    for place in sorted(set(places)):
+        led = activity.load(place)
+        if isinstance(led, dict) and led.get("profile_sig") == generation:   # the Companion's own rule
+            ledgers.setdefault(str((led.get("repo") or {}).get("path") or place), led)
+    if history is None:
+        found, history = graphstore.load_history(key)
+        if found != "ok":
+            history = graphstore.new_history(key)
+    jira = common.read_json(common.hp("data", "jira", key + ".json"), {}) or {}
+    return {"key": key, "at": common.now_iso(), "fields": planning.criteria_fields(cfg),
+            "instance": _instance(cfg, workflows), "profile_generation": generation, "tk": tk,
+            "jira": jira if isinstance(jira, dict) else {}, "card": brief.jira_card(key), "workflows": workflows,
+            "contexts": contexts, "repo_json": repo_json, "branches": branches,
+            "ledgers": [ledgers[k] for k in sorted(ledgers)], "history": history}
+
+
+def _as(row, rid):
+    """A node whose id is already known (a requirement's identity was fixed when it was first seen)."""
+    row["id"] = rid
+    row["version"] = graphmodel.version(row)
+    return row
+
+
+def _requirement_rows(key, ticket, instance, req, index):
+    """The ticket node, requirements, their revisions, `HAS_REQUIREMENT` (ticket → current revision) and
+    `SUPERSEDES` (revision → the one it replaced, one edge per recorded occurrence, scope = its sequence)."""
+    nodes, edges = {}, {}
+    source = req.get("source") or {}
+    _put(graphmodel.node("ticket", (instance or "", key), key, key,
+                         {"key": key, "identity": "instance-bound" if instance else "key-only",
+                          "source": source.get("state") or "unknown"}, source_ref="ticket:%s" % key), nodes)
+    logical, texts = req.get("logical") or {}, req.get("revisions") or {}
+    reqs, confirmed_in = index.get("requirements") or {}, index.get("confirmed_in") or {}
+    seen = {rid: list(dict.fromkeys(h["revision"] for h in entry["history"])) for rid, entry in logical.items()}
+    for mapping in (index.get("baselines") or {}).values():
+        for criteria in mapping.values():
+            for c in criteria.values():
+                if c["revision"] not in seen.setdefault(c["requirement"], []):
+                    seen[c["requirement"]].append(c["revision"])
+    for rid in sorted(reqs):
+        entry = reqs[rid]
+        removed = entry["status"] == "removed"
+        aliases = entry.get("aliases") or {}
+        alias = aliases[sorted(aliases)[0]] if aliases else "R%d" % entry["ordinal"] if entry.get("ordinal") else ""
+        ref = "graph:%s/requirement:%s" % (key, rid)
+        _put(_as(graphmodel.node("requirement", (ticket, rid), key, alias or rid,
+                                 {"alias": alias, "aliases": aliases, "status": entry["status"],
+                                  "ordinal": entry["ordinal"], "source": entry["source"],
+                                  "ambiguity": entry.get("ambiguity"), "revision": revision_id(rid, entry["revision"])},
+                                 lifecycle="removed" if removed else "current", source_ref=ref), rid), nodes)
+        revisions = seen.get(rid) or []
+        if entry["revision"] not in revisions:
+            revisions.append(entry["revision"])
+        for d in revisions:
+            info = texts.get(d) or {}
+            text = info.get("text") if info else entry.get("text") if d == entry["revision"] else ""
+            _put(graphmodel.node("requirement_revision", (rid, d), key, text or d,
+                                 {"requirement": rid, "digest": d, "text": text or "",
+                                  "text_dropped": bool(info.get("text_dropped")),
+                                  "source": info.get("source") or entry["source"], "fragment": info.get("fragment") or {},
+                                  "first_seen": info.get("first_seen") or "",
+                                  "confirmed_in": confirmed_in.get("%s|%s" % (rid, d)) or []},
+                                 lifecycle="current" if d == entry["revision"] and not removed else "historical",
+                                 source_ref=ref), nodes)
+        _put(graphmodel.edge("HAS_REQUIREMENT", ticket, revision_id(rid, entry["revision"]), key, "declared", scope=rid,
+                             evidence_ref=ref, attrs={"requirement": rid, "alias": alias},
+                             lifecycle="historical" if removed else "current"), edges)
+        previous = None
+        for h in (logical.get(rid) or {}).get("history") or []:
+            if previous and h["revision"] != previous and h["event"] in ("modified", "restored"):
+                _put(graphmodel.edge("SUPERSEDES", revision_id(rid, h["revision"]), revision_id(rid, previous), key,
+                                     "observed", scope=str(h["seq"]), evidence_ref=ref, attrs={"event": h["event"]},
+                                     observed_at=str(h.get("at") or "")), edges)
+            previous = h["revision"]
+    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
+
+
+def _status_row(rid, entry, workflow, location, alias, dims, **extra):
+    return {"requirement": rid, "workflow": workflow, "location": location, "revision": entry["revision"],
+            "alias": alias or "", "ordinal": entry["ordinal"], "status": entry["status"],
+            "plan": dims["plan_coverage"]["state"], "implementation": dims["implementation"]["state"],
+            "verification": dims["verification"]["state"],
+            "detail": dict({dim: copy.deepcopy(dims[dim]) for dim in DIMENSIONS}, **extra)}
+
+
+def ticket_graph(inputs):
+    """Pure: one ticket's inputs (`load_inputs`) → {nodes, edges, statuses, requirements, content} plus `change`
+    (the requirement snapshot's), `coverage` (stored with the source row, not part of the content) and `dropped`
+    (edges left out because an endpoint is missing, e.g. a pruned test record nobody pinned)."""
+    key, tk = inputs["key"], inputs.get("tk") or {}
+    history, workflows = inputs.get("history") or {}, inputs.get("workflows") or []
+    instance = inputs.get("instance") or ""
+    ticket = _ticket_id(key, instance)
+    req, change = requirement_snapshot(history.get("requirements"), inputs.get("jira"), inputs.get("card"),
+                                       inputs.get("fields") or [], inputs.get("at") or "", ticket,
+                                       history.get("next_seq") or 1)
+    index = baseline_links(req, workflows, ticket)
+    nodes, edges = {}, {}
+
+    def add(part):
+        for row in part.get("nodes") or []:
+            nodes.setdefault(row["id"], row)
+        for row in part.get("edges") or []:
+            edges.setdefault(row["id"], row)
+
+    add(_requirement_rows(key, ticket, instance, req, index))
+    names, _ = _reads(tk, workflows)
+    bindings = [w.get("binding") or {} for w in workflows]
+    identities = {rkey: repo_identity(rkey, tk, inputs.get("ledgers") or [], bindings,
+                                      (inputs.get("repo_json") or {}).get(rkey)) for rkey in names}
+    branches = inputs.get("branches") or {}
+    commits = commit_nodes(tk, identities, ticket)
+    for part in (commits, test_nodes(tk, identities, ticket, branches), pr_nodes(tk, identities, ticket, commits["nodes"]),
+                 release_nodes(tk, identities, ticket, commits["nodes"])):
+        add(part)
+    evidence = {"nodes": list(nodes.values()), "edges": list(edges.values())}
+    has_changes = any(row["type"] in ("commit", "code_change") for row in nodes.values())
+    scoped, gaps, unprojected = {}, [], {}
+    for workflow in sorted(workflows, key=lambda w: w["id"]):
+        wid, location = workflow["id"], (workflow.get("binding") or {}).get("location") or ""
+        add(plan_nodes(workflow, index))
+        maps = mapping_edges(workflow, index, evidence)
+        ident = identities.get(gitcmd.repo_key(location)) if location else None
+        refs = references(tk, ident, location, branches.get(ident["repo_key"])) if ident else []
+        ver = verification_rows(workflow, index, maps["edges"], (inputs.get("contexts") or {}).get(wid), refs)
+        add({"nodes": maps["nodes"], "edges": ver["edges"]})
+        gaps += [dict(gap, workflow=wid) for gap in ver["gaps"]]
+        if maps["unprojected"]:
+            unprojected[wid] = list(maps["unprojected"])
+        impl = implementation_rows(workflow, index, ver["edges"], has_changes)
+        for rid, cover in plan_coverage_rows(workflow, index).items():
+            scoped.setdefault(rid, []).append((wid, _place(location), cover, impl.get(rid), ver["rows"].get(rid)))
+
+    reqs = index.get("requirements") or {}
+    plain = {"plan_coverage": plan_coverage_rows(None, index),
+             "implementation": implementation_rows(None, index, [], has_changes),
+             "verification": verification_rows(None, index)["rows"]}
+    statuses = []
+    for rid in sorted(reqs):
+        entry, rows = reqs[rid], []
+        for wid, location, cover, impl, ver in scoped.get(rid) or []:
+            dims = {"plan_coverage": cover, "implementation": impl or plain["implementation"][rid],
+                    "verification": ver or plain["verification"][rid]}
+            rows.append((cover, dims))
+            statuses.append(_status_row(rid, entry, wid, location, cover.get("alias"), dims,
+                                        excluded=bool(cover.get("excluded"))))
+        counted = [dims for cover, dims in rows if not cover.get("excluded")]
+        if counted:   # the ticket-level row: the least favourable of the workflows that count it
+            dims = {}
+            for dim in DIMENSIONS:
+                state = graphmodel.combine(dim, [d[dim]["state"] for d in counted])
+                dims[dim] = next(d[dim] for d in counted if d[dim]["state"] == state)
+        else:
+            dims = {dim: plain[dim][rid] for dim in DIMENSIONS}
+        aliases = entry.get("aliases") or {}
+        alias = aliases[sorted(aliases)[0]] if aliases else "R%d" % entry["ordinal"] if entry.get("ordinal") else ""
+        statuses.append(_status_row(rid, entry, "", "", alias, dims, excluded=bool(rows) and not counted,
+                                    workflows=sorted({wid for wid, *_ in scoped.get(rid) or []})))
+
+    have = set(nodes)
+    kept = sorted((row for row in edges.values() if row["src"] in have and row["dst"] in have), key=lambda r: r["id"])
+    node_rows = sorted(nodes.values(), key=lambda r: r["id"])
+    source = req.get("source") or {}
+    coverage = {"requirements": {name: source.get(name) for name in ("state", "completeness", "fetched_at")},
+                "workflows": sorted(w["id"] for w in workflows), "dropped_edges": len(edges) - len(kept),
+                "gaps": gaps, "unprojected": unprojected}
+    return {"nodes": node_rows, "edges": kept, "statuses": statuses, "requirements": req,
+            "content": graphmodel.content(node_rows, kept, statuses), "change": change, "coverage": coverage,
+            "dropped": len(edges) - len(kept)}
