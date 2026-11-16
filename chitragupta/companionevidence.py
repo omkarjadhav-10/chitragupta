@@ -341,6 +341,8 @@ def map_evidence(rec, rows, body, ctx, at):
         row = manual_row(body["manual"], ctx, baseline["id"], at)
         row.update(criteria=sorted(set(criteria)), steps=sorted(set(steps)), coverage=coverage, pinned=True,
                    mapped_by=row["actor"], mapped_at=at)
+        if steps:  # a step id means something only inside its plan version
+            row["plan"] = plan_id
         rec["evidence"].append(row)
         return row
     sid = body.get("evidence")
@@ -349,13 +351,20 @@ def map_evidence(rec, rows, body, ctx, at):
     if rows[sid]["kind"] not in EVIDENCE_KINDS:
         raise ValueError("release reminders and requirement changes are not evidence")
     actor = model.text(body.get("actor") or "developer", 100)
+    # Steps are amended only on a pin of the same plan: the same step id in another plan version is another step,
+    # so that mapping becomes its own pin. A criteria-only mapping (criteria belong to the baseline, not to a plan)
+    # also amends a pin that records no plan, which is every pin saved before plans were recorded.
+    same_plan = (plan_id,) if steps else (None, plan_id)
     for e in rec["evidence"]:
-        if e.get("id") == sid and e.get("version") == rows[sid]["version"] and e.get("baseline") == baseline["id"]:
+        if e.get("id") == sid and e.get("version") == rows[sid]["version"] and e.get("baseline") == baseline["id"] \
+                and e.get("plan") in same_plan:
             e["criteria"] = sorted(set(e.get("criteria", [])) | set(criteria))
             e["steps"] = sorted(set(e.get("steps", [])) | set(steps))
             e["coverage"] = coverage
             return e
     row = pin(rows[sid], set(criteria), set(steps), coverage, baseline["id"], actor, at)
+    if steps:
+        row["plan"] = plan_id
     rec["evidence"].append(row)
     return row
 

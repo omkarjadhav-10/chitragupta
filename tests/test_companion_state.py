@@ -1012,6 +1012,76 @@ class A74Applicability(Base):
         self.assertEqual((row["status"], row["basis"]), ("Verified", ["self-reported"]))
 
 
+class PinPlanBinding(Base):
+    """A step mapping records the plan it was made under: the same step id in a later plan version is another step."""
+
+    def pins(self, rec, sid="test:t1"):
+        return [e for e in rec["evidence"] if e.get("id") == sid]
+
+    def test_a_new_step_mapping_carries_the_plan(self):
+        rec = self.observe(self.started())
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], steps=["one"], coverage="complete")
+        self.assertEqual([e["plan"] for e in self.pins(rec)], [rec["approved_plan"]])
+        rec = self.map(rec, steps=["two"], manual={"kind": "code_inspection", "outcome": "passed", "text": "Read it",
+                                                   "revision": HEAD1, "limits": "Read the diff only"})
+        self.assertEqual(rec["evidence"][-1]["plan"], rec["approved_plan"])
+
+    def test_a_criteria_only_mapping_records_no_plan(self):
+        rec = self.observe(self.started())
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        rec = self.map(rec, criteria=["ac1"], manual={"kind": "acceptance", "outcome": "passed", "text": "Checked",
+                                                      "revision": HEAD1, "limits": "One account"})
+        self.assertEqual([("plan" in e) for e in rec["evidence"]], [False, False])
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], coverage="partial")   # amended in place, as before
+        self.assertEqual([(e["coverage"], "plan" in e) for e in self.pins(rec)], [("partial", False)])
+
+    def test_the_same_source_under_another_plan_is_a_second_pin(self):
+        rec = self.planned()
+        self.captured_test(rec, "t1", context=False)
+        first = rec["selected_plan"]
+        rec = self.map(rec, evidence="test:t1", steps=["one"])
+        rec = self.map(rec, evidence="test:t1", steps=["two"])     # the same plan: amended in place
+        self.assertEqual([(e["plan"], e["steps"]) for e in self.pins(rec)], [(first, ["one", "two"])])
+        rec = companion.save_plan(rec["id"], rec["revision"], plan_body(text="Another way to reach the same result."))
+        second = rec["selected_plan"]
+        self.assertNotEqual(first, second)
+        rec = self.map(rec, evidence="test:t1", steps=["one"])     # step "one" of the new version
+        self.assertEqual([(e["plan"], e["steps"]) for e in self.pins(rec)],
+                         [(first, ["one", "two"]), (second, ["one"])])
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"])  # criteria-only: joins the current plan's pin
+        self.assertEqual([(e["plan"], e["criteria"]) for e in self.pins(rec)], [(first, []), (second, ["ac1"])])
+
+    def test_a_legacy_pin_loads_reconciles_and_verifies_as_before(self):
+        rec = self.observe(self.started())
+        self.captured_test(rec, "t1")
+        rec = self.map(rec, evidence="test:t1", criteria=["ac1"], steps=["one"], coverage="complete")
+        with_plan = companion.verify(rec["id"], rec["revision"])
+        plan = with_plan["plans"][with_plan["approved_plan"]]
+        base = with_plan["baselines"][with_plan["baseline"]]
+        ctx = companion.context(with_plan)
+        legacy = [{k: v for k, v in e.items() if k != "plan"} for e in with_plan["evidence"]]
+        self.assertNotEqual(legacy, with_plan["evidence"])
+        self.assertEqual(model.reconcile(plan, legacy, ctx), model.reconcile(plan, with_plan["evidence"], ctx))
+        self.assertEqual(model.verification(base, legacy, ctx), model.verification(base, with_plan["evidence"], ctx))
+        self.assertEqual(self.ledger(with_plan), {"ac1": "Verified"})
+        # a record saved before pins recorded a plan
+        with_plan["evidence"] = legacy
+        saved = workflowstore.save(with_plan, with_plan["revision"], companion.authorize)
+        loaded = workflowstore.load(saved["id"])
+        self.assertEqual([("plan" in e) for e in loaded["evidence"]], [False])
+        again = companion.verify(loaded["id"], loaded["revision"])
+        self.assertEqual(self.ledger(again), {"ac1": "Verified"})
+        self.assertEqual(model.reconcile(plan, again["evidence"], ctx)["completed"],
+                         model.reconcile(plan, legacy, ctx)["completed"])
+        again = self.map(again, evidence="test:t1", criteria=["ac1"], coverage="complete")
+        self.assertEqual(len(self.pins(again)), 1)                 # criteria-only still amends the legacy pin
+        again = self.map(again, evidence="test:t1", steps=["two"])
+        self.assertEqual([(e.get("plan"), e["steps"]) for e in self.pins(again)],
+                         [(None, ["one"]), (again["approved_plan"], ["two"])])   # a legacy pin is never given a plan
+
+
 class A75EvidenceRetention(Base):
     def run_tests(self, n, start):
         st = store.Store()
