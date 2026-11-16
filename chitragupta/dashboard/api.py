@@ -1327,6 +1327,7 @@ def _watch_paths(cfg):
     # the profile and progress pages: settings (identity, scope), suggestions, the evening Jira facts
     yield common.wl("config.json")
     yield common.wl("cache", "profile-candidates.json")
+    yield common.wl("cache", "evidence-graph.sqlite")   # the Evidence Graph page refreshes when the index changes
     yield common.hp("data", "jira", "_evening", day + ".json")
     for d in (common.hp("data", "tickets"), common.hp("data", "timesheets"), common.hp("data", "qa-trace"),
               common.hp("data", "days", day[:4]), common.wl("raw", day), common.wl("raw", day, "time"),

@@ -28,6 +28,8 @@ Routes
                          built in memory, nothing is written). /api/ticket/<KEY>/export is the same.
   /api/timesheet?period=week|month[&limit=N]   hours per ticket per ISO week / month, leave and holidays
   /api/timesheet.csv?period=week|month         the same as CSV
+  /api/graph?view=summary|trace|changes&ticket=&requirement=&workflow=&since=&cursor=&basis=&history=&privacy=
+                         the Evidence Graph (graphviews): 403 with "revoke" outside the profile, 400 on bad input
   /api/status            health page data
   /api/changes           {"cursor"} — moves when any file the page reads changes
   /api/shutdown?token=T  stops the server (token from the user folder; used by `dashboard stop` / ensure)
@@ -534,6 +536,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(e), "revoke": True}, 403)
             except (ValueError, TypeError) as e:
                 return self.send_json({"error": str(e)}, 400)
+        if path == "/api/graph":   # the Evidence Graph (graphviews): read-only, access-checked, bounded
+            from .. import graphviews
+            args = {"view": q("view") or "summary", "ticket": q("ticket")}
+            for name in ("requirement", "workflow", "cursor", "basis"):
+                if q(name):
+                    args[name] = q(name)
+            if q("since"):
+                args["since"] = int(q("since")) if q("since").isdigit() else q("since")
+            for name in ("history", "privacy"):
+                if q(name):
+                    args[name] = {"1": True, "true": True, "0": False, "false": False}.get(q(name), q(name))
+            try:
+                return self.send_json(graphviews.read(args))
+            except PermissionError as e:
+                return self.send_json({"error": str(e), "revoke": True}, 403)
+            except (ValueError, TypeError) as e:
+                return self.send_json({"error": str(e)[:300]}, 400)
         if path == "/api/tickets":
             return self.send_json(api.tickets(q("q")[:200]))
         if path == "/api/releases":

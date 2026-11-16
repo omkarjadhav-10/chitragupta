@@ -232,7 +232,7 @@ _ABS_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(?\s*)(['"])(/(?:app|vendor)
 # imports them) and render nothing; the ones only stubbed pages import are left out.
 _STUBBED = {"/app/pages/" + p + ".js" for p in ("today", "timesheet", "knowledge", "db", "team", "search", "health",
                                                "setup", "settings", "releases", "profile", "progress",
-                                               "companion")} | \
+                                               "companion", "graph")} | \
     {"/app/lib/share.js"}
 _UNUSED = {"/app/lib/mcpstatus.js", "/app/lib/scheduler.js", "/app/lib/dbx.js"}
 _EXPORTED = re.compile(r"^export\s+(?:function|const|let)\s+(\w+)", re.M)
@@ -286,7 +286,8 @@ EXPORT_CSP = ("default-src 'none'; script-src 'unsafe-inline' blob:; style-src '
 _PAGE_TAGS = (r'<link rel="icon"[^>]*>\n?', r'<link rel="manifest"[^>]*>\n?', r'<script src="/app/theme.js"></script>\n?',
               r'<link rel="stylesheet" href="/app/app.css">\n?', r'<script type="module" src="/app/main.js"></script>\n?',
               r'<link rel="stylesheet" href="/app/db.css">\n?',  # the database page is stubbed: its styles aren't needed
-              r'<link rel="stylesheet" href="/app/companion.css">\n?')  # so is the Companion page
+              r'<link rel="stylesheet" href="/app/companion.css">\n?',  # so is the Companion page
+              r'<link rel="stylesheet" href="/app/graph.css">\n?')  # and the Evidence graph page
 
 
 def _mermaid_js():

@@ -627,7 +627,8 @@ class V2Http(V2Base):
         for p in ("/api/day/" + self.days["day"], "/api/day/" + self.days["yday"], "/api/day/2001-01-01", "/api/today",
                   "/api/calendar", "/api/calendar?from=2025-01-01&to=2025-12-31", "/api/knowledge", "/api/search?q=order",
                   "/api/search?q=abc-1001&type=ticket", "/api/setup", "/api/status", "/api/tickets", "/vendor/preact.module.js",
-                  "/manifest.webmanifest", "/app/main.js"):
+                  "/manifest.webmanifest", "/app/main.js", "/api/graph?view=summary&ticket=ABC-1001",
+                  "/api/graph?view=trace&ticket=ABC-1001&requirement=ac1"):
             self.assertIn(self.get(p)[0].status, (200, 404), p)
         s = self.stream()
         self.assertIn(b"event: cursor", self.read_until(s, b"event: cursor"))

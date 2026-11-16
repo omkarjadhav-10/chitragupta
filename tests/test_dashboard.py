@@ -542,7 +542,8 @@ class TestHttp(Base):
         before = snapshot(self.home)
         for p in ("/", "/api/today", "/api/tickets", "/api/tickets/ABC-1001", "/api/tickets/ABC-1002", "/api/timesheet",
                   "/api/timesheet?period=month", "/api/timesheet.csv", "/api/status", "/api/changes", "/api/health",
-                  "/api/day/" + self.days["yday"], "/api/calendar", "/api/knowledge", "/api/search?q=order"):
+                  "/api/day/" + self.days["yday"], "/api/calendar", "/api/knowledge", "/api/search?q=order",
+                  "/api/graph?view=summary&ticket=ABC-1001", "/api/graph?view=changes&ticket=ABC-1001"):
             self.assertEqual(self.get(p)[0].status, 200, p)
         self.assertEqual(snapshot(self.home), before, "the dashboard wrote into the data home")
 

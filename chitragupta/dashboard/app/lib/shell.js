@@ -15,6 +15,7 @@ export const NAV = [
   { id: 'knowledge', label: 'Knowledge', icon: 'knowledge', key: 'n' },
   { id: 'db', label: 'Database', icon: 'db', key: 'b' },
   { id: 'companion', label: 'Companion', icon: 'tickets', key: 'c' },
+  { id: 'graph', label: 'Evidence graph', icon: 'branch', key: 'v' },
   { id: 'search', label: 'Search', icon: 'search', key: 'f' },
   { id: 'team', label: 'Team notes', icon: 'chat', key: 'm' },
   { id: 'health', label: 'Health', icon: 'health', key: 'h' },

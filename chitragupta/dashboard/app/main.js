@@ -16,6 +16,7 @@ import { TimesheetPage } from './pages/timesheet.js';
 import { KnowledgePage } from './pages/knowledge.js';
 import { DbPage } from './pages/db.js';
 import { CompanionPage } from './pages/companion.js';
+import { GraphPage } from './pages/graph.js';
 import { TeamPage } from './pages/team.js';
 import { SearchPage } from './pages/search.js';
 import { HealthPage } from './pages/health.js';
@@ -149,7 +150,7 @@ function Palette() {
 // ------------------------------------------------------------------ keyboard shortcuts
 const GLOBAL_KEYS = [
   ['Ctrl K or /', 'Open the command palette'], ['?', 'Show this list'],
-  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then y', 'History'], ['g then p', 'My progress'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'Database'], ['g then f', 'Search'], ['g then m', 'Team notes'],
+  ['g then t', 'Today'], ['g then k', 'Tickets'], ['g then r', 'Releases'], ['g then y', 'History'], ['g then p', 'My progress'], ['g then s', 'Timesheet'], ['g then n', 'Knowledge'], ['g then b', 'Database'], ['g then v', 'Evidence graph'], ['g then f', 'Search'], ['g then m', 'Team notes'],
   ['g then h', 'Health'], ['g then i', 'Profile'], ['g then u', 'Setup'], ['g then e', 'Settings'],
   ['j / k', 'Next / previous item in the side list'], ['[', 'Show or hide more pages'], ['Esc', 'Close a dialog'],
 ];
@@ -226,6 +227,7 @@ function Page() {
     case 'knowledge': return html`<${KnowledgePage} route=${r} />`;
     case 'db': return html`<${DbPage} route=${r} />`;
     case 'companion': return html`<${CompanionPage} />`;
+    case 'graph': return html`<${GraphPage} route=${r} />`;
     case 'team': return html`<${TeamPage} route=${r} />`;
     case 'search': return html`<${SearchPage} route=${r} />`;
     case 'health': return html`<${HealthPage} route=${r} />`;

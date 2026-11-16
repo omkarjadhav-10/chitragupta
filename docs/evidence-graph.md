@@ -22,7 +22,9 @@ or a model.
 
 Claude can ask the same three questions through the read-only MCP tool `get_graph(key, view?, requirement?, since?)`
 (the same text, see [mcp.md](mcp.md)); the optional native Companion reads them as `graph_summary`, `graph_trace` and
-`graph_changes` through its bridge (the same JSON as `--json`).
+`graph_changes` through its bridge (the same JSON as `--json`). On the dashboard, **Evidence graph** (More menu,
+<kbd>g</kbd> <kbd>v</kbd>, `#/graph?ticket=ABC-1001`) lists the requirements with their three statuses and the next
+action; `/api/graph` serves the same envelope (see [dashboard.md](dashboard.md)).
 
 A requirement is named by its id (`gr_…`), by the alias a task's baseline gives it (`ac2`), or by its order on the
 card (`R3`). When two tasks on the ticket both use `ac1`, add `--workflow w_…`. Long answers end with
