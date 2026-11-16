@@ -3,6 +3,7 @@
 The hook keeps only numbers from the tool's output (status, exit code, pass/fail counts: hook._outcome "test"); the
 agent records one `test` per call on the turn's ticket (tk["tests"][id]). The ticket brief cites them as test:<id>.
 """
+import os
 import re
 
 from . import common
@@ -111,6 +112,39 @@ def outcome(resp):
 
 
 KEEP = 50  # newest test records kept per ticket
+HEAD_BASIS = "observed after run"
+_CHDIR = re.compile(r"(?i)(?:^|[\s;&|(){}`])(?:cd|chdir|pushd|popd|set-location)(?=[\s;&|)]|$)")
+_ELSEWHERE = re.compile(r"(?:^|\s)-C(?=[\s=]|$)|--git-dir|--work-tree")
+_MOVES_HEAD = re.compile(r"(?i)(?:^|[\s;&|(){}`])git(?:\.exe)?\s[^;&|\n]*?(?<=\s)"
+                         r"(?:checkout|switch|reset|rebase|merge|pull|commit|cherry-pick|revert|stash|worktree|bisect|am)"
+                         r"(?=[\s;&|)]|$)")
+_HEAD_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+def simple_command(cmd):
+    """True when the HEAD seen after this command can be read as an observation about it: the command line neither
+    changes directory (cd, pushd, Set-Location, -C <dir>, --git-dir, --work-tree) nor can move HEAD (git checkout,
+    switch, reset, rebase, merge, pull, commit, cherry-pick, revert, stash, worktree, bisect, am)."""
+    cmd = str(cmd or "")[:2000]
+    return bool(cmd.strip()) and not (_CHDIR.search(cmd) or _ELSEWHERE.search(cmd) or _MOVES_HEAD.search(cmd))
+
+
+def _context(ev, head):
+    """{head, location[, repo_id]} for a test record: the location the hook was in, and the repository's canonical
+    id only when an activity ledger for that very location already records it."""
+    root = ev.get("repo_root")
+    if not isinstance(head, str) or not _HEAD_ID.match(head) or not isinstance(root, str) or not root:
+        return None
+    location = os.path.realpath(root)
+    ctx = {"head": head, "location": location}
+    try:
+        from . import activity
+        repo_id = ((activity.load(location) or {}).get("repo") or {}).get("id")
+        if isinstance(repo_id, str) and repo_id:
+            ctx["repo_id"] = repo_id
+    except Exception:  # noqa: BLE001  (the id is optional; the record is not)
+        pass
+    return ctx
 
 
 def record(store, t, ev, day, sid):
@@ -132,6 +166,9 @@ def record(store, t, ev, day, sid):
         rec["exit"] = oc["exit"]
     if oc.get("counts"):
         rec["counts"] = oc["counts"]
+    ctx = _context(ev, oc.get("head"))
+    if ctx:   # what the hook saw after the command returned: an observation, not the revision the test ran against
+        rec["context"], rec["head_basis"] = ctx, HEAD_BASIS
     from .store import raw_ref
     ref = raw_ref(day, sid, ev.get("_ln"))
     if ref:

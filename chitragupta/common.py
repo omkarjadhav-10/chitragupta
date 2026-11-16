@@ -635,6 +635,98 @@ def read_branch(repo_root):
     return ("detached@" + head[:8]) if head else None
 
 
+CONTROL_FILE_MAX = 4096              # HEAD, a gitdir file, commondir, one loose ref
+PACKED_REFS_MAX = 2 * 1024 * 1024
+_COMMIT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+
+
+def _read_small(path, limit=CONTROL_FILE_MAX):
+    """The text of a small Git control file; None when it is missing, unreadable, not UTF-8 or over the bound."""
+    try:
+        if os.path.getsize(path) > limit:
+            return None
+        with open(path, "rb") as f:
+            data = f.read(limit + 1)
+    except OSError:
+        return None
+    if len(data) > limit:
+        return None
+    try:
+        return data.decode("utf-8")
+    except ValueError:
+        return None
+
+
+def _ref_ok(ref):
+    """A ref name this resolver will turn into a path: under refs/, no traversal, nothing a shell or path could bend."""
+    if not ref.startswith("refs/") or "\\" in ref or ".." in ref or ref.endswith(("/", ".lock", ".")):
+        return False
+    if any(ord(ch) < 33 or ord(ch) == 127 or ch in "~^:?*[" for ch in ref):
+        return False
+    return all(part and not part.startswith(".") for part in ref.split("/"))
+
+
+def _resolve_ref(git_dir, common_dir, ref):
+    """The commit a ref names: a loose file (the worktree's own, then the shared one), else `packed-refs`."""
+    parts = ref.split("/")
+    for base in dict.fromkeys((git_dir, common_dir)):
+        path = os.path.join(base, *parts)
+        if os.path.lexists(path) and not os.path.isdir(path):
+            text = _read_small(path)
+            return text.strip() if text else None   # present but unreadable is unknown, never "look elsewhere"
+    packed = _read_small(os.path.join(common_dir, "packed-refs"), PACKED_REFS_MAX)
+    for line in (packed or "").splitlines():
+        if line[:1] in ("#", "^") or " " not in line:
+            continue
+        sha, name = line.split(" ", 1)
+        if name.strip() == ref:
+            return sha
+    return None
+
+
+def _read_head(repo_root):
+    dot = os.path.join(repo_root, ".git")
+    if os.path.isdir(dot):
+        git_dir = dot
+    else:   # a linked worktree or submodule: `.git` is a file naming the real directory
+        text = (_read_small(dot) or "").strip()
+        target = text[7:].strip() if text.startswith("gitdir:") else ""
+        if not target or any(ord(ch) < 32 for ch in target):
+            return None
+        git_dir = os.path.normpath(target if os.path.isabs(target) else os.path.join(repo_root, target))
+        if not os.path.isdir(git_dir):
+            return None
+    head = (_read_small(os.path.join(git_dir, "HEAD")) or "").strip()
+    if not head.startswith("ref:"):
+        sha = head   # detached
+    else:
+        ref = head[4:].strip()
+        if not _ref_ok(ref):
+            return None
+        common_dir, shared = git_dir, os.path.join(git_dir, "commondir")
+        if os.path.lexists(shared):   # a linked worktree keeps its HEAD here and its refs in the main directory
+            named = (_read_small(shared) or "").strip()
+            if not named or any(ord(ch) < 32 for ch in named):
+                return None
+            common_dir = os.path.normpath(named if os.path.isabs(named) else os.path.join(git_dir, named))
+            if not os.path.isdir(common_dir):
+                return None
+        sha = _resolve_ref(git_dir, common_dir, ref)
+    if (_read_small(os.path.join(git_dir, "HEAD")) or "").strip() != head:
+        return None   # HEAD moved while it was being read
+    return sha if sha and _COMMIT_ID.match(sha) else None
+
+
+def read_head(repo_root):
+    """The full commit id HEAD names right now, read from the repository's `.git` files: no process, bounded reads,
+    and None for anything unexpected (reftable, a malformed or oversized file, a ref name that is not a plain
+    `refs/…` path, a HEAD that moved during the read). It says what is checked out at this moment, nothing more."""
+    try:
+        return _read_head(repo_root) if repo_root and isinstance(repo_root, str) else None
+    except Exception:  # noqa: BLE001  (a hook path: never raise)
+        return None
+
+
 # --------------------------------------------------------------------------- processes
 
 # Processes start only through chitragupta.safety.commands.run(argv, purpose).

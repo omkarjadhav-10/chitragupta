@@ -130,9 +130,18 @@ def _is_http(cmd):
     return apicalls.is_http_command(cmd)
 
 
-def _outcome(tool, ti, resp, cwd, redact):
+def _observed_head(cmd, repo_root):
+    """The HEAD commit seen after a simple test command returned (file reads only), or None. Never raises."""
+    try:
+        from . import common, testruns
+        return common.read_head(repo_root) if repo_root and testruns.simple_command(cmd) else None
+    except Exception:  # noqa: BLE001  (fail open: the test outcome is kept without it)
+        return None
+
+
+def _outcome(tool, ti, resp, cwd, redact, repo_root=None):
     """Outcome facts kept from tool_response: HTTP status + response key skeleton, artifact share links, a test run's
-    status and pass/fail counts (numbers only)."""
+    status and pass/fail counts (numbers only) and, for a simple test command, the HEAD observed after it."""
     ti = ti if isinstance(ti, dict) else {}
     from . import capture
     if tool in ("Bash", "PowerShell") and _is_http(str(ti.get("command", ""))):
@@ -144,7 +153,11 @@ def _outcome(tool, ti, resp, cwd, redact):
     if tool in ("Bash", "PowerShell"):
         from . import testruns
         if testruns.is_test_command(str(ti.get("command", ""))):
-            return {"test": testruns.outcome(resp)}
+            out = testruns.outcome(resp)
+            head = _observed_head(str(ti.get("command", "")), repo_root)
+            if head:
+                out["head"] = head
+            return {"test": out}
     if tool in ("Bash", "PowerShell") and _PR_CREATE.search(str(ti.get("command", ""))):
         from . import gittrack  # PR link only: nothing else from the output is kept
         r = resp if isinstance(resp, dict) else {"stdout": str(resp or "")}
@@ -282,7 +295,7 @@ def _capture(event, common):
         if env:
             payload["env"] = env
         try:
-            oc = _outcome(tool, inp.get("tool_input"), inp.get("tool_response"), cwd, redact)
+            oc = _outcome(tool, inp.get("tool_input"), inp.get("tool_response"), cwd, redact, repo_root)
         except Exception:
             oc = {}
         if oc:
