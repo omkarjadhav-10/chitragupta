@@ -46,6 +46,7 @@ function actions($) {
     tab: (view, tab) => () => setLocal($, view, { tab, menu: false }),
     menu: view => () => setLocal($, view, { menu: !peekLocal(view).menu }),
     toggle: (view, name) => () => setLocal($, view, { expanded: { ...peekLocal(view).expanded, [name]: !peekLocal(view).expanded[name] } }),
+    trace: (view, index) => () => setLocal($, view, { trace: index }), // Previous / Next: session state only, no read
     route: (view, text) => () => setLocal($, view, { notice: text, packet: '' }),
     clearNotice: view => () => setLocal($, view, { notice: '', packet: '' }),
     dismiss: () => () => dismiss($),

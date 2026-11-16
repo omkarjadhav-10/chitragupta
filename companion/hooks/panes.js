@@ -11,7 +11,11 @@ export const MODULES = Object.freeze({
     kind: 'companion', id: 'cg-companion', title: 'Chitragupta', persistent: true,
     tabs: ['focus', 'evidence', 'attention'],
     applicable: () => OK,
-    reads: (ctx, local, prefs) => (ctx.workflow ? [withPrivacy({ operation: 'detail', workflow: ctx.workflow }, prefs)] : []),
+    // the task's detail and, for its ticket, one Evidence Graph summary (the Evidence tab's Requirement trace)
+    reads: (ctx, local, prefs) => [
+      ...(ctx.workflow ? [withPrivacy({ operation: 'detail', workflow: ctx.workflow }, prefs)] : []),
+      ...(ctx.ticket ? [withPrivacy({ operation: 'graph_summary', ticket: ctx.ticket }, prefs)] : []),
+    ],
     fallback: 'Text and dashboard: /cg:resume or /cg:plan, or /cg:dashboard then Companion',
   },
   planner: {
@@ -51,7 +55,7 @@ export const own = id => PANES.has(id);
 /** The session-local UI state of one view (never workflow truth, never persisted). */
 export function freshLocal(mod) {
   return { tab: mod.tabs[0] || 'main', expanded: {}, draft: '', cursor: null, group: null, pinned: [],
-    menu: false, notice: '', packet: '', page: 0 };
+    menu: false, notice: '', packet: '', page: 0, trace: null };   // trace: the selected requirement's row index
 }
 
 /** The narrow context reference a temporary module is bound to; the key of its UI state. */

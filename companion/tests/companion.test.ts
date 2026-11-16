@@ -19,7 +19,7 @@ test('A01: /cg-panel opens the companion, reads cached state once and draws tick
   expect(answer.text).toBeUndefined();
   expect(h.calls.opens).toHaveLength(1);
   expect(h.calls.opens[0]).toMatchObject({ id: 'cg-companion', title: 'Chitragupta', focus: true });
-  expect(h.ops()).toEqual(['snapshot', 'detail']);
+  expect(h.ops()).toEqual(['snapshot', 'detail', 'graph_summary']);
   expect(h.calls.reads[0].args).toEqual({ operation: 'snapshot', ticket: 'ABC-1001' });
   const ui = await mountPane($, 'cg-companion');
   expect((await ui.find({ key: 'ticket' }))?.text).toBe('ABC-1001 · Correct discount calculation');
@@ -153,7 +153,7 @@ test('a detail reply from another generation is dropped and the view re-read onc
   let calls = 0;
   h.state.data.detail = (args: any, gen: string) => (calls++ === 0 ? detail(args, 'g0') : detail(args, gen));
   await $.command.run({ command: 'cg-panel', args: 'ABC-1001' });
-  expect(h.ops()).toEqual(['snapshot', 'detail', 'snapshot', 'detail']);
+  expect(h.ops()).toEqual(['snapshot', 'detail', 'snapshot', 'detail', 'graph_summary']); // the dropped cycle stops before the graph read
   const ui = await mountPane($, 'cg-companion');
   expect((await ui.find({ key: 'resume' }))?.text).toContain('Plan saved; review interrupted');
   await ui.unmount();

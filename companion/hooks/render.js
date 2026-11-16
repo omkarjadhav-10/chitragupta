@@ -243,10 +243,72 @@ function prLine(pr, p) {
     pr.label ? (p.privacy ? HIDDEN : scrub(pr.label, 120)) : null].filter(Boolean).join(' · ');
 }
 
+// ---------------------------------------------------------------- the Evidence Graph's requirement trace
+
+const VERIFIED = 'Verified within recorded scope';
+const NOT_READY = { not_built: 'Evidence graph not built yet', rebuilding: 'Evidence graph rebuilding for the current profile' };
+const stateOf = (r, dim) => {
+  const s = ((r.statuses || {}).combined || {})[dim];
+  return clean(s && s.state, 40) || 'Unknown';
+};
+
+/** The first critical requirement, else the first not verified, else the first (design: default selection). */
+function firstTrace(rows, critical) {
+  let i = rows.findIndex(r => critical.includes(r.id));
+  if (i < 0) i = rows.findIndex(r => stateOf(r, 'verification') !== VERIFIED);
+  return i < 0 ? 0 : i;
+}
+
+/** From the one cached `graph_summary` read: one requirement's three statuses and its compact trace. */
+function traceBlock(k, view, local, p, act) {
+  const req = viewReads(view).find(r => r.operation === 'graph_summary');
+  if (!req) return null;
+  const d = cachedRead(req);
+  const error = readError(req);
+  const head = 'Requirement trace';
+  if (!d) return k.col('trace', [k.head('trace-head', head), k.line('trace-state', error ? errorText(error) : 'Reading the evidence graph…')]);
+  const ticket = clean(d.ticket, 30);
+  const state = (d.graph && d.graph.state) || 'not_built';
+  if (NOT_READY[state]) return k.col('trace', [k.head('trace-head', head + ' · ' + ticket), k.line('trace-state', NOT_READY[state])]);
+  const rows = Array.isArray(d.rows) ? d.rows : [];
+  const total = Number.isInteger(d.total) ? d.total : rows.length;
+  if (!rows.length) {
+    const source = clean(d.snapshot && d.snapshot.state, 40);
+    return k.col('trace', [k.head('trace-head', head + ' · ' + ticket),
+      k.line('trace-state', 'No requirements read from Jira yet' + (source ? ' (source: ' + source + ')' : ''))]);
+  }
+  const critical = Array.isArray(d.critical && d.critical.ids) ? d.critical.ids : [];
+  const i = Number.isInteger(local.trace) && local.trace >= 0 && local.trace < rows.length ? local.trace : firstTrace(rows, critical);
+  const r = rows[i];
+  const c = r.compact || {};
+  const name = clean(r.alias, 20) || (Number.isInteger(r.ordinal) ? 'R' + r.ordinal : 'requirement ' + (i + 1));
+  const hidden = masked(p, d);
+  const pr = c.pr && Number.isInteger(c.pr.number) ? 'PR #' + c.pr.number + ' ' + clean(c.pr.state, 20) + (c.pr.ci ? ' · CI ' + clean(c.pr.ci, 20) : '') : '';
+  const lines = [
+    k.head('trace-head', head + ' · ' + ticket + ' · ' + name + ' of ' + total),
+    rows.every(x => stateOf(x, 'verification') === VERIFIED) && total === rows.length
+      ? k.line('trace-all', 'All ' + count(total, 'requirement') + ' verified within recorded scope') : null,
+    k.line('trace-text', hidden ? 'Requirement text hidden (privacy mode)' : scrub(r.text, 300) || 'No wording recorded'),
+    k.line('trace-plan', 'Plan: ' + stateOf(r, 'plan_coverage') + (c.plan && !hidden ? ' · ' + scrub(c.plan, 60) : '')),
+    k.line('trace-impl', 'Implementation: ' + stateOf(r, 'implementation') + (c.commit ? ' · commit ' + clean(c.commit, 12)
+      + (c.commits > 1 ? ' (+' + (c.commits - 1) + ' more)' : '') : '')),
+    k.line('trace-verify', 'Verification: ' + stateOf(r, 'verification') + (c.run ? ' · ' + scrub(c.run, 120) : '')),
+    pr ? k.line('trace-pr', pr) : null,
+    c.gap ? k.line('trace-gap', 'Gap: ' + scrub(c.gap, 200)) : null,
+    total > rows.length ? k.dim('trace-more', 'Showing ' + rows.length + ' of ' + total + '; open full evidence') : null,
+    k.row('trace-nav', [i > 0 ? k.button('trace-prev', 'Previous', act.trace(view, i - 1)) : null,
+      i < rows.length - 1 ? k.button('trace-next', 'Next', act.trace(view, i + 1)) : null]),
+    k.dim('trace-link', 'Open full evidence: ' + DASH + ' then #/graph?ticket=' + ticket + '&req=' + clean(r.id, 30)),
+  ];
+  return k.col('trace', lines);
+}
+
 function evidenceTab(k, view, local, p, act) {
   const snap = S.snapshot;
   if (!snap) return [];
   const out = [];
+  const trace = traceBlock(k, view, local, p, act);
+  if (trace) out.push(trace);
   const { data: d, error } = detailFor(view);
   if (!d) {
     const wf = snap.context && snap.context.workflow;

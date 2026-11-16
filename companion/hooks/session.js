@@ -79,7 +79,7 @@ export function peekLocal(view) {
 
 export function readKey(req) {
   return [req.operation, req.workflow, req.group, req.cursor, req.flow, req.investigation,
-    (req.pinned || []).join(',')].map(x => x || '').join('|');
+    (req.pinned || []).join(','), req.ticket].map(x => x || '').join('|');
 }
 
 export const cachedRead = req => S.reads.get(readKey(req)) || null;
@@ -125,7 +125,7 @@ function revoke(notice) {
   S.select = null;
   S.db = null;
   S.dbDraft = '';
-  for (const l of S.local.values()) Object.assign(l, { draft: '', cursor: null, page: 0, expanded: {}, packet: '', notice: '', pinned: [] });
+  for (const l of S.local.values()) Object.assign(l, { draft: '', cursor: null, page: 0, expanded: {}, packet: '', notice: '', pinned: [], trace: null });
   for (const v of S.views.values()) if (v.kind === 'review' || v.kind === 'pr') v.context = {};
   S.notice = notice;
   S.revoked += 1;

@@ -33,6 +33,7 @@ export const OPERATIONS = Object.freeze({
   jobs: ['workflow'],
   handoff: ['workflow', 'cursor'],
   database: ['flow', 'investigation', 'privacy'],
+  graph_summary: ['ticket', 'cursor', 'privacy'], // the Evidence Graph's requirement rows for one ticket
 });
 const NEEDS_WORKFLOW = new Set(['detail', 'review', 'plan', 'changes', 'verification', 'jobs', 'handoff']);
 

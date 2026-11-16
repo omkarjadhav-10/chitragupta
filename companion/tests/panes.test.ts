@@ -142,7 +142,7 @@ test('FLOW-11: the Database Investigation pane maps cached context and never que
   expect((await companion.find({ key: 'db-focus' }))?.text).toContain('Cancel order · QA');
   await ui.press({ key: 'leave-db' });
   expect(h.calls.reads.filter(r => r.args.operation === 'snapshot').at(-1).args).toEqual({ operation: 'snapshot', ticket: 'ABC-1001' });
-  expect(new Set(h.ops())).toEqual(new Set(['snapshot', 'detail', 'database']));
+  expect(new Set(h.ops())).toEqual(new Set(['snapshot', 'detail', 'graph_summary', 'database']));
   await ui.unmount();
   await companion.unmount();
   clean(h);
@@ -410,7 +410,7 @@ test('A41: a temporary pane closes and reopens with its session-local context; o
   await ui.unmount();
   const reads = h.calls.reads.length;
   await companion.press({ key: 'open-review' });
-  expect(h.ops().slice(reads)).toEqual(['snapshot', 'detail', 'review', 'jobs']); // one bounded read on reopen
+  expect(h.ops().slice(reads)).toEqual(['snapshot', 'detail', 'graph_summary', 'review', 'jobs']); // one bounded read on reopen
   ui = await mountPane($, 'cg-review');
   expect(await ui.find({ key: 'execute-detail' })).toBeDefined(); // expanded state kept for this task
   expect(h.calls.opens.filter(o => o.id === 'cg-review')).toHaveLength(2);

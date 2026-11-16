@@ -12,6 +12,11 @@ reads. Planning, approval, execution handoff and every other protected action st
 | `/cg-plan [TICKET]` | Opens the **Daily Planner**. A ticket is pinned to the top for this session. It never starts coding. |
 | `/cg-resume [TICKET]` | Opens the resume view for a ticket, or the planner so you can choose a task. It reads only. Capture is unaffected; `/cg:pause resume` stays the global capture control. |
 
+The **Evidence** tab starts with a **Requirement trace** for the ticket: one requirement at a time with its plan,
+implementation and verification status, the commit, run and pull request behind them, the top gap and the dashboard
+address of the full trace (`#/graph?ticket=…&req=…`). It comes from one `graph_summary` read of the
+[Evidence Graph](../docs/evidence-graph.md). **Previous** and **Next** read nothing.
+
 The companion opens temporary panes from its Focus tab: **Jev Review**, **PR Review** and **Database
 Investigation**. Each opens only when you ask. Opening one again focuses the existing view.
 
@@ -52,6 +57,7 @@ dashboard and the `/cg:` commands are not affected, and no records are removed.
 
 - **One read-only tool.** The mod talks only to this plugin's own `companion` MCP server, and calls only its read-only
   `companion_read` tool with allowlisted operations and arguments. Requests are capped at 8 KiB and replies at 64 KiB.
+  The allowlist has the ten Companion projections and `graph_summary` (a ticket, a cursor and privacy only).
 - **Pure drawing.** Drawing reads the session-local cache only.
 - **Bounded reads.** Reads run only while a Chitragupta pane is open, at most once every 15 s unless you act. Closing
   the last pane stops polling.

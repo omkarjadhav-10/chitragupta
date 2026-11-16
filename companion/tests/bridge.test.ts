@@ -14,8 +14,19 @@ function fake(reply: any, conn: any = { isConnected: true, server: SERVER }) {
 }
 const text = (data: unknown, isError = false) => ({ content: [{ type: 'text', text: typeof data === 'string' ? data : JSON.stringify(data) }], isError });
 
-test('the operation allowlist is exactly stage 3a\'s ten projections', () => {
-  expect(Object.keys(OPERATIONS)).toEqual(['snapshot', 'planner', 'detail', 'review', 'plan', 'changes', 'verification', 'jobs', 'handoff', 'database']);
+test('the operation allowlist is exactly stage 3a\'s ten projections and the graph summary', () => {
+  expect(Object.keys(OPERATIONS)).toEqual(['snapshot', 'planner', 'detail', 'review', 'plan', 'changes', 'verification', 'jobs', 'handoff', 'database', 'graph_summary']);
+  expect(OPERATIONS.graph_summary).toEqual(['ticket', 'cursor', 'privacy']);
+});
+
+test('graph_summary takes a ticket, a cursor and privacy only, and needs no task', () => {
+  expect(check({ operation: 'graph_summary', ticket: 'ABC-1001', privacy: true }))
+    .toEqual({ operation: 'graph_summary', ticket: 'ABC-1001', privacy: true });
+  expect(check({ operation: 'graph_summary', ticket: 'ABC-1001', cursor: CURSOR })).toMatchObject({ cursor: CURSOR });
+  for (const bad of [{ operation: 'graph_summary', ticket: 'abc-1' }, { operation: 'graph_summary', ticket: 'ABC-1001', workflow: W1 },
+    { operation: 'graph_summary', ticket: 'ABC-1001', requirement: 'ac2' }, { operation: 'graph_trace', ticket: 'ABC-1001' }]) {
+    expect(() => check(bad)).toThrow(BridgeError);
+  }
 });
 
 test('valid requests pass through unchanged', () => {

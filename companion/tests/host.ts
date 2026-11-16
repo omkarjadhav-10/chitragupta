@@ -11,7 +11,7 @@ export const P1 = 'p_' + 'a'.repeat(64);
 export const FLOW = 'f_abcdef12';
 export const LOCATION = 'C:\\Users\\dev\\src\\shop-api';
 export const CURSOR = 'eyJwYWdlIjoxfQ.' + '0123456789abcdef'.repeat(2);
-export const OPS = ['snapshot', 'planner', 'detail', 'review', 'plan', 'changes', 'verification', 'jobs', 'handoff', 'database'];
+export const OPS = ['snapshot', 'planner', 'detail', 'review', 'plan', 'changes', 'verification', 'jobs', 'handoff', 'database', 'graph_summary'];
 const AT = '2026-11-09T10:42:00Z';
 
 export function envelope(operation: string, gen: string, extra: Record<string, unknown> = {}) {
@@ -134,7 +134,34 @@ export function backend(): Record<string, (args: any, gen: string) => any> {
     handoff: (args, gen) => envelope('handoff', gen, { workflow: args.workflow, state: 'prepared_not_submitted',
       label: 'Prepared; not submitted', text: 'APPROVED PLAN p_aaaa\n1. Fix rounding\n2. Add tests', cursor: null, plan: P1 }),
     database: (args, gen) => envelope('database', gen, { database_context: dbContext(args) }),
+    graph_summary: (args, gen) => graphSummary(args, gen),
   };
+}
+
+const VERIFIED = 'Verified within recorded scope';
+const st = (state: string, reason = '') => ({ state, basis: 'observed', reason });
+
+/** One requirement row of `graph_summary` (graphviews._row): three statuses and the compact trace. */
+export function graphRow(n: number, verification = 'Unverified', extra: Record<string, unknown> = {}) {
+  return { id: 'gr_' + String(n).padStart(24, '0'), alias: 'ac' + n, aliases: { [W1]: 'ac' + n }, ordinal: n,
+    status: 'current', source: 'jira', text: 'Orders over limit ' + n + ' are rejected with a clear message', excluded: false,
+    statuses: { combined: { plan_coverage: st('Covered'), implementation: st('Linked'),
+      verification: st(verification, 'no applicable passing evidence') }, scopes: [] },
+    compact: { plan: 'Plan v3', commit: 'a12bc3d', commits: 1, pr: { number: 214, state: 'open', ci: 'running' },
+      run: 'passed; observed at 9f2e1c0', gap: verification === VERIFIED ? null : 'Current-revision verification has not been established' },
+    ...extra };
+}
+
+/** `graph_summary` for ABC-1001: four requirements, ac2 critical (Failed); `graph.rows` overrides the rows. */
+export function graphSummary(args: any, gen: string, over: Record<string, unknown> = {}) {
+  const rows = [graphRow(1, VERIFIED), graphRow(2, 'Failed'), graphRow(3), graphRow(4, VERIFIED)]
+    .map(r => (args.privacy ? { ...r, text: 'hidden (privacy mode)' } : r));
+  return envelope('graph_summary', gen, { privacy: Boolean(args.privacy), ticket: args.ticket,
+    graph: { generation: 3, snapshot: 5, built_at: AT, state: 'ok', stale: false },
+    snapshot: { state: 'complete', completeness: 'complete', fetched_at: AT, gaps: [], seq: 5, at: AT },
+    requirements: { total: 4, current: 4, unconfirmed: 0, removed: 0, excluded: 0 },
+    critical: { total: 1, ids: [rows[1].id] }, next_action: 'failed verification: ac2',
+    rows, total: rows.length, offset: 0, next_cursor: null, ...over });
 }
 
 type Options = { env?: Record<string, string>; copy?: boolean; placed?: boolean };

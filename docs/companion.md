@@ -168,6 +168,15 @@ only renders projections it reads from its own read-only MCP server; it never wr
 and never submits a prompt. Without it, everything above works in the dashboard and through `/cg:plan` and
 `/cg:resume`.
 
+The pane's **Evidence** tab opens with a **Requirement trace** for the selected ticket, from one cached
+[Evidence Graph](evidence-graph.md) summary read (`graph_summary`, part of the pane's reads while it is open): one
+requirement's wording, its plan coverage, implementation and verification status with the commit, the run, the
+pull request and the top gap, and the dashboard address of its full trace. It starts on the first critical
+requirement, else the first one not verified. **Previous** and **Next** move within what was read and read nothing.
+It says when every requirement is verified, when none was read from Jira yet, when the graph is not built, and
+"showing 50 of n" beyond one page. Privacy mode hides the wording. The same facts come from `/cg:graph`,
+`cli graph`, the MCP tool `get_graph` and the dashboard's Evidence graph page.
+
 ## Known limits
 
 - Live Jev is blocked by policy (above); the manual review path is not a Jev evaluation.
