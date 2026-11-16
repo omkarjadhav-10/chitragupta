@@ -56,6 +56,7 @@ Setup asks where to keep the data home (default `%USERPROFILE%\Chitragupta`). It
 | `/cg:log <what>` | Change the evening worklog: extra time or a meeting, leave, a half day, a holiday, a working weekend day, or resend a day |
 | `/cg:plan [KEY]` | The Daily Planner as text: your tasks by stage with why each is suggested; planning, approval and handoff happen on the dashboard's Companion page. See [docs/companion.md](docs/companion.md) |
 | `/cg:resume [KEY]` | Where a task stopped: its stage, evidenced progress, changes since your last review and the one next action. Reads only; it doesn't resume capture (that's `/cg:pause resume`) and never starts work |
+| `/cg:graph <KEY> [requirement]` | A ticket's Evidence Graph: each Jira requirement traced to its plan steps, code, tests and runs, PRs and release evidence, with plan coverage, implementation and verification kept apart, what changed and the one next action. Reads cached records only. See [docs/evidence-graph.md](docs/evidence-graph.md) |
 | `/cg:pause [resume\|status]` | Pause or resume capture |
 | `/cg:dashboard [day DATE \| ticket KEY \| page]` | Open the local dashboard in your browser, starting it first if needed |
 | `/cg:setup` | Set up, repair or upgrade (safe to re-run; never changes recorded data) |
@@ -108,7 +109,7 @@ claude plugin uninstall cg@chitragupta
 
 ## Docs
 
-[Learn the codebase](docs/learning-guide.md#follow-a-captured-event) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Release tracking](docs/releases.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Database investigation](docs/database.md) · [Companion](docs/companion.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
+[Learn the codebase](docs/learning-guide.md#follow-a-captured-event) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Branch tracking](docs/branch-tracking.md) · [Release tracking](docs/releases.md) · [Safety](docs/safety.md) · [Privacy and data](docs/privacy.md) · [Dashboard](docs/dashboard.md) · [Database investigation](docs/database.md) · [Companion](docs/companion.md) · [Evidence Graph](docs/evidence-graph.md) · [Dashboard design](docs/design.md) · [MCP server](docs/mcp.md) · [Search](docs/search.md) · [Sharing](docs/sharing.md) · [Scheduling](docs/scheduling.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

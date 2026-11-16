@@ -25,6 +25,10 @@
   db compare [<left> <right>] [--objects A,B] [--confirm schema.table[=other]] [--refresh]   cached metadata
                                          comparison of two permitted connections or two snapshots (conn@snapshot)
   db reconcile | db snapshots <connection>   mark flows needing revalidation; list a connection's metadata snapshots
+  graph summary|trace|changes <KEY> [--requirement R] [--workflow W] [--since S] [--cursor C] [--basis B]
+  [--history] [--privacy] [--json]       the Evidence Graph: requirements to plan, code, tests, PRs and release
+  graph status | graph rebuild           what the index holds; replace it from cached records (skipped while a
+                                         background run holds the lock)
 
 Everything is read-only except `log` (one line appended to inbox.md), `pause`/`resume`, `search --rebuild`
 (rewrites the search index cache, .worklog/cache/search.sqlite), `check` (refreshes Chitragupta's own branch, PR and
@@ -32,7 +36,8 @@ delivery data, like the background tick; it fetches remote-tracking refs only wh
 commands that keep their result in data/db/: `db ingest`, `db map-confirm` and `db flow` (saves a new flow version
 only when the flow changed; --no-save shows it without saving), `db plan` / `db run` / `db cancel` / `db note` /
 `db handoff --regenerate` (personal investigation records; a run is executed by the agent, `agent db-trace`), and
-`db impact` / `db compare` (cache a result computed from cached metadata) and `db reconcile` (review marks).
+`db impact` / `db compare` (cache a result computed from cached metadata) and `db reconcile` (review marks), and
+`graph rebuild` (replaces Chitragupta's own index .worklog/cache/evidence-graph.sqlite and re-indexes data/graph/).
 No command calls a model, Jira, Slack or the database MCP itself: `db run` and `db plan --run` start the agent's
 record-trace runner through the safety layer, and --wait only reads the job record until it ends.
 """
@@ -978,6 +983,19 @@ def parser():
     s.add_argument("--privacy", action="store_true", help="hide ticket titles in summaries")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_companion)
+    s = sub.add_parser("graph", help="Evidence Graph from cached records: summary, trace, changes, status (read-only); "
+                                     "rebuild replaces its index")
+    s.add_argument("action", choices=("summary", "trace", "changes", "status", "rebuild"))
+    s.add_argument("key", nargs="?", help="the ticket (summary, trace, changes)")
+    s.add_argument("--requirement", help="trace: gr_ id, alias (ac2) or R<n>")
+    s.add_argument("--workflow", help="the w_ workflow an alias belongs to, when several use it")
+    s.add_argument("--since", help="changes: after this journal sequence (default: the latest change)")
+    s.add_argument("--cursor", help="continue a long answer (printed at its end)")
+    s.add_argument("--basis", choices=("observed", "declared", "inferred", "unknown"), help="trace: links of one basis")
+    s.add_argument("--history", action="store_true", help="trace: include earlier wording and superseded links")
+    s.add_argument("--privacy", action="store_true", help="hide requirement text, commit subjects and PR titles")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_graph)
     for name, fn in (("pause", cmd_pause), ("resume", cmd_resume), ("status", cmd_status)):
         sub.add_parser(name).set_defaults(fn=fn)
     return p
@@ -1049,6 +1067,64 @@ def cmd_companion(a):
     """`companion …`: the task companion's read-only text fallback (companioncli). Never global capture resume."""
     from . import companioncli
     return companioncli.run(a, out)
+
+
+def cmd_graph(a):
+    """`graph …`: the Evidence Graph (graphviews) as text or the JSON envelope. `rebuild` replaces Chitragupta's own
+    index from cached records (never a repository, Jira or a model); everything else only reads."""
+    from . import graphstore, graphviews
+    cfg = common.load_config()
+    key = (a.key or "").strip().upper()
+    try:
+        if a.action == "rebuild":
+            r = graphstore.rebuild(cfg)
+            if a.json:
+                out(json.dumps(r, ensure_ascii=False, indent=1))
+            elif r["skipped"]:
+                out("skipped: %s" % r["skipped"])
+            else:
+                out("Rebuilt the Evidence Graph: %d built, %d re-indexed, %d unchanged%s." % (
+                    len(r["built"]), len(r["recovered"]), len(r["unchanged"]),
+                    ", %d failed (see the log)" % len(r["errors"]) if r["errors"] else ""))
+            return 1 if r["skipped"] or r["errors"] else 0
+        if a.action == "status":
+            s = graphstore.stats(cfg)
+            if a.json:
+                out(json.dumps(s, ensure_ascii=False, indent=1))
+                return 0
+            if s["state"] != "ok":
+                out("Evidence Graph: %s; %s visible ticket(s) waiting for the background run." % (
+                    s["state"].replace("_", " "), s.get("behind", 0)))
+                return 0
+            out("Evidence Graph: %d ticket(s), %d nodes, %d edges, %d requirement rows; generation %d, built %s%s." % (
+                s["tickets"], s["nodes"], s["edges"], s["requirements"], s["generation"], s["built_at"] or "never",
+                ", full rebuild %s" % s["full_at"] if s["full_at"] else ""))
+            out("Behind on %d visible ticket(s)." % s["behind"] if s["behind"] else "Up to date with its inputs.")
+            if s["last_error"]:
+                out("Last problem: %s" % s["last_error"])
+            return 0
+        if not key:
+            out("Name a ticket: graph %s <KEY>" % a.action)
+            return 2
+        args = {"view": a.action, "ticket": key}
+        for name in ("requirement", "workflow", "cursor", "basis"):
+            if getattr(a, name, None):
+                args[name] = getattr(a, name)
+        if a.since is not None:
+            args["since"] = int(a.since) if a.since.isdigit() else a.since
+        if a.history:
+            args["history"] = True
+        if a.privacy:   # not given: the profile's privacy setting decides
+            args["privacy"] = True
+        env = graphviews.read(args)
+        out(json.dumps(env, ensure_ascii=False, indent=1) if a.json else graphviews.render_text(env))
+        return 0
+    except PermissionError:
+        out("Not available: %s is not one of your tickets in the current profile." % (key or "that ticket"))
+        return 2
+    except ValueError as e:
+        out("Not possible: %s" % e)
+        return 2
 
 
 def cmd_share(a):

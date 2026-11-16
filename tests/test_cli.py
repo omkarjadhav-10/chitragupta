@@ -17,7 +17,7 @@ from chitragupta import cli, common
 from chitragupta import timesheet as T
 
 SKILLS = ["today", "ticket", "timesheet", "trace", "log", "pause", "dashboard", "setup", "doctor", "branches", "check", "branch", "search", "share",
-          "progress", "db", "plan", "resume"]
+          "progress", "db", "plan", "resume", "graph"]
 LAUNCH = 'py -3 "${CLAUDE_PLUGIN_ROOT}/hooks/run.py"'
 
 
@@ -313,9 +313,6 @@ class SkillFilesTest(unittest.TestCase):
         self.assertNotIn("<!--", text)  # setup adds the chitragupta:start/end markers
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CheckHeadlineTest(unittest.TestCase):
     """/cg:check says "Fetched" only for repos it really fetched (fetching can be off or not due)."""
@@ -332,3 +329,63 @@ class CheckHeadlineTest(unittest.TestCase):
 
     def test_old_result_without_fetched_key(self):
         self.assertNotIn("Fetched", cli.check_headline({"repos": ["a"]}))
+
+
+from tests.test_graph_store import SyncBase as _GraphHome  # noqa: E402  (a home with a card, a workflow and runs)
+
+
+class GraphCommandTest(_GraphHome):
+    """`cli graph`: the Evidence Graph as text and JSON, read from the index the background run builds."""
+
+    def test_summary_text_and_json_are_the_views_data(self):  # EG-A20 part
+        from chitragupta import graphviews
+        self.sync()
+        rc, text, _ = run_cli("graph", "summary", "ABC-1001")
+        self.assertEqual(rc, 0)
+        env = graphviews.read({"view": "summary", "ticket": "ABC-1001"})
+        self.assertEqual(text.rstrip("\n"), graphviews.render_text(env))
+        self.assertIn("Next: no linked implementation: ac1", text)
+        self.assertRegex(text, r"- ac1 \[\w[\w ]* \| [\w ]+ \| Verified within recorded scope\]")
+        rc, raw, _ = run_cli("graph", "summary", "ABC-1001", "--json")
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(raw), env)
+
+    def test_trace_changes_status_and_rebuild(self):
+        from unittest import mock
+        from chitragupta import agent
+        self.sync()
+        rc, text, _ = run_cli("graph", "trace", "ABC-1001", "--requirement", "ac1")
+        self.assertEqual(rc, 0)
+        self.assertIn("Requirement ac1", text)
+        self.assertIn("tests and runs: test_run", text)
+        rc, text, _ = run_cli("graph", "changes", "ABC-1001", "--since", "0")
+        self.assertEqual((rc, "Changes after 0 up to 1" in text), (0, True))
+        rc, text, _ = run_cli("graph", "status")
+        self.assertEqual(rc, 0)
+        self.assertIn("Evidence Graph: 2 ticket(s)", text)
+        self.assertIn("Up to date with its inputs.", text)
+        rc, text, _ = run_cli("graph", "rebuild")
+        self.assertEqual(rc, 0, text)
+        self.assertIn("Rebuilt the Evidence Graph: 0 built, 2 re-indexed", text)
+        held = agent.Lock()
+        self.assertTrue(held.acquire())
+        try:
+            with mock.patch.object(agent, "LOCK_WAIT_S", 0):
+                rc, text, _ = run_cli("graph", "rebuild")
+        finally:
+            held.release()
+        self.assertEqual((rc, text.strip()), (1, "skipped: a background run is in progress"))
+
+    def test_outside_the_scope_and_bad_input(self):
+        self.sync()
+        os.remove(os.path.join(common.home(), "data", "tickets", "ABC-1002.json"))
+        rc, text, _ = run_cli("graph", "summary", "ABC-1002")
+        self.assertEqual((rc, text.startswith("Not available")), (2, True))
+        rc, text, _ = run_cli("graph", "trace", "ABC-1001", "--requirement", "ac9")
+        self.assertEqual((rc, text.startswith("Not possible")), (2, True))
+        rc, text, _ = run_cli("graph", "summary")
+        self.assertEqual((rc, text.strip()), (2, "Name a ticket: graph summary <KEY>"))
+
+
+if __name__ == "__main__":
+    unittest.main()

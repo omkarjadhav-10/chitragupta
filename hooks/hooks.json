@@ -213,7 +213,7 @@
     ],
     "UserPromptExpansion": [
       {
-        "matcher": "^(cg:)?(branch|branches|check|dashboard|db|doctor|log|pause|plan|progress|resume|search|setup|share|ticket|timesheet|today|trace)$",
+        "matcher": "^(cg:)?(branch|branches|check|dashboard|db|doctor|graph|log|pause|plan|progress|resume|search|setup|share|ticket|timesheet|today|trace)$",
         "hooks": [
           {
             "type": "command",
