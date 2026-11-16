@@ -346,7 +346,7 @@ def _stale_evidence(view):
 
 def _row(req, view, out_edges, privacy):
     attrs, rev = req["node"]["attrs"], req["revision"].get("attrs") or {}
-    text = HIDDEN if privacy else cv.safe(rev.get("text"), TEXT)
+    text = _text(rev.get("text"), privacy, TEXT)
     scopes = [{"workflow": r["workflow"], "repository": cv._repo(r.get("location")), "alias": r.get("alias") or None,
                "excluded": bool(r["detail"].get("excluded")),
                **{dim: _brief(r["detail"][dim]) for dim in DIMENSIONS}} for r in req["rows"]]
@@ -431,9 +431,381 @@ def summary(args, cfg=None):
     return cv._finish(out)
 
 
+# ---------------------------------------------------------------- shared text and item helpers
+
+_SCHEME = re.compile(r"(?i)\b(?:javascript|vbscript|data|file):\S*")
+PRIVATE = {"commit", "pull_request", "plan_step", "requirement_revision", "requirement"}   # labels that are free text
+KEY_ATTRS = {"plan_step": ("step", "kind", "plan"), "code_change": ("path", "state", "verified"),
+             "commit": ("short", "mine", "date", "ref", "sha_basis", "identity_basis"),
+             "test_case": ("test_type",), "test_run": ("status", "source", "head", "head_basis", "attempt"),
+             "observation": ("kind", "outcome", "basis"), "pull_request": ("number", "state", "review", "head", "shared"),
+             "release_evidence": ("fact", "environment", "state", "revision")}
+ATTR_BYTES = 1024
+
+
+def _text(value, privacy, limit=300):
+    """Untrusted text made inert: redacted, control characters gone, no link of any scheme, no absolute path."""
+    if privacy:
+        return HIDDEN
+    return _SCHEME.sub("[link]", cv.scrub(value, 2 * limit))[:limit]
+
+
+def _label(node, privacy):
+    if privacy and node["type"] in PRIVATE:
+        a = node.get("attrs") or {}
+        return {"commit": a.get("short") or "commit", "pull_request": "#%s" % a.get("number"),
+                "plan_step": "step %s" % a.get("step")}.get(node["type"], HIDDEN)
+    return _text(node.get("label"), False)
+
+
+def _key_attrs(node):
+    a = node.get("attrs") or {}
+    out = {}
+    for name in KEY_ATTRS.get(node["type"], ()):
+        value = a.get(name)
+        out[name] = _text(value, False, 120) if isinstance(value, str) else value
+    if node["type"] == "test_run":
+        app = a.get("applicability") or {}
+        out["applicability"] = app if isinstance(app, str) else {"state": app.get("state"),
+                                                                  "text": _text(app.get("text"), False)}
+    if node["type"] == "pull_request":
+        out["ci"] = (a.get("ci") or {}).get("state")
+    if a.get("pinned"):
+        out.update(pinned=True, note=_text(a.get("note"), False))
+    return out if cv._size(out) <= ATTR_BYTES else {"truncated": True}
+
+
+def _node(node, privacy):
+    return {"id": node["id"], "type": node["type"], "label": _label(node, privacy), "lifecycle": node["lifecycle"],
+            "attrs": _key_attrs(node), "source_ref": _text(node.get("source_ref"), False)}
+
+
+def _edge(edge):
+    if edge is None:
+        return None
+    a = edge.get("attrs") or {}
+    out = {"id": edge["id"], "type": edge["type"], "basis": edge["basis"], "confidence": edge.get("confidence"),
+           "scope": edge.get("scope") or "", "lifecycle": edge["lifecycle"],
+           "evidence_ref": _text(edge.get("evidence_ref"), False),
+           "declarations": [{"by": _text(d.get("by"), False, 80), "at": d.get("at"), "ref": _text(d.get("ref"), False)}
+                            for d in a.get("declarations") or []][:10]}
+    for name in ("applicability", "reason", "coverage", "outcome", "criterion", "ambiguous", "plan_binding"):
+        if a.get(name) not in (None, ""):
+            out[name] = _text(a[name], False) if isinstance(a[name], str) else a[name]
+    return out
+
+
+def _paged(out, view_name, args, scope, graph, items, name="items"):
+    ref = _cursor_ref(view_name, args)
+    offset = cv.read_cursor(args.get("cursor"), view_name, ref, scope["generation"], graph["snapshot"])
+
+    def build(page):
+        return dict(out, **{name: page, "total": len(items), "offset": offset, "next_cursor": "x" * 120})
+
+    page, n = cv._page(items, offset, build)
+    nxt = offset + n
+    out.update({name: page, "total": len(items), "offset": offset,
+                "next_cursor": cv.make_cursor(view_name, ref, nxt, scope["generation"], graph["snapshot"])
+                if nxt < len(items) else None})
+    return out
+
+
+# ---------------------------------------------------------------- trace
+
+LAYERS = ("plan steps", "code changes", "commits", "tests and runs", "pull requests", "release evidence")
+LAYER_OF = {"plan_step": "plan steps", "code_change": "code changes", "commit": "commits",
+            "test_case": "tests and runs", "test_run": "tests and runs", "observation": "tests and runs",
+            "pull_request": "pull requests", "release_evidence": "release evidence"}
+LINKS = ("ADDRESSED_BY", "IMPLEMENTED_BY", "COVERED_BY_TEST", "SUPPORTED_BY")
+WALK = {"requirement_revision": LINKS, "plan_step": ("IMPLEMENTED_BY",), "code_change": ("PART_OF_COMMIT",),
+        "test_case": ("EXECUTED_IN",), "pull_request": ("CHECKED_BY",),
+        "commit": ("INCLUDED_IN_PR", "HAS_RELEASE_EVIDENCE", "EQUIVALENT_TO", "CHERRY_PICKED_FROM", "SQUASHED_INTO")}
+OLD = ("superseded", "historical", "removed")
+TICKET_LEVEL = "ticket-level evidence; not linked to this requirement"
+
+
+def _occurrences(key, rid):
+    found, data = graphstore.load_history(key)
+    entry = (((data or {}).get("requirements") or {}).get("logical") or {}).get(rid) if found == "ok" else None
+    from .graphbuild import revision_id
+    return [{"seq": h.get("seq"), "at": h.get("at"), "event": h.get("event"), "revision": revision_id(rid, h["revision"])}
+            for h in (entry or {}).get("history") or [] if isinstance(h, dict) and h.get("revision")][-CAP:]
+
+
+def trace(args, cfg=None):
+    """One requirement: its occurrences and revisions, then what reaches it, layer by layer, each item with the edge
+    that reached it; then the ticket-level evidence not linked to it. Paged over all items."""
+    cfg = cfg if cfg is not None else common.load_config()
+    key = args["ticket"]
+    privacy = cv._privacy(args, cfg)
+    scope = _scope(key, cfg)
+    graph = _graph_block(scope, key, cfg)
+    out = _envelope("trace", cfg, privacy, key, graph)
+    if scope["state"] != "ok":
+        return cv._finish(out)
+    if not args.get("requirement"):
+        raise ValueError("trace needs a requirement (gr_ id, alias or R<n>)")
+    view = _filtered(scope["rows"], scope)
+    nodes = view["nodes"]
+    rid = resolve_requirement(key, args["requirement"], args.get("workflow"), view)
+    history, basis = bool(args.get("history")), args.get("basis")
+    out_edges = {}
+    for e in sorted(view["edges"], key=lambda e: e["id"]):
+        out_edges.setdefault(e["src"], []).append(e)
+    req = nodes[rid]
+    revisions = sorted((n for n in nodes.values() if n["type"] == "requirement_revision"
+                        and n["attrs"].get("requirement") == rid),
+                       key=lambda n: (n["id"] != req["attrs"].get("revision"), n["id"]))
+    starts = [n["id"] for n in revisions if history or n["id"] == req["attrs"].get("revision")]
+
+    def edge_ok(e):
+        return (history or e["lifecycle"] not in OLD) and not (basis and e["type"] in LINKS and e["basis"] != basis)
+
+    def node_ok(n):
+        return history or n["lifecycle"] not in OLD
+
+    reached, queue = {}, list(starts)
+    while queue:
+        src = queue.pop(0)
+        for e in out_edges.get(src, []):
+            dst = nodes.get(e["dst"])
+            if e["type"] not in WALK.get(nodes[src]["type"], ()) or not edge_ok(e) or dst is None \
+                    or dst["id"] in reached or dst["type"] not in LAYER_OF or not node_ok(dst):
+                continue
+            reached[dst["id"]] = e   # both ends are in the filtered view: no edge to a hidden endpoint
+            queue.append(dst["id"])
+    items = sorted(({"layer": LAYER_OF[nodes[n]["type"]], "node": _node(nodes[n], privacy), "edge": _edge(e)}
+                    for n, e in reached.items()), key=lambda i: (LAYERS.index(i["layer"]), i["node"]["id"]))
+    loose = sorted((n for n in nodes.values() if n["type"] in ("commit", "test_run", "pull_request")
+                    and n["id"] not in reached and node_ok(n)), key=lambda n: (n["type"], n["id"]))
+    items += [{"layer": "ticket evidence", "node": _node(n, privacy), "edge": None, "note": TICKET_LEVEL} for n in loose]
+    totals = {layer: sum(1 for i in items if i["layer"] == layer) for layer in LAYERS + ("ticket evidence",)}
+    a = req["attrs"]
+    supersedes = [_edge(e) for r in revisions for e in out_edges.get(r["id"], [])
+                  if e["type"] == "SUPERSEDES" and edge_ok(e)]
+    out.update(requirement={
+        "id": rid, "alias": a.get("alias") or None, "aliases": dict(a.get("aliases") or {}), "status": a.get("status"),
+        "source": a.get("source"), "text": _text((nodes.get(a.get("revision")) or {}).get("attrs", {}).get("text"),
+                                                privacy, TEXT),
+        "revisions": [{"id": r["id"], "lifecycle": r["lifecycle"], "digest": r["attrs"].get("digest"),
+                       "text": _text(r["attrs"].get("text"), privacy, TEXT), "first_seen": r["attrs"].get("first_seen"),
+                       "confirmed_in": r["attrs"].get("confirmed_in") or []}
+                      for r in revisions if history or r["id"] == a.get("revision")][:CAP],
+        "occurrences": _occurrences(key, rid) if history else _occurrences(key, rid)[-5:],
+        "supersedes": supersedes[:CAP]},
+        totals=totals, filters={"basis": basis, "history": history})
+    return cv._finish(_paged(out, "trace", args, scope, graph, items))
+
+
+# ---------------------------------------------------------------- changes
+
+EVENTS = ("added", "modified", "removed", "restored")
+CATEGORIES = ("requirements", "implementation", "tests", "delivery", "invalidated", "updated", "gaps", "status",
+              "source")
+
+
+def _since(journal, value):
+    """→ (since sequence, None) or (None, reason)."""
+    head = journal[-1]
+    since = int(value) if value is not None else (head.get("prev") or 0)
+    if value is None and head.get("baseline"):
+        return None, "reset by recovery"
+    seqs = {e["seq"] for e in journal}
+    if since == 0:
+        first = journal[0]
+        return (0, None) if first["seq"] == 1 and first.get("prev") is None and not first.get("baseline") \
+            else (None, "dropped by retention")
+    if since in seqs:
+        return since, None
+    return None, ("dropped by retention" if since < journal[0]["seq"] else "unknown sequence")
+
+
+def _fold(entries):
+    reqs, ev, status, source, more, coarse = {}, {}, {}, [], 0, False
+    for e in entries:
+        d, seq = e.get("delta") or {}, e["seq"]
+        more += int(d.get("more") or 0)
+        coarse = coarse or bool(d.get("coarse"))
+        for event in EVENTS:
+            for rid in (d.get("requirements") or {}).get(event) or []:
+                reqs[rid] = (event, seq)
+        for name in ("added", "removed", "changed"):
+            for row in (d.get("evidence") or {}).get(name) or []:
+                rid, typ, workflow, location = (list(row) + ["", "", "", ""])[:4]
+                prev = (ev.get(rid) or {}).get("state")
+                if name == "removed" and prev == "added":
+                    del ev[rid]   # came and went inside the window
+                    continue
+                state = ("changed" if prev == "removed" else "added") if name == "added" else \
+                    "removed" if name == "removed" else ("added" if prev == "added" else "changed")
+                ev[rid] = {"state": state, "type": typ, "workflow": workflow, "location": location, "seq": seq}
+        for t in d.get("status") or []:
+            k = (t.get("requirement"), t.get("workflow") or "", t.get("dimension"))
+            if k in status:
+                status[k][1:] = [t.get("to"), seq]
+            else:
+                status[k] = [t.get("from"), t.get("to"), seq]
+        if d.get("source"):
+            source.append(dict(d["source"], seq=seq))
+    return reqs, ev, status, source, more, coarse
+
+
+def _current_state(view):
+    reqs = _requirements(view)
+    live = [r for r in reqs if not r["removed"] and not r["excluded"]]
+    counts = {dim: {} for dim in DIMENSIONS}
+    for r in live:
+        for dim in DIMENSIONS:
+            counts[dim][r["combined"][dim]["state"]] = counts[dim].get(r["combined"][dim]["state"], 0) + 1
+    return {"requirements": len(reqs), "counts": counts}
+
+
+def changes(args, cfg=None):
+    """What changed after journal sequence `since` (default: the entry before the head), folded, for authorized
+    scopes only. Any doubt about continuity or the profile generation → `baseline: "unavailable"` with the reason."""
+    cfg = cfg if cfg is not None else common.load_config()
+    key = args["ticket"]
+    privacy = cv._privacy(args, cfg)
+    scope = _scope(key, cfg)
+    graph = _graph_block(scope, key, cfg)
+    out = _envelope("changes", cfg, privacy, key, graph)
+    if scope["state"] != "ok":
+        return cv._finish(out)
+    view = _filtered(scope["rows"], scope)
+    nodes, generation, allowed = view["nodes"], scope["generation"], scope["workflows"]
+
+    def unavailable(reason):
+        out.update(baseline="unavailable", reason=reason, current=_current_state(view), items=[], total=0,
+                   totals={}, offset=0, next_cursor=None)
+        return cv._finish(out)
+
+    found, data = graphstore.load_history(key)
+    if found != "ok" or not data.get("journal"):
+        return unavailable("history unavailable")
+    journal = data["journal"]
+    since, why = _since(journal, args.get("since"))
+    if why:
+        return unavailable(why)
+    by_seq = {e["seq"]: e for e in journal}
+    entries = [e for e in journal if e["seq"] > since]
+    if since and by_seq[since].get("profile_generation") != generation:
+        return unavailable("from another profile generation (profile changed)")
+    previous = since or None
+    for e in entries:
+        if e.get("profile_generation") != generation:
+            return unavailable("profile changed")
+        if e.get("baseline"):
+            return unavailable("reset by recovery")
+        if e.get("prev") != previous:
+            return unavailable("history is not continuous after %s" % since)
+        previous = e["seq"]
+    reqs, ev, status, source, more, coarse = _fold(entries)
+    stored = {n["id"] for n in scope["rows"][0]}
+    hidden = stored - set(nodes)   # present in the index, not for this caller
+    every = {r.get("workflow") for r in scope["rows"][0] + scope["rows"][1] + scope["rows"][2] if r.get("workflow")}
+    every |= set((scope["source"].get("coverage") or {}).get("workflows") or [])
+    ticket_level_ok = every <= allowed   # a ticket-level transition mixes every workflow; safe only if all are seen
+
+    def label(rid):
+        node = nodes.get(rid)
+        return _label(node, privacy) if node else None
+
+    items = []
+    for rid, (event, seq) in reqs.items():
+        if rid in hidden:
+            continue
+        node = nodes.get(rid)
+        items.append({"category": "requirements", "kind": event, "id": rid, "seq": seq,
+                      "label": (node["attrs"].get("alias") or None) if node else None})
+    for rid, e in ev.items():
+        if (e["workflow"] and e["workflow"] not in allowed) or (e["location"] and not scope["location_ok"](e["location"])) \
+                or rid in hidden:
+            continue
+        node = nodes.get(rid)
+        if e["state"] == "removed" or (e["state"] == "changed" and node and node["lifecycle"] in OLD + ("source_missing",)):
+            category = "invalidated"
+        elif e["type"] in ("pull_request", "release_evidence"):
+            category = "delivery"
+        elif e["state"] == "added" and e["type"] in ("commit", "code_change"):
+            category = "implementation"
+        elif e["state"] == "added" and e["type"] in ("test_case", "test_run", "observation"):
+            category = "tests"
+        else:
+            category = "updated"
+        items.append({"category": category, "kind": e["type"], "state": e["state"], "id": rid, "seq": e["seq"],
+                      "label": label(rid)})
+    for (rid, workflow, dim), (before, after, seq) in status.items():
+        if before == after or rid in hidden or (workflow and workflow not in allowed) or \
+                (not workflow and not ticket_level_ok):
+            continue
+        node = nodes.get(rid)
+        row = {"kind": dim, "id": rid, "workflow": workflow or None, "from": before, "to": after, "seq": seq,
+               "label": (node["attrs"].get("alias") or None) if node else None}
+        items.append(dict(row, category="status"))
+        best = _BEST.get(dim)
+        if before is not None and after is not None and (after == best) != (before == best):
+            items.append(dict(row, category="gaps", state="closed" if after == best else "opened"))
+    for s in source:
+        items.append({"category": "source", "kind": "requirements source", "from": s.get("from"), "to": s.get("to"),
+                      "seq": s["seq"], "id": None, "label": None})
+    items.sort(key=lambda i: (-i["seq"], CATEGORIES.index(i["category"]), str(i.get("id") or ""),
+                              str(i.get("kind") or "")))
+    totals = {c: sum(1 for i in items if i["category"] == c) for c in CATEGORIES}
+    out.update(baseline="ok", reason=None, entries=len(entries), totals=totals, more=more, coarse=coarse,
+               current=_current_state(view),
+               **{"from": since, "to": journal[-1]["seq"]})
+    return cv._finish(_paged(out, "changes", args, scope, graph, items))
+
+
+# ---------------------------------------------------------------- dispatch and text
+
 def read(args):
-    """The one entry point: validate, then dispatch. Views other than `summary` arrive with subplan 17."""
+    """The one entry point: validate, then dispatch."""
     view = _validate(args)
-    if view == "summary":
-        return summary(args)
-    raise ValueError("graph view %s is not available yet" % view)
+    return {"summary": summary, "trace": trace, "changes": changes}[view](args)
+
+
+def _line(value):
+    return " ".join(str(value if value is not None else "").split())
+
+
+def render_text(env):
+    """Plain text for the CLI and MCP: every value is already inert; nothing here makes a link or markup."""
+    op = env.get("operation", "")
+    g = env.get("graph") or {}
+    lines = ["%s %s: graph %s%s" % (env.get("ticket"), op.replace("graph_", ""), g.get("state"),
+                                    " (inputs moved since the last build)" if g.get("stale") else "")]
+    if g.get("state") not in ("ok", "behind"):
+        lines.append({"rebuilding": "The index is being rebuilt for the current profile; try again shortly.",
+                      "not_built": "Not built yet; the background run builds it."}.get(g.get("state"), ""))
+        return "\n".join(l for l in lines if l)
+    if op == "graph_summary":
+        r = env.get("requirements") or {}
+        lines.append("Next: %s" % _line(env.get("next_action")))
+        lines.append("Requirements: %s total, %s current, %s unconfirmed, %s removed, %s excluded" % tuple(
+            r.get(k, 0) for k in ("total", "current", "unconfirmed", "removed", "excluded")))
+        for row in env.get("rows") or []:
+            c = row["statuses"]["combined"]
+            lines.append("- %s [%s | %s | %s] %s" % (_line(row.get("alias") or row["id"]), c["plan_coverage"]["state"],
+                                                     c["implementation"]["state"], c["verification"]["state"],
+                                                     _line(row.get("text"))))
+    elif op == "graph_trace":
+        req = env.get("requirement") or {}
+        lines.append("Requirement %s (%s): %s" % (_line(req.get("alias") or req.get("id")), req.get("status"),
+                                                 _line(req.get("text"))))
+        for item in env.get("items") or []:
+            e = item.get("edge") or {}
+            lines.append("- %s: %s %s%s" % (item["layer"], item["node"]["type"], _line(item["node"]["label"]),
+                                            " (%s, %s)" % (e.get("type"), e.get("basis")) if e else ""))
+    elif op == "graph_changes":
+        if env.get("baseline") != "ok":
+            lines.append("Changes unavailable: %s" % _line(env.get("reason")))
+        else:
+            lines.append("Changes after %s up to %s (%s entries)" % (env.get("from"), env.get("to"), env.get("entries")))
+            for item in env.get("items") or []:
+                detail = "%s -> %s" % (item.get("from"), item.get("to")) if "from" in item else item.get("state") or ""
+                lines.append("- %s: %s %s %s" % (item["category"], item.get("kind"),
+                                                 _line(item.get("label") or item.get("id") or ""), _line(detail)))
+    if env.get("next_cursor"):
+        lines.append("More: pass cursor %s" % env["next_cursor"])
+    return "\n".join(lines)

